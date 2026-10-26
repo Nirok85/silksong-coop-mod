@@ -41,7 +41,7 @@ namespace SilksongCoop.Core.Networking
         private readonly Dictionary<byte, uint> _expectedReceiveSequences = new();
         private readonly Dictionary<byte, uint> _latestSequencedReceived = new();
         private readonly Dictionary<byte, SortedDictionary<uint, byte[]>> _pendingReliable = new();
-        private readonly List<SentReliablePacket> _unacknowledged = new();
+        private readonly LinkedList<SentReliablePacket> _unacknowledged = new();
         private const int MaxUnacknowledgedPackets = 512;
 
         private long _lastPingSentMs;
@@ -135,8 +135,17 @@ namespace SilksongCoop.Core.Networking
                     targetPort = p;
                     if (!IPAddress.TryParse(parts[0], out targetIp!))
                     {
-                        var addresses = Dns.GetHostAddresses(parts[0]);
-                        targetIp = addresses[0];
+                        try
+                        {
+                            var addresses = Dns.GetHostAddresses(parts[0]);
+                            if (addresses.Length == 0)
+                                throw new ArgumentException($"DNS resolution returned no addresses for: {parts[0]}");
+                            targetIp = addresses[0];
+                        }
+                        catch (Exception ex) when (ex is SocketException || ex is ArgumentException)
+                        {
+                            throw new ArgumentException($"Failed to resolve hostname '{parts[0]}': {ex.Message}", nameof(addressOrCode), ex);
+                        }
                     }
                 }
                 else if (IPAddress.TryParse(addressOrCode, out targetIp!))
@@ -244,10 +253,10 @@ namespace SilksongCoop.Core.Networking
                     // Fix: Cap unacknowledged packets to prevent unbounded memory growth
                     if (_unacknowledged.Count >= MaxUnacknowledgedPackets)
                     {
-                        // Drop oldest packet to make room
-                        _unacknowledged.RemoveAt(0);
+                        // Drop oldest packet to make room (O(1) with LinkedList)
+                        _unacknowledged.RemoveFirst();
                     }
-                    _unacknowledged.Add(new SentReliablePacket
+                    _unacknowledged.AddLast(new SentReliablePacket
                     {
                         Sequence = seq,
                         Channel = channel,
@@ -335,9 +344,11 @@ namespace SilksongCoop.Core.Networking
                 }
 
                 // 2. Retransmit unacknowledged reliable packets
-                for (int i = 0; i < _unacknowledged.Count; i++)
+                var node = _unacknowledged.First;
+                while (node != null)
                 {
-                    var item = _unacknowledged[i];
+                    var next = node.Next;
+                    var item = node.Value;
                     if (now - item.LastSentTimeMs > 100) // 100ms retransmit timeout
                     {
                         if (item.Retries >= 10) // Fix: Use >= to allow exactly 10 retries (0-9)
@@ -349,7 +360,7 @@ namespace SilksongCoop.Core.Networking
 
                         item.Retries++;
                         item.LastSentTimeMs = now;
-                        _unacknowledged[i] = item;
+                        node.Value = item;
 
                         if (_remoteEndPoint != null && _socket != null)
                         {
@@ -361,6 +372,7 @@ namespace SilksongCoop.Core.Networking
                             catch (ObjectDisposedException ex) { System.Diagnostics.Debug.WriteLine($"Socket disposed: {ex.Message}"); }
                         }
                     }
+                    node = next;
                 }
 
                 // 3. Heartbeat ping
@@ -388,8 +400,12 @@ namespace SilksongCoop.Core.Networking
             switch (frameType)
             {
                 case UdpFrameType.Handshake:
-                    if (IsHost && !IsConnected)
+                    if (IsHost && !IsConnected && _remoteEndPoint == null)
                     {
+                        // Validate sender is not ourselves
+                        if (sender is IPEndPoint ep && ep.Address.Equals(IPAddress.Loopback) && ep.Port == BoundPort)
+                            break; // Ignore self-handshake
+
                         _remoteEndPoint = sender;
                         ulong clientPeerValue = payload.Length >= 8 ? BitConverter.ToUInt64(payload) : 2;
                         _remotePeerId = new NetworkPeerId(clientPeerValue, "Client");
@@ -432,7 +448,16 @@ namespace SilksongCoop.Core.Networking
                         byte ackChannel = payload[0];
                         uint ackSeq = BitConverter.ToUInt32(payload.Slice(1, 4));
 
-                        _unacknowledged.RemoveAll(p => p.Channel == ackChannel && p.Sequence == ackSeq);
+                        var ackNode = _unacknowledged.First;
+                        while (ackNode != null)
+                        {
+                            var ackNext = ackNode.Next;
+                            if (ackNode.Value.Channel == ackChannel && ackNode.Value.Sequence == ackSeq)
+                            {
+                                _unacknowledged.Remove(ackNode);
+                            }
+                            ackNode = ackNext;
+                        }
                     }
                     break;
 

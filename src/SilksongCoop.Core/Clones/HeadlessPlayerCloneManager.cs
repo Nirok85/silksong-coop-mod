@@ -207,7 +207,7 @@ namespace SilksongCoop.Core.Clones
             foreach (var kvp in _clones)
             {
                 var clone = kvp.Value;
-                float dt = clone.LastLocalTimeMs > 0 ? (float)(currentLocalTimeMs - clone.LastLocalTimeMs) / 1000f : 0.016f;
+                float dt = clone.LastLocalTimeMs > 0 ? Math.Max(0f, (float)(currentLocalTimeMs - clone.LastLocalTimeMs) / 1000f) : 0.016f;
                 clone.LastLocalTimeMs = currentLocalTimeMs;
 
                 // Update dash lifecycle state

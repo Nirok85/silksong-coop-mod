@@ -112,7 +112,7 @@ namespace SilksongCoop.Core.State
         {
             if (_postBenchRespawnTimer > 0f)
             {
-                _postBenchRespawnTimer -= deltaTime;
+                _postBenchRespawnTimer = Math.Max(0f, _postBenchRespawnTimer - deltaTime);
                 if (_postBenchRespawnTimer <= 0f)
                 {
                     _isPostBenchRespawn = false;

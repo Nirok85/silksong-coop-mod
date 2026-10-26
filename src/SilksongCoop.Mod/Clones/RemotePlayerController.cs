@@ -223,7 +223,7 @@ namespace SilksongCoop.Mod.Clones
             {
                 if (t < 1.0)
                 {
-                    float segmentDt = (float)(s1.TimestampMs - s0.TimestampMs) / 1000f;
+                    float segmentDt = Math.Max(0.001f, (float)(s1.TimestampMs - s0.TimestampMs) / 1000f);
                     var (interpX, interpY) = HermiteSpline.InterpolatePosition2D(
                         s0.PositionX, s0.PositionY,
                         s0.VelocityX, s0.VelocityY,

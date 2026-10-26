@@ -22,7 +22,7 @@ namespace SilksongCoop.Mod.UI
         private Rect _windowRect = new Rect(40, 40, 420, 480);
         private string _inputAddressOrCode = "";
         private string _statusMessage = "Ready. Press F10 to toggle this menu.";
-        private readonly int _windowId; // Fix: Use unique window ID per instance
+        private int _windowId; // Fix: Use unique window ID per instance
 
         private CoopSessionState? _sessionState;
         private INetworkTransport? _currentTransport;
@@ -31,7 +31,13 @@ namespace SilksongCoop.Mod.UI
 
         public CoopMenuUI()
         {
-            // Fix: Generate unique window ID to avoid conflicts with other mods
+            // Fix: Use a deterministic base ID; randomized in Awake when Unity is ready
+            _windowId = 9842;
+        }
+
+        private void Awake()
+        {
+            // Generate unique window ID to avoid conflicts with other mods
             _windowId = 9842 + UnityEngine.Random.Range(0, 1000);
         }
 
@@ -76,7 +82,7 @@ namespace SilksongCoop.Mod.UI
             }
             else if (_sessionState != null && _sessionState.Status == SessionStatus.Hosting)
             {
-                string code = _sessionState.CurrentRoomCode;
+                string? code = _sessionState.CurrentRoomCode;
                 if (!string.IsNullOrEmpty(code) && code != "Steam-Lobby")
                 {
                     watermark = $"[F10] Co-op: Hosting — Code: {code}";

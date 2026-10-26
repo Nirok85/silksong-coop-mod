@@ -50,7 +50,7 @@ namespace SilksongCoop.Core.State
 
         public void OnLocalDamageTaken(int damageAmount, int newHealth)
         {
-            lock (_stateLock) { LocalHealth = Math.Max(0, newHealth); }
+            lock (_stateLock) { LocalHealth = Math.Max(0, Math.Min(SharedMaxHealth > 0 ? SharedMaxHealth : int.MaxValue, newHealth)); }
             // Current health reduction is local only. We do not sync damage to partner's current HP.
             // We broadcast an informational packet so the partner UI can display teammate health bars.
             BroadcastCurrentVitals();
@@ -228,12 +228,28 @@ namespace SilksongCoop.Core.State
 
                 if (packet.Currency == CurrencyType.Rosaries)
                 {
-                    SharedRosaries = Math.Max(0, SharedRosaries + delta);
+                    if (delta == 0)
+                    {
+                        // Initial sync: set absolute value
+                        SharedRosaries = Math.Max(0, packet.TotalWalletAmount);
+                    }
+                    else
+                    {
+                        SharedRosaries = Math.Max(0, SharedRosaries + delta);
+                    }
                     updatedWallet = SharedRosaries;
                 }
                 else
                 {
-                    SharedShellShards = Math.Max(0, SharedShellShards + delta);
+                    if (delta == 0)
+                    {
+                        // Initial sync: set absolute value
+                        SharedShellShards = Math.Max(0, packet.TotalWalletAmount);
+                    }
+                    else
+                    {
+                        SharedShellShards = Math.Max(0, SharedShellShards + delta);
+                    }
                     updatedWallet = SharedShellShards;
                 }
             }
@@ -289,7 +305,7 @@ namespace SilksongCoop.Core.State
                     Header = new PacketHeader(PacketType.CurrencySync, 3, 0, (uint)Environment.TickCount),
                     Currency = CurrencyType.Rosaries,
                     TotalWalletAmount = currentRosaries,
-                    DeltaAmount = (short)Math.Clamp(currentRosaries, short.MinValue, short.MaxValue),
+                    DeltaAmount = 0, // Initial sync: delta 0 to avoid double-counting on receiver
                     TransactionId = tx,
                     PickupUniqueId = 0 // Fix: Initialize field to prevent undefined behavior
                 };
@@ -310,7 +326,7 @@ namespace SilksongCoop.Core.State
                     Header = new PacketHeader(PacketType.CurrencySync, 3, 0, (uint)Environment.TickCount),
                     Currency = CurrencyType.ShellShards,
                     TotalWalletAmount = currentShards,
-                    DeltaAmount = (short)Math.Clamp(currentShards, short.MinValue, short.MaxValue),
+                    DeltaAmount = 0, // Initial sync: delta 0 to avoid double-counting on receiver
                     TransactionId = tx,
                     PickupUniqueId = 0 // Fix: Initialize field to prevent undefined behavior
                 };

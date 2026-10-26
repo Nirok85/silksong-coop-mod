@@ -477,7 +477,7 @@ namespace SilksongCoop.Mod
         {
             try
             {
-                InventoryHooks.IsApplyingRemoteUnlock = true;
+                InventoryHooks.RemoteUnlockDepth++;
 
                 switch (category)
                 {
@@ -534,7 +534,7 @@ namespace SilksongCoop.Mod
             }
             finally
             {
-                InventoryHooks.IsApplyingRemoteUnlock = false;
+                InventoryHooks.RemoteUnlockDepth--;
             }
         }
 
@@ -696,7 +696,12 @@ namespace SilksongCoop.Mod
 
         private void OnDestroy()
         {
+            // Disconnect both transports
             ActiveTransport?.Disconnect();
+            if (SteamTransport != null && ActiveTransport != SteamTransport)
+            {
+                SteamTransport.Disconnect();
+            }
             _harmony?.UnpatchSelf();
         }
     }

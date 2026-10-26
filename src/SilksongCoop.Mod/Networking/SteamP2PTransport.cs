@@ -171,7 +171,11 @@ namespace SilksongCoop.Mod.Networking
                 Buffer.BlockCopy(data, offset, bufferToSend, 0, length);
             }
 
-            SteamNetworking.SendP2PPacket(_remoteSteamId, bufferToSend, (uint)length, sendType, channel);
+            bool sent = SteamNetworking.SendP2PPacket(_remoteSteamId, bufferToSend, (uint)length, sendType, channel);
+            if (!sent)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to send P2P packet to {_remoteSteamId.m_SteamID} on channel {channel}");
+            }
         }
 
         public void PollEvents()
@@ -224,6 +228,7 @@ namespace SilksongCoop.Mod.Networking
             }
             else
             {
+                IsHost = false;
                 OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.ConnectionFailed);
             }
         }

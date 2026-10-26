@@ -25,6 +25,8 @@ namespace SilksongCoop.Core.State
     /// </summary>
     public class CoopSessionState
     {
+        private readonly object _lock = new object();
+
         public SessionStatus Status { get; private set; } = SessionStatus.Disconnected;
         public SessionRole Role { get; private set; } = SessionRole.None;
         public NetworkPeerId? LocalPeerId { get; set; }
@@ -49,67 +51,102 @@ namespace SilksongCoop.Core.State
 
         public void SetHosting(NetworkPeerId localId, string roomCode)
         {
-            var old = Status;
-            Role = SessionRole.Host;
-            LocalPeerId = localId;
-            CurrentRoomCode = roomCode;
-            Status = SessionStatus.Hosting;
+            SessionStatus old;
+            lock (_lock)
+            {
+                old = Status;
+                Role = SessionRole.Host;
+                LocalPeerId = localId;
+                CurrentRoomCode = roomCode;
+                Status = SessionStatus.Hosting;
+            }
             OnStatusChanged?.Invoke(old, Status);
         }
 
         public void SetConnecting(NetworkPeerId localId, string targetCode)
         {
-            var old = Status;
-            Role = SessionRole.Client;
-            LocalPeerId = localId;
-            CurrentRoomCode = targetCode;
-            Status = SessionStatus.Connecting;
+            SessionStatus old;
+            lock (_lock)
+            {
+                old = Status;
+                Role = SessionRole.Client;
+                LocalPeerId = localId;
+                CurrentRoomCode = targetCode;
+                Status = SessionStatus.Connecting;
+            }
             OnStatusChanged?.Invoke(old, Status);
         }
 
         public void SetConnected(NetworkPeerId remoteId)
         {
-            var old = Status;
-            RemotePeerId = remoteId;
-            Status = SessionStatus.Connected;
+            SessionStatus old;
+            lock (_lock)
+            {
+                old = Status;
+                RemotePeerId = remoteId;
+                Status = SessionStatus.Connected;
+            }
             OnStatusChanged?.Invoke(old, Status);
             OnPeerJoined?.Invoke(remoteId);
         }
 
         public void SetSpectating()
         {
-            if (!IsConnected) return;
-            var old = Status;
-            Status = SessionStatus.Spectating;
+            SessionStatus old;
+            bool connected;
+            lock (_lock)
+            {
+                connected = IsConnected;
+                if (!connected) return;
+                old = Status;
+                Status = SessionStatus.Spectating;
+            }
             OnStatusChanged?.Invoke(old, Status);
         }
 
         public void SetTeamWipe()
         {
-            if (!IsConnected) return;
-            var old = Status;
-            Status = SessionStatus.TeamWipe;
+            SessionStatus old;
+            bool connected;
+            lock (_lock)
+            {
+                connected = IsConnected;
+                if (!connected) return;
+                old = Status;
+                Status = SessionStatus.TeamWipe;
+            }
             OnStatusChanged?.Invoke(old, Status);
         }
 
         public void ReturnToActive()
         {
-            if (!IsConnected) return;
-            var old = Status;
-            Status = SessionStatus.Connected;
+            SessionStatus old;
+            bool connected;
+            lock (_lock)
+            {
+                connected = IsConnected;
+                if (!connected) return;
+                old = Status;
+                Status = SessionStatus.Connected;
+            }
             OnStatusChanged?.Invoke(old, Status);
         }
 
         public void SetDisconnected(DisconnectReason reason = DisconnectReason.GracefulDisconnect)
         {
-            var old = Status;
-            var remote = RemotePeerId;
+            SessionStatus old;
+            NetworkPeerId? remote;
+            lock (_lock)
+            {
+                old = Status;
+                remote = RemotePeerId;
 
-            Status = SessionStatus.Disconnected;
-            Role = SessionRole.None;
-            RemotePeerId = null;
-            CurrentRoomCode = null;
-            SteamLobbyId = null;
+                Status = SessionStatus.Disconnected;
+                Role = SessionRole.None;
+                RemotePeerId = null;
+                CurrentRoomCode = null;
+                SteamLobbyId = null;
+            }
 
             OnStatusChanged?.Invoke(old, Status);
             if (remote.HasValue)
@@ -120,19 +157,28 @@ namespace SilksongCoop.Core.State
 
         public void RecordSent(int byteCount)
         {
-            SentPackets++;
-            SentBytes += (ulong)byteCount;
+            lock (_lock)
+            {
+                SentPackets++;
+                SentBytes += (ulong)byteCount;
+            }
         }
 
         public void RecordReceived(int byteCount)
         {
-            ReceivedPackets++;
-            ReceivedBytes += (ulong)byteCount;
+            lock (_lock)
+            {
+                ReceivedPackets++;
+                ReceivedBytes += (ulong)byteCount;
+            }
         }
 
         public void AdvanceTick()
         {
-            CurrentTick++;
+            lock (_lock)
+            {
+                CurrentTick++;
+            }
         }
     }
 }
