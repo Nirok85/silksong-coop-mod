@@ -6,6 +6,7 @@ namespace SilksongCoop.Mod.Settings
 {
     /// <summary>
     /// Manages keybind configuration and persistence via BepInEx config.
+    /// Supports both Unity Legacy Input and Unity New Input System (Unity 6 / InputSystem package).
     /// </summary>
     public class KeybindManager
     {
@@ -33,18 +34,19 @@ namespace SilksongCoop.Mod.Settings
 
         private void LoadFromConfig()
         {
-            // Load from BepInEx config if available
             if (_plugin.Config == null) return;
 
-            foreach (var kvp in _keybinds)
+            // Iterate over a snapshot list of keys to prevent 'Collection was modified' InvalidOperationException
+            var keys = new List<string>(_keybinds.Keys);
+            foreach (var action in keys)
             {
                 var configEntry = _plugin.Config.Bind(
                     "Keybinds",
-                    kvp.Key,
-                    kvp.Value,
-                    $"Keybind for {kvp.Key}"
+                    action,
+                    _keybinds[action],
+                    $"Keybind for {action}"
                 );
-                _keybinds[kvp.Key] = configEntry.Value;
+                _keybinds[action] = configEntry.Value;
             }
         }
 
@@ -73,7 +75,79 @@ namespace SilksongCoop.Mod.Settings
         public bool IsKeyDown(string action)
         {
             var key = GetKeybind(action);
-            return key != KeyCode.None && Input.GetKeyDown(key);
+            return IsKeyTriggered(key);
+        }
+
+        public static bool IsKeyTriggered(KeyCode key)
+        {
+            if (key == KeyCode.None) return false;
+
+            // 1. Try Unity Legacy Input
+            try
+            {
+                if (Input.GetKeyDown(key))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                // Unity 6 throws InvalidOperationException if PlayerSettings only enables New Input System
+            }
+
+            // 2. Try Unity New Input System via reflection if present in Silksong
+            return CheckNewInputSystemKey(key);
+        }
+
+        private static bool CheckNewInputSystemKey(KeyCode key)
+        {
+            try
+            {
+                var keyboardType = Type.GetType("UnityEngine.InputSystem.Keyboard, Unity.InputSystem");
+                if (keyboardType == null) return false;
+
+                var currentProp = keyboardType.GetProperty("current", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                var keyboard = currentProp?.GetValue(null);
+                if (keyboard == null) return false;
+
+                string? keyPropName = key switch
+                {
+                    KeyCode.F1 => "f1Key",
+                    KeyCode.F2 => "f2Key",
+                    KeyCode.F3 => "f3Key",
+                    KeyCode.F4 => "f4Key",
+                    KeyCode.F5 => "f5Key",
+                    KeyCode.F6 => "f6Key",
+                    KeyCode.F7 => "f7Key",
+                    KeyCode.F8 => "f8Key",
+                    KeyCode.F9 => "f9Key",
+                    KeyCode.F10 => "f10Key",
+                    KeyCode.F11 => "f11Key",
+                    KeyCode.F12 => "f12Key",
+                    KeyCode.Escape => "escapeKey",
+                    _ => null
+                };
+
+                if (keyPropName != null)
+                {
+                    var keyControlProp = keyboardType.GetProperty(keyPropName, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    var keyControl = keyControlProp?.GetValue(keyboard);
+                    if (keyControl != null)
+                    {
+                        var wasPressedProp = keyControl.GetType().GetProperty("wasPressedThisFrame");
+                        if (wasPressedProp != null)
+                        {
+                            return (bool)(wasPressedProp.GetValue(keyControl) ?? false);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Fallback safe ignore
+            }
+
+            return false;
         }
 
         public Dictionary<string, KeyCode> GetAllKeybinds()
@@ -88,15 +162,16 @@ namespace SilksongCoop.Mod.Settings
             // Persist defaults to config
             if (_plugin.Config != null)
             {
-                foreach (var kvp in _keybinds)
+                var keys = new List<string>(_keybinds.Keys);
+                foreach (var action in keys)
                 {
                     var configEntry = _plugin.Config.Bind(
                         "Keybinds",
-                        kvp.Key,
-                        kvp.Value,
-                        $"Keybind for {kvp.Key}"
+                        action,
+                        _keybinds[action],
+                        $"Keybind for {action}"
                     );
-                    configEntry.Value = kvp.Value;
+                    configEntry.Value = _keybinds[action];
                 }
             }
         }

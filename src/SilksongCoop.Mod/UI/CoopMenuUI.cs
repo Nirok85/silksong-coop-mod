@@ -114,6 +114,9 @@ namespace SilksongCoop.Mod.UI
                 {
                     _diagnosticsOverlay.IsVisible = !_diagnosticsOverlay.IsVisible;
                     Debug.Log($"[Coop] Diagnostics overlay toggled: {_diagnosticsOverlay.IsVisible}");
+                    _toasts.ShowInfo(_diagnosticsOverlay.IsVisible 
+                        ? "Диагностика сети: ВКЛ (F10 - главное меню коопа)" 
+                        : "Диагностика сети: ВЫКЛ");
                 }
             }
             else if (_keybinds == null && Input.GetKeyDown(KeyCode.F11))
@@ -122,6 +125,9 @@ namespace SilksongCoop.Mod.UI
                 {
                     _diagnosticsOverlay.IsVisible = !_diagnosticsOverlay.IsVisible;
                     Debug.Log($"[Coop] Diagnostics overlay toggled (fallback): {_diagnosticsOverlay.IsVisible}");
+                    _toasts.ShowInfo(_diagnosticsOverlay.IsVisible 
+                        ? "Диагностика сети: ВКЛ (F10 - главное меню коопа)" 
+                        : "Диагностика сети: ВЫКЛ");
                 }
             }
 
