@@ -12,6 +12,8 @@ namespace SilksongCoop.Mod.Networking
     {
         private CSteamID _lobbyId = CSteamID.Nil;
         private CSteamID _remoteSteamId = CSteamID.Nil;
+        private long _connectionAttemptStartMs;
+        private const long SteamConnectionTimeoutMs = 15000;
         private readonly Callback<LobbyCreated_t> _lobbyCreatedCallback;
         private readonly Callback<LobbyEnter_t> _lobbyEnteredCallback;
         private readonly Callback<P2PSessionRequest_t> _p2pSessionRequestCallback;
@@ -105,6 +107,7 @@ namespace SilksongCoop.Mod.Networking
             if (ulong.TryParse(addressOrCode, out ulong lobbyIdVal))
             {
                 CSteamID lobbySteamId = new CSteamID(lobbyIdVal);
+                _connectionAttemptStartMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 SteamMatchmaking.JoinLobby(lobbySteamId);
             }
             else
@@ -134,6 +137,7 @@ namespace SilksongCoop.Mod.Networking
                     Logger?.LogWarning($"Error leaving lobby: {ex.Message}");
                 }
                 _lobbyId = CSteamID.Nil;
+            _connectionAttemptStartMs = 0;
             }
 
             if (_remoteSteamId != CSteamID.Nil)
@@ -166,6 +170,7 @@ namespace SilksongCoop.Mod.Networking
             if (_peerConnectNotified) return;
             _peerConnectNotified = true;
             IsConnected = true;
+            _connectionAttemptStartMs = 0;
 
             string displayName = peer.m_SteamID.ToString();
             try
@@ -205,6 +210,7 @@ namespace SilksongCoop.Mod.Networking
         public void Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
             if (!IsSteamAvailable || _remoteSteamId == CSteamID.Nil) return;
+            if (data == null || offset < 0 || length < 0 || offset + length > data.Length) return;
 
             EP2PSend sendType = (method == DeliveryMethod.Unreliable || method == DeliveryMethod.Sequenced)
                 ? EP2PSend.k_EP2PSendUnreliableNoDelay
@@ -221,12 +227,17 @@ namespace SilksongCoop.Mod.Networking
                 Buffer.BlockCopy(data, offset, bufferToSend, 0, length);
             }
 
-            bool sent = SteamNetworking.SendP2PPacket(_remoteSteamId, bufferToSend, (uint)length, sendType, channel);
-            if (!sent && method == DeliveryMethod.ReliableOrdered)
+            try
             {
-                // Unreliable transform ticks are expected to drop while the P2P session
-                // is still being accepted; only surface reliable delivery failures.
-                Logger?.LogWarning($"Failed to send P2P packet to {_remoteSteamId.m_SteamID} on channel {channel}");
+                bool sent = SteamNetworking.SendP2PPacket(_remoteSteamId, bufferToSend, (uint)length, sendType, channel);
+                if (!sent && method == DeliveryMethod.ReliableOrdered)
+                {
+                    Logger?.LogWarning($"Failed to send P2P packet to {_remoteSteamId.m_SteamID} on channel {channel}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger?.LogWarning($"[Steam] SendP2P exception: {ex.Message}");
             }
         }
 
@@ -242,6 +253,18 @@ namespace SilksongCoop.Mod.Networking
             catch (Exception ex)
             {
                 Logger?.LogError($"[Steam] RunCallbacks threw: {ex.Message}");
+            }
+
+            // Connection timeout check
+            if (!IsConnected && _connectionAttemptStartMs > 0 && !IsHost)
+            {
+                long elapsed = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - _connectionAttemptStartMs;
+                if (elapsed > SteamConnectionTimeoutMs)
+                {
+                    _connectionAttemptStartMs = 0;
+                    Logger?.LogWarning("[Steam] Connection timeout");
+                    NotifyPeerDisconnected(DisconnectReason.Timeout);
+                }
             }
 
             // 2. Fix: Poll only the channels used by the protocol (2-4) and reuse buffer
@@ -263,6 +286,10 @@ namespace SilksongCoop.Mod.Networking
                             if (_remoteSteamId == CSteamID.Nil)
                             {
                                 _remoteSteamId = remoteId;
+                            }
+
+                            if (!_peerConnectNotified && _remoteSteamId == remoteId)
+                            {
                                 NotifyPeerConnected(remoteId);
                             }
                             else if (_remoteSteamId != remoteId)
@@ -271,7 +298,10 @@ namespace SilksongCoop.Mod.Networking
                                 continue;
                             }
 
-                            OnDataReceived?.Invoke(new NetworkPeerId(remoteId.m_SteamID), _readBuffer, 0, (int)bytesRead);
+                            // Capture buffer reference to avoid aliasing if buffer is resized
+                            byte[] dataBuffer = _readBuffer;
+                            int dataLength = (int)bytesRead;
+                            OnDataReceived?.Invoke(new NetworkPeerId(remoteId.m_SteamID), dataBuffer, 0, dataLength);
                         }
                         catch (Exception ex)
                         {
@@ -319,9 +349,10 @@ namespace SilksongCoop.Mod.Networking
                 }
 
                 _remoteSteamId = hostId;
-                NotifyPeerConnected(hostId);
 
                 // Send an initial handshake packet to trigger P2P session acceptance on the host.
+                // Do NOT call NotifyPeerConnected yet - wait for P2P session to be established
+                // and for actual data to flow before marking as connected.
                 try
                 {
                     byte[] handshake = new byte[] { 0x01 };
@@ -338,19 +369,22 @@ namespace SilksongCoop.Mod.Networking
 
         private void OnP2PSessionRequest(P2PSessionRequest_t callback)
         {
-            // Fix: Only accept P2P session from lobby owner or expected peer (security fix)
-            if (_remoteSteamId == CSteamID.Nil || _remoteSteamId == callback.m_steamIDRemote)
+            // Only accept P2P session from the expected remote peer
+            if (_remoteSteamId != CSteamID.Nil && _remoteSteamId == callback.m_steamIDRemote)
             {
                 SteamNetworking.AcceptP2PSessionWithUser(callback.m_steamIDRemote);
-                if (_remoteSteamId == CSteamID.Nil)
-                {
-                    _remoteSteamId = callback.m_steamIDRemote;
-                    NotifyPeerConnected(callback.m_steamIDRemote);
-                }
+            }
+            else if (_remoteSteamId == CSteamID.Nil && IsHost)
+            {
+                // Host hasn't seen the client yet but is expecting a connection
+                // Accept only if we're in hosting state
+                SteamNetworking.AcceptP2PSessionWithUser(callback.m_steamIDRemote);
+                _remoteSteamId = callback.m_steamIDRemote;
+                NotifyPeerConnected(callback.m_steamIDRemote);
             }
             else
             {
-                // Fix: Reject session requests from unexpected peers
+                // Reject session requests from unexpected peers
                 SteamNetworking.CloseP2PSessionWithUser(callback.m_steamIDRemote);
                 Logger?.LogWarning($"Rejected P2P session request from unexpected peer: {callback.m_steamIDRemote.m_SteamID}");
             }

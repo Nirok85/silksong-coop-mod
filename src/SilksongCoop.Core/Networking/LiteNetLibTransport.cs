@@ -42,13 +42,15 @@ namespace SilksongCoop.Core.Networking
         private readonly Dictionary<byte, uint> _latestSequencedReceived = new();
         private readonly Dictionary<byte, SortedDictionary<uint, byte[]>> _pendingReliable = new();
         private readonly LinkedList<SentReliablePacket> _unacknowledged = new();
+        private readonly Dictionary<(byte channel, uint sequence), LinkedListNode<SentReliablePacket>> _unacknowledgedIndex = new();
         private const int MaxUnacknowledgedPackets = 512;
 
         private long _lastPingSentMs;
-        private int _rttMs = 30;
+        private long _lastReceivedMs;
         // Connection attempt tracking for client-side timeout (UX: avoid stuck "Connecting" state)
         private long _connectionAttemptStartMs;
         private const long ConnectionTimeoutMs = 10000;
+        private const long HeartbeatTimeoutMs = 15000;
 
         // Pre-allocated receive buffer to avoid per-poll GC pressure
         private readonly byte[] _recvBuffer = new byte[2048];
@@ -59,16 +61,22 @@ namespace SilksongCoop.Core.Networking
         public event Action<NetworkPeerId, DisconnectReason>? OnPeerDisconnected;
         public event Action<NetworkPeerId, byte[], int, int>? OnDataReceived;
 
-        public bool IsHost { get; private set; }
-        public bool IsConnected { get; private set; }
-        public NetworkPeerId LocalPeerId { get; private set; }
+        private volatile bool _isHost;
+        private volatile bool _isConnected;
+        private NetworkPeerId _localPeerId;
+        private volatile int _rttMs = 30;
+        private volatile int _boundPort;
+
+        public bool IsHost => _isHost;
+        public bool IsConnected => _isConnected;
+        public NetworkPeerId LocalPeerId => _localPeerId;
         public NetworkPeerId? RemotePeerId => _remotePeerId;
         public int RoundTripTimeMs => _rttMs;
-        public int BoundPort { get; private set; }
+        public int BoundPort => _boundPort;
 
         public LiteNetLibTransport(ulong peerId = 1, string displayName = "Player")
         {
-            LocalPeerId = new NetworkPeerId(peerId, displayName);
+            _localPeerId = new NetworkPeerId(peerId, displayName);
         }
 
         private void ResetSessionState()
@@ -78,7 +86,9 @@ namespace SilksongCoop.Core.Networking
             _latestSequencedReceived.Clear();
             _pendingReliable.Clear();
             _unacknowledged.Clear();
+            _unacknowledgedIndex.Clear();
             _lastPingSentMs = 0;
+            _lastReceivedMs = 0;
             _rttMs = 30;
             _connectionAttemptStartMs = 0;
         }
@@ -108,11 +118,11 @@ namespace SilksongCoop.Core.Networking
                 }
 
                 _socket.Bind(new IPEndPoint(IPAddress.Any, port));
-                BoundPort = ((IPEndPoint)_socket.LocalEndPoint!).Port;
+                _boundPort = ((IPEndPoint)_socket.LocalEndPoint!).Port;
                 _remoteEndPoint = null;
                 _remotePeerId = null;
-                IsHost = true;
-                IsConnected = false;
+                _isHost = true;
+                _isConnected = false;
             }
         }
 
@@ -180,12 +190,12 @@ namespace SilksongCoop.Core.Networking
                 }
 
                 _socket.Bind(new IPEndPoint(IPAddress.Any, 0));
-                BoundPort = ((IPEndPoint)_socket.LocalEndPoint!).Port;
+                _boundPort = ((IPEndPoint)_socket.LocalEndPoint!).Port;
 
                 _remoteEndPoint = new IPEndPoint(targetIp, targetPort);
                 _remotePeerId = null;
-                IsHost = false;
-                IsConnected = false;
+                _isHost = false;
+                _isConnected = false;
                 _connectionAttemptStartMs = GetTimestampMs();
 
                 // Send initial handshake
@@ -221,7 +231,7 @@ namespace SilksongCoop.Core.Networking
 
                 bool wasConnected = IsConnected;
                 var peer = _remotePeerId ?? new NetworkPeerId(0);
-                IsConnected = false;
+                _isConnected = false;
                 _remoteEndPoint = null;
                 _remotePeerId = null;
 
@@ -240,22 +250,24 @@ namespace SilksongCoop.Core.Networking
             lock (_lock)
             {
                 if (!IsConnected || _remoteEndPoint == null || _socket == null) return;
+                if (data == null) return;
+                if (offset < 0 || length < 0 || offset + length > data.Length) return;
+                if (_remotePeerId.HasValue && target != _remotePeerId.Value) return;
 
                 uint seq;
                 if (!_sendSequences.TryGetValue(channel, out seq))
                     seq = 0;
                 _sendSequences[channel] = seq + 1;
 
-                byte[] payload = new byte[length];
-                Buffer.BlockCopy(data, offset, payload, 0, length);
-
-                byte[] envelope = BuildEnvelope(UdpFrameType.Data, channel, seq, method, payload);
+                // Build envelope directly to avoid extra allocation
+                byte[] envelope = BuildEnvelope(UdpFrameType.Data, channel, seq, method, data.AsSpan(offset, length));
                 try
                 {
                     _socket.SendTo(envelope, _remoteEndPoint);
                 }
                 catch (SocketException ex) { System.Diagnostics.Debug.WriteLine($"Socket error: {ex.Message}"); }
                 catch (ObjectDisposedException ex) { System.Diagnostics.Debug.WriteLine($"Socket disposed: {ex.Message}"); }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Send error: {ex.Message}"); }
 
                 if (method == DeliveryMethod.ReliableOrdered)
                 {
@@ -263,9 +275,14 @@ namespace SilksongCoop.Core.Networking
                     if (_unacknowledged.Count >= MaxUnacknowledgedPackets)
                     {
                         // Drop oldest packet to make room (O(1) with LinkedList)
-                        _unacknowledged.RemoveFirst();
+                        var oldest = _unacknowledged.First;
+                        if (oldest != null)
+                        {
+                            _unacknowledgedIndex.Remove((oldest.Value.Channel, oldest.Value.Sequence));
+                            _unacknowledged.RemoveFirst();
+                        }
                     }
-                    _unacknowledged.AddLast(new SentReliablePacket
+                    var node = _unacknowledged.AddLast(new SentReliablePacket
                     {
                         Sequence = seq,
                         Channel = channel,
@@ -273,6 +290,7 @@ namespace SilksongCoop.Core.Networking
                         LastSentTimeMs = GetTimestampMs(),
                         Retries = 0
                     });
+                    _unacknowledgedIndex[(channel, seq)] = node;
                 }
             }
         }
@@ -309,9 +327,13 @@ namespace SilksongCoop.Core.Networking
 
                     if (available <= 0) break;
 
+                    // Fresh sender endpoint per iteration to avoid stale data
+                    senderEp = new IPEndPoint(IPAddress.Any, 0);
+
                     try
                     {
                         int received = socket.ReceiveFrom(_recvBuffer, ref senderEp);
+                        if (received == 0) break;
                         if (received >= 8) // Minimum envelope header
                         {
                             ProcessIncomingDatagram(_recvBuffer.AsSpan(0, received), senderEp);
@@ -332,16 +354,21 @@ namespace SilksongCoop.Core.Networking
                 {
                     if (GetTimestampMs() - _connectionAttemptStartMs > ConnectionTimeoutMs)
                     {
-                        // Manual cleanup since Disconnect() guard skips non-connected state
                         var peer = _remotePeerId ?? new NetworkPeerId(0);
-                        IsConnected = false;
-                        var ep = _remoteEndPoint;
-                        _remoteEndPoint = null;
-                        _remotePeerId = null;
                         _connectionAttemptStartMs = 0;
                         ResetSessionState();
                         CloseSocket();
                         OnPeerDisconnected?.Invoke(peer, DisconnectReason.Timeout);
+                        return;
+                    }
+                }
+
+                // Host-side heartbeat timeout: detect client disappearance
+                if (IsHost && IsConnected && _remoteEndPoint != null && _socket != null && _lastReceivedMs > 0)
+                {
+                    if (GetTimestampMs() - _lastReceivedMs > HeartbeatTimeoutMs)
+                    {
+                        Disconnect(DisconnectReason.Timeout);
                         return;
                     }
                 }
@@ -353,18 +380,21 @@ namespace SilksongCoop.Core.Networking
                 }
 
                 // 2. Retransmit unacknowledged reliable packets
+                bool connectionLost = false;
                 var node = _unacknowledged.First;
                 while (node != null)
                 {
                     var next = node.Next;
                     var item = node.Value;
-                    if (now - item.LastSentTimeMs > 100) // 100ms retransmit timeout
+                    // Exponential backoff: 100ms, 200ms, 400ms, 800ms, capped at 2000ms
+                    int backoffMs = Math.Min(100 * (1 << Math.Min(item.Retries, 4)), 2000);
+                    if (now - item.LastSentTimeMs > backoffMs)
                     {
-                        if (item.Retries >= 10) // Fix: Use >= to allow exactly 10 retries (0-9)
+                        if (item.Retries >= 10)
                         {
-                            // Connection lost
-                            Disconnect(DisconnectReason.Timeout);
-                            return;
+                            // Connection lost - mark for disconnect after loop
+                            connectionLost = true;
+                            break;
                         }
 
                         item.Retries++;
@@ -384,6 +414,12 @@ namespace SilksongCoop.Core.Networking
                     node = next;
                 }
 
+                if (connectionLost)
+                {
+                    Disconnect(DisconnectReason.Timeout);
+                    return;
+                }
+
                 // 3. Heartbeat ping
                 if (IsConnected && _remoteEndPoint != null && _socket != null)
                 {
@@ -399,28 +435,66 @@ namespace SilksongCoop.Core.Networking
 
         private void ProcessIncomingDatagram(ReadOnlySpan<byte> datagram, EndPoint sender)
         {
+            // Guard against malformed/tiny packets
+            if (datagram.Length < 8) return;
+
+            // Track last received time for heartbeat timeout
+            _lastReceivedMs = GetTimestampMs();
+
             try
             {
                 UdpFrameType frameType = (UdpFrameType)datagram[0];
                 byte channel = datagram[1];
                 DeliveryMethod method = (DeliveryMethod)datagram[2];
                 uint sequence = BitConverter.ToUInt32(datagram.Slice(3, 4));
-                byte payloadLenByte = datagram[7]; // or length calculation
                 ReadOnlySpan<byte> payload = datagram.Slice(8);
+
+                // Validate enum ranges
+                if (!Enum.IsDefined(typeof(UdpFrameType), frameType)) return;
+                if (!Enum.IsDefined(typeof(DeliveryMethod), method)) return;
+
+                // Sender validation: when connected, only accept from known remote endpoint
+                if (IsConnected && _remoteEndPoint != null)
+                {
+                    if (sender is IPEndPoint remoteEp && _remoteEndPoint is IPEndPoint knownEp)
+                    {
+                        if (!remoteEp.Address.Equals(knownEp.Address) || remoteEp.Port != knownEp.Port)
+                            return; // Drop packet from unknown sender
+                    }
+                }
 
                 switch (frameType)
                 {
                     case UdpFrameType.Handshake:
-                        if (IsHost && !IsConnected && _remoteEndPoint == null)
+                        if (IsHost && !IsConnected)
                         {
                             // Validate sender is not ourselves
-                            if (sender is IPEndPoint ep && ep.Address.Equals(IPAddress.Loopback) && ep.Port == BoundPort)
-                                break; // Ignore self-handshake
+                            if (sender is IPEndPoint ep && ep.Port == BoundPort &&
+                                (ep.Address.Equals(IPAddress.Loopback) || ep.Address.Equals(IPAddress.Any)))
+                            {
+                                // Only ignore if it's truly from ourselves
+                                if (ep.Address.Equals(IPAddress.Loopback) && ep.Port == BoundPort)
+                                    break; // Ignore self-handshake
+                            }
 
-                            _remoteEndPoint = sender;
+                            // If we already have a remote endpoint, only accept from same sender
+                            if (_remoteEndPoint != null)
+                            {
+                                if (_remoteEndPoint is IPEndPoint knownEp && sender is IPEndPoint remoteEp)
+                                {
+                                    if (!remoteEp.Address.Equals(knownEp.Address) || remoteEp.Port != knownEp.Port)
+                                        break; // Drop handshake from different sender
+                                }
+                            }
+                            else
+                            {
+                                _remoteEndPoint = sender;
+                            }
+
                             ulong clientPeerValue = payload.Length >= 8 ? BitConverter.ToUInt64(payload) : 2;
+                            if (payload.Length > 8) clientPeerValue = 2; // Cap oversized payloads
                             _remotePeerId = new NetworkPeerId(clientPeerValue, "Client");
-                            IsConnected = true;
+                            _isConnected = true;
 
                             // Send HandshakeAck back
                             SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
@@ -431,26 +505,41 @@ namespace SilksongCoop.Core.Networking
                     case UdpFrameType.HandshakeAck:
                         if (!IsHost && !IsConnected)
                         {
-                            _remoteEndPoint = sender;
+                            // Validate sender matches expected remote endpoint
+                            if (_remoteEndPoint != null)
+                            {
+                                if (_remoteEndPoint is IPEndPoint knownEp && sender is IPEndPoint remoteEp)
+                                {
+                                    if (!remoteEp.Address.Equals(knownEp.Address) || remoteEp.Port != knownEp.Port)
+                                        break; // Drop ack from unknown sender
+                                }
+                            }
+                            else
+                            {
+                                _remoteEndPoint = sender;
+                            }
+
                             ulong hostPeerValue = payload.Length >= 8 ? BitConverter.ToUInt64(payload) : 1;
+                            if (payload.Length > 8) hostPeerValue = 1; // Cap oversized payloads
                             _remotePeerId = new NetworkPeerId(hostPeerValue, "Host");
-                            IsConnected = true;
+                            _isConnected = true;
 
                             OnPeerConnected?.Invoke(_remotePeerId.Value);
                         }
                         break;
 
                     case UdpFrameType.Data:
-                        // If reliable, send ACK immediately
-                        if (method == DeliveryMethod.ReliableOrdered)
+                        // Handle incoming data first
+                        HandleIncomingData(channel, method, sequence, payload);
+
+                        // If reliable, send ACK after successful dispatch
+                        if (method == DeliveryMethod.ReliableOrdered && IsConnected)
                         {
                             byte[] ackPayload = new byte[5];
                             ackPayload[0] = channel;
                             Buffer.BlockCopy(BitConverter.GetBytes(sequence), 0, ackPayload, 1, 4);
                             SendEnvelope(UdpFrameType.Ack, channel, sequence, DeliveryMethod.Unreliable, ackPayload);
                         }
-
-                        HandleIncomingData(channel, method, sequence, payload);
                         break;
 
                     case UdpFrameType.Ack:
@@ -459,21 +548,21 @@ namespace SilksongCoop.Core.Networking
                             byte ackChannel = payload[0];
                             uint ackSeq = BitConverter.ToUInt32(payload.Slice(1, 4));
 
-                            var ackNode = _unacknowledged.First;
-                            while (ackNode != null)
+                            // O(1) removal using index
+                            if (_unacknowledgedIndex.TryGetValue((ackChannel, ackSeq), out var node))
                             {
-                                var ackNext = ackNode.Next;
-                                if (ackNode.Value.Channel == ackChannel && ackNode.Value.Sequence == ackSeq)
-                                {
-                                    _unacknowledged.Remove(ackNode);
-                                }
-                                ackNode = ackNext;
+                                _unacknowledged.Remove(node);
+                                _unacknowledgedIndex.Remove((ackChannel, ackSeq));
                             }
                         }
                         break;
 
                     case UdpFrameType.Ping:
-                        SendEnvelope(UdpFrameType.Pong, 0, 0, DeliveryMethod.Unreliable, payload);
+                        // Echo only the 8-byte timestamp to prevent amplification
+                        if (payload.Length >= 8)
+                        {
+                            SendEnvelope(UdpFrameType.Pong, 0, 0, DeliveryMethod.Unreliable, payload.Slice(0, 8));
+                        }
                         break;
 
                     case UdpFrameType.Pong:
@@ -492,10 +581,12 @@ namespace SilksongCoop.Core.Networking
                         if (IsConnected)
                         {
                             var peer = _remotePeerId ?? new NetworkPeerId(0);
-                            IsConnected = false;
+                            _isConnected = false;
                             _remoteEndPoint = null;
                             _remotePeerId = null;
                             ResetSessionState();
+                            // Defer event invocation to avoid reentrancy under lock
+                            // Note: This still fires under lock in current design; documented as reentrant-safe
                             OnPeerDisconnected?.Invoke(peer, DisconnectReason.GracefulDisconnect);
                         }
                         break;
@@ -523,6 +614,40 @@ namespace SilksongCoop.Core.Networking
 
                     _expectedReceiveSequences.TryGetValue(channel, out uint expected);
 
+                    // Cap pending buffer size to prevent unbounded growth under packet loss
+                    const int MaxPendingPerChannel = 256;
+                    if (pending.Count >= MaxPendingPerChannel)
+                    {
+                        // First remove stale entries (below expected)
+                        var staleKeys = new List<uint>();
+                        foreach (var key in pending.Keys)
+                        {
+                            if (key < expected)
+                                staleKeys.Add(key);
+                        }
+                        foreach (var key in staleKeys)
+                        {
+                            pending.Remove(key);
+                        }
+
+                        // If still over cap, remove oldest entries
+                        while (pending.Count >= MaxPendingPerChannel && pending.Count > 0)
+                        {
+                            uint oldestKey = 0;
+                            bool found = false;
+                            foreach (var key in pending.Keys)
+                            {
+                                oldestKey = key;
+                                found = true;
+                                break;
+                            }
+                            if (found)
+                                pending.Remove(oldestKey);
+                            else
+                                break;
+                        }
+                    }
+
                     if (sequence == expected)
                     {
                         DispatchData(data);
@@ -545,13 +670,14 @@ namespace SilksongCoop.Core.Networking
                     {
                         pending[sequence] = data;
                     }
+                    // If sequence < expected, it's a duplicate/old packet - drop silently
                 }
                 else if (method == DeliveryMethod.Sequenced)
                 {
                     _latestSequencedReceived.TryGetValue(channel, out uint latest);
-                    if (sequence >= latest)
+                    if (sequence > latest || latest == 0)
                     {
-                        _latestSequencedReceived[channel] = sequence + 1;
+                        _latestSequencedReceived[channel] = sequence;
                         DispatchData(data);
                     }
                 }
@@ -570,12 +696,13 @@ namespace SilksongCoop.Core.Networking
         {
             try
             {
-                // Fix: Ensure we have a valid peer before dispatching
-                if (!_remotePeerId.HasValue)
+                // Fix: Ensure we have a valid peer and connection before dispatching
+                if (!_remotePeerId.HasValue || !IsConnected)
                 {
-                    // No remote peer established yet, drop the data
+                    // No remote peer established or not connected, drop the data
                     return;
                 }
+                if (data == null || data.Length == 0) return;
                 var peer = _remotePeerId.Value;
                 OnDataReceived?.Invoke(peer, data, 0, data.Length);
             }
@@ -596,6 +723,7 @@ namespace SilksongCoop.Core.Networking
             }
             catch (SocketException ex) { System.Diagnostics.Debug.WriteLine($"Socket error: {ex.Message}"); }
             catch (ObjectDisposedException ex) { System.Diagnostics.Debug.WriteLine($"Socket disposed: {ex.Message}"); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"SendEnvelope error: {ex.Message}"); }
         }
 
         private byte[] BuildEnvelope(UdpFrameType type, byte channel, uint sequence, DeliveryMethod method, ReadOnlySpan<byte> payload)
@@ -618,10 +746,16 @@ namespace SilksongCoop.Core.Networking
             {
                 try
                 {
+                    socket.Shutdown(SocketShutdown.Both);
+                }
+                catch (Exception) { /* Socket may not be connected */ }
+                try
+                {
                     socket.Close();
                 }
                 catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Socket close error: {ex.Message}"); }
             }
+            _boundPort = 0;
         }
 
         public void Dispose()
