@@ -1,0 +1,31 @@
+using System;
+using HarmonyLib;
+using SilksongCoop.Core.Protocol.Packets;
+
+namespace SilksongCoop.Mod.Hooks
+{
+    [HarmonyPatch]
+    public static class CurrencyHooks
+    {
+        public static bool IsApplyingRemoteCurrency = false;
+
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(CurrencyManager), nameof(CurrencyManager.ChangeCurrency))]
+        public static void PostfixChangeCurrency(int amount, CurrencyType type, bool showCounter)
+        {
+            if (amount == 0) return;
+            if (IsApplyingRemoteCurrency) return;
+            if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
+            if (SilksongCoopPlugin.Instance?.VitalsSync == null) return;
+
+            var pd = PlayerData.instance;
+            if (pd == null) return;
+
+            var coreType = (type == CurrencyType.Money) ? Core.Protocol.Packets.CurrencyType.Rosaries : Core.Protocol.Packets.CurrencyType.ShellShards;
+            int currentWallet = (type == CurrencyType.Money) ? pd.geo : pd.ShellShards;
+            int projectedTotal = Math.Max(0, currentWallet + amount);
+
+            SilksongCoopPlugin.Instance.VitalsSync.OnLocalCurrencyChanged(coreType, amount, projectedTotal, Guid.NewGuid());
+        }
+    }
+}

@@ -1,0 +1,223 @@
+using System;
+using System.Collections.Generic;
+using SilksongCoop.Core.Clones;
+using SilksongCoop.Core.Networking;
+using SilksongCoop.Core.Protocol.Packets;
+using SilksongCoop.Mod.Visuals;
+using UnityEngine;
+
+namespace SilksongCoop.Mod.Clones
+{
+    /// <summary>
+    /// Spawns and manages standalone RemoteHornet GameObject hierarchies.
+    /// Uses MeshRenderer, MeshFilter, tk2dSprite, and tk2dSpriteAnimator linked to
+    /// HeroController.instance.AnimCtrl.animator.Library, completely bypassing
+    /// the HeroController singleton Awake destruction guard.
+    /// </summary>
+    public class RemoteHornetSpawner : MonoBehaviour, IPlayerCloneManager
+    {
+        public static RemoteHornetSpawner? Instance { get; private set; }
+
+        private readonly Dictionary<NetworkPeerId, RemotePlayerController> _activeClones =
+            new Dictionary<NetworkPeerId, RemotePlayerController>();
+
+        private void Awake()
+        {
+            if (Instance == null)
+            {
+                Instance = this;
+                DontDestroyOnLoad(gameObject);
+            }
+            else if (Instance != this)
+            {
+                Destroy(this);
+            }
+        }
+
+        public void SpawnRemotePlayer(NetworkPeerId peerId, bool isPlayer2)
+        {
+            // Edge Case E01: If clone already exists for this peer, clean up prior instance
+            if (_activeClones.TryGetValue(peerId, out var existing))
+            {
+                if (existing != null && existing.gameObject != null)
+                {
+                    Destroy(existing.gameObject);
+                }
+                _activeClones.Remove(peerId);
+            }
+
+            // Create clean GameObject hierarchy (Layer 0 avoids camera targets and damage triggers)
+            var cloneGo = new GameObject($"RemoteHornet_{peerId.Value}");
+            cloneGo.layer = 0;
+            DontDestroyOnLoad(cloneGo);
+
+            // Add mesh filter and renderer
+            cloneGo.AddComponent<MeshFilter>();
+            var meshRenderer = cloneGo.AddComponent<MeshRenderer>();
+
+            // Setup tk2dSprite
+            tk2dSprite sprite = cloneGo.AddComponent<tk2dSprite>();
+
+            // Setup tk2dSpriteAnimator
+            tk2dSpriteAnimator animator = cloneGo.AddComponent<tk2dSpriteAnimator>();
+
+            // Borrow Hornet sprite collection and animation library from local HeroController if available
+            var hero = HeroController.instance;
+            if (hero != null && hero.AnimCtrl != null && hero.AnimCtrl.animator != null)
+            {
+                var heroAnimator = hero.AnimCtrl.animator;
+                if (heroAnimator.Library != null)
+                {
+                    animator.Library = heroAnimator.Library;
+                }
+
+                if (heroAnimator.Sprite != null && heroAnimator.Sprite.Collection != null)
+                {
+                    sprite.SetSprite(heroAnimator.Sprite.Collection, heroAnimator.Sprite.spriteId);
+                }
+            }
+
+            // Add visual controllers
+            var paletteSwap = cloneGo.AddComponent<PaletteSwapController>();
+            paletteSwap.SetPlayer2(isPlayer2);
+
+            var dashTrail = cloneGo.AddComponent<DashTrailController>();
+            dashTrail.Initialize(isPlayer2);
+
+            // Add remote player controller to drive interpolated motion and animation
+            var controller = cloneGo.AddComponent<RemotePlayerController>();
+            controller.Initialize(peerId, isPlayer2);
+
+            if (animator.Library != null)
+            {
+                controller.SetAnimationLibrary(animator.Library);
+            }
+
+            _activeClones[peerId] = controller;
+        }
+
+        public void DespawnRemotePlayer(NetworkPeerId peerId)
+        {
+            // Edge Case E02: Despawning non-existent peer is a safe no-op
+            if (_activeClones.TryGetValue(peerId, out var controller))
+            {
+                if (controller != null && controller.gameObject != null)
+                {
+                    Destroy(controller.gameObject);
+                }
+                _activeClones.Remove(peerId);
+            }
+        }
+
+        public void UpdateRemoteTransform(
+            NetworkPeerId peerId,
+            float posX, float posY,
+            float velX, float velY,
+            byte facingDirection,
+            ushort stateFlags,
+            int animClipHash,
+            ushort normalizedTime,
+            uint timestampMs)
+        {
+            if (_activeClones.TryGetValue(peerId, out var controller))
+            {
+                controller.UpdateTransform(
+                    posX, posY,
+                    velX, velY,
+                    facingDirection,
+                    stateFlags,
+                    animClipHash,
+                    normalizedTime,
+                    timestampMs);
+            }
+        }
+
+        public void TriggerRemoteAction(NetworkPeerId peerId, ActionType action, byte variant)
+        {
+            if (_activeClones.TryGetValue(peerId, out var controller))
+            {
+                controller.TriggerAction(action, variant);
+            }
+        }
+
+        public void SyncAnimation(NetworkPeerId peerId, int clipHash, ushort normalizedTime)
+        {
+            if (_activeClones.TryGetValue(peerId, out var controller))
+            {
+                controller.SyncAnimation(clipHash, normalizedTime);
+            }
+        }
+
+        public void SetFacingDirection(NetworkPeerId peerId, bool facingRight)
+        {
+            if (_activeClones.TryGetValue(peerId, out var controller))
+            {
+                controller.SetFacingDirection(facingRight);
+            }
+        }
+
+        public void TriggerDashEffect(NetworkPeerId peerId, bool isAirDash)
+        {
+            if (_activeClones.TryGetValue(peerId, out var controller))
+            {
+                controller.TriggerDashEffect(isAirDash);
+            }
+        }
+
+        public bool TryGetRemotePosition(NetworkPeerId peerId, out float posX, out float posY)
+        {
+            if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
+            {
+                var pos = controller.transform.position;
+                posX = pos.x;
+                posY = pos.y;
+                return true;
+            }
+            posX = 0f;
+            posY = 0f;
+            return false;
+        }
+
+        public bool TryGetRemoteState(NetworkPeerId peerId, out RemoteCloneState state)
+        {
+            if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
+            {
+                state = controller.GetState();
+                return true;
+            }
+            state = default;
+            return false;
+        }
+
+        public bool IsPlayerSpawned(NetworkPeerId peerId)
+        {
+            return _activeClones.ContainsKey(peerId);
+        }
+
+        public void UpdateInterpolation(double currentLocalTimeMs)
+        {
+            // Unity components update automatically via Update() pass
+        }
+
+        public void ResetAllClones()
+        {
+            foreach (var kvp in _activeClones)
+            {
+                if (kvp.Value != null && kvp.Value.gameObject != null)
+                {
+                    Destroy(kvp.Value.gameObject);
+                }
+            }
+            _activeClones.Clear();
+        }
+
+        private void OnDestroy()
+        {
+            ResetAllClones();
+            if (Instance == this)
+            {
+                Instance = null;
+            }
+        }
+    }
+}
