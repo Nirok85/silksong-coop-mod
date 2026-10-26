@@ -580,6 +580,7 @@ namespace SilksongCoop.Mod
             {
                 Logger.LogInfo($"[Coop] Peer connected: {peer}");
                 SessionState.SetConnected(peer);
+                MenuUI.SetStatusMessage($"Connected to {peer.DisplayName}! You are {(transport.IsHost ? "Host (Player 1)" : "Client (Player 2 - Blue)")}");
 
                 bool remoteIsPlayer2 = transport.IsHost;
                 CloneSpawner.SpawnRemotePlayer(peer, remoteIsPlayer2);

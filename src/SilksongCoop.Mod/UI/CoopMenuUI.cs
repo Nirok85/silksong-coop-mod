@@ -78,8 +78,8 @@ namespace SilksongCoop.Mod.UI
                 string peerName = _sessionState.RemotePeerId.HasValue
                     ? _sessionState.RemotePeerId.Value.DisplayName
                     : "Partner";
-                watermark = $"[F10] Co-op: Connected to {peerName}";
-                watermarkColor = new Color(0.4f, 1f, 0.5f, 0.9f);
+                watermark = $"[F10] Co-op: Connected to {peerName}  (Press F10 for menu)";
+                watermarkColor = new Color(0.4f, 1f, 0.5f, 1f);
             }
             else if (_sessionState != null && _sessionState.Status == SessionStatus.Hosting)
             {
