@@ -88,15 +88,23 @@ namespace SilksongCoop.Mod.UI
 
         private void Update()
         {
+            // Debug: Verify Update is being called
+            if (Input.GetKeyDown(KeyCode.F10) || Input.GetKeyDown(KeyCode.F11))
+            {
+                Debug.Log($"[Coop] Update() called, F10={Input.GetKeyDown(KeyCode.F10)}, F11={Input.GetKeyDown(KeyCode.F11)}, _keybinds={_keybinds != null}");
+            }
+
             // Toggle menu using configurable keybind
             if (_keybinds != null && _keybinds.IsKeyDown(KeybindManager.ToggleMenu))
             {
                 IsVisible = !IsVisible;
+                Debug.Log($"[Coop] Menu toggled: {IsVisible}");
             }
             // Fallback to F10 if keybinds not initialized
             else if (_keybinds == null && Input.GetKeyDown(KeyCode.F10))
             {
                 IsVisible = !IsVisible;
+                Debug.Log($"[Coop] Menu toggled (fallback): {IsVisible}");
             }
 
             // Toggle diagnostics overlay with F11
@@ -105,6 +113,7 @@ namespace SilksongCoop.Mod.UI
                 if (_diagnosticsOverlay != null)
                 {
                     _diagnosticsOverlay.IsVisible = !_diagnosticsOverlay.IsVisible;
+                    Debug.Log($"[Coop] Diagnostics overlay toggled: {_diagnosticsOverlay.IsVisible}");
                 }
             }
             else if (_keybinds == null && Input.GetKeyDown(KeyCode.F11))
@@ -112,6 +121,7 @@ namespace SilksongCoop.Mod.UI
                 if (_diagnosticsOverlay != null)
                 {
                     _diagnosticsOverlay.IsVisible = !_diagnosticsOverlay.IsVisible;
+                    Debug.Log($"[Coop] Diagnostics overlay toggled (fallback): {_diagnosticsOverlay.IsVisible}");
                 }
             }
 
