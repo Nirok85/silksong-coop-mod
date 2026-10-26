@@ -41,6 +41,7 @@ namespace SilksongCoop.Mod
 
         private Harmony? _harmony;
         private bool _isTeamWipeInProgress;
+        private ulong? _pendingSteamLobbyJoin;
 
         private void Awake()
         {
@@ -210,6 +211,25 @@ namespace SilksongCoop.Mod
             catch (Exception ex)
             {
                 Logger.LogWarning($"Steamworks transport not active: {ex.Message}");
+            }
+
+            // Check for Steam lobby join from command line (user accepted invite while game was closed)
+            try
+            {
+                var args = Environment.GetCommandLineArgs();
+                for (int i = 0; i < args.Length - 1; i++)
+                {
+                    if (args[i] == "-connect_lobby" && ulong.TryParse(args[i + 1], out ulong lobbyId))
+                    {
+                        _pendingSteamLobbyJoin = lobbyId;
+                        Logger.LogInfo($"[Coop] Pending Steam lobby join from command line: {lobbyId}");
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed to parse command line args: {ex.Message}");
             }
 
             // Bind transport callbacks to session state
@@ -624,7 +644,32 @@ namespace SilksongCoop.Mod
 
         private void Update()
         {
+            // Always poll Steam transport for callbacks (lobby invites, session requests, etc.)
+            // even when UDP is the active data transport.
+            if (SteamTransport != null && ActiveTransport != SteamTransport)
+            {
+                SteamTransport.PollEvents();
+            }
             ActiveTransport?.PollEvents();
+
+            // Process pending Steam lobby join from command line
+            if (_pendingSteamLobbyJoin.HasValue && SteamTransport != null)
+            {
+                try
+                {
+                    SteamTransport.Connect(_pendingSteamLobbyJoin.Value.ToString());
+                    SetActiveTransport(SteamTransport);
+                    SessionState.SetConnecting(SteamTransport.LocalPeerId, _pendingSteamLobbyJoin.Value.ToString());
+                    MenuUI.SetStatusMessage($"Joining Steam Lobby {_pendingSteamLobbyJoin.Value}...");
+                    _pendingSteamLobbyJoin = null;
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning($"[Coop] Failed to join pending Steam lobby: {ex.Message}");
+                    _pendingSteamLobbyJoin = null;
+                }
+            }
+
             SessionState.AdvanceTick();
 
             if (SessionState.IsConnected && SessionState.RemotePeerId.HasValue)

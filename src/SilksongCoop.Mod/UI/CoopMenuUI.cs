@@ -14,6 +14,11 @@ namespace SilksongCoop.Mod.UI
     {
         public bool IsVisible { get; set; } = false;
 
+        public void SetStatusMessage(string message)
+        {
+            _statusMessage = message;
+        }
+
         private Rect _windowRect = new Rect(40, 40, 420, 480);
         private string _inputAddressOrCode = "";
         private string _statusMessage = "Ready. Press F10 to toggle this menu.";
@@ -375,6 +380,7 @@ namespace SilksongCoop.Mod.UI
 
                 _steamTransport.StartHost();
                 _currentTransport = _steamTransport;
+                SilksongCoopPlugin.Instance?.SetActiveTransport(_steamTransport);
 
                 _sessionState?.SetHosting(_steamTransport.LocalPeerId, "Steam-Lobby");
                 _statusMessage = "Steam P2P lobby created. Use Invite Friends button.";
@@ -419,6 +425,7 @@ namespace SilksongCoop.Mod.UI
 
                 _currentTransport = _steamTransport;
                 _steamTransport.Connect(lobbyIdString.Trim());
+                SilksongCoopPlugin.Instance?.SetActiveTransport(_steamTransport);
 
                 if (ulong.TryParse(lobbyIdString.Trim(), out ulong parsedLobby))
                 {

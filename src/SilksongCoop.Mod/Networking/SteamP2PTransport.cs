@@ -16,6 +16,7 @@ namespace SilksongCoop.Mod.Networking
         private readonly Callback<LobbyEnter_t> _lobbyEnteredCallback;
         private readonly Callback<P2PSessionRequest_t> _p2pSessionRequestCallback;
         private readonly Callback<GameLobbyJoinRequested_t> _gameLobbyJoinRequestedCallback;
+        private readonly Callback<LobbyChatUpdate_t> _lobbyChatUpdateCallback;
         
         // Fix: Reuse buffer to avoid allocation in hot path
         private byte[] _readBuffer = new byte[4096];
@@ -73,6 +74,7 @@ namespace SilksongCoop.Mod.Networking
             _lobbyEnteredCallback = Callback<LobbyEnter_t>.Create(OnLobbyEntered);
             _p2pSessionRequestCallback = Callback<P2PSessionRequest_t>.Create(OnP2PSessionRequest);
             _gameLobbyJoinRequestedCallback = Callback<GameLobbyJoinRequested_t>.Create(OnGameLobbyJoinRequested);
+            _lobbyChatUpdateCallback = Callback<LobbyChatUpdate_t>.Create(OnLobbyChatUpdate);
         }
 
         public void StartHost(int port = 7777)
@@ -242,6 +244,18 @@ namespace SilksongCoop.Mod.Networking
                 _remoteSteamId = hostId;
                 IsConnected = true;
                 OnPeerConnected?.Invoke(new NetworkPeerId(hostId.m_SteamID, SteamFriends.GetFriendPersonaName(hostId)));
+
+                // Send an initial handshake packet to trigger P2P session acceptance on the host.
+                // Without this, the host never receives a P2PSessionRequest and cannot accept the connection.
+                try
+                {
+                    byte[] handshake = new byte[] { 0x01 };
+                    SteamNetworking.SendP2PPacket(hostId, handshake, (uint)handshake.Length, EP2PSend.k_EP2PSendReliable, 2);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to send Steam handshake: {ex.Message}");
+                }
             }
         }
 
@@ -269,6 +283,45 @@ namespace SilksongCoop.Mod.Networking
         private void OnGameLobbyJoinRequested(GameLobbyJoinRequested_t callback)
         {
             SteamMatchmaking.JoinLobby(callback.m_steamIDLobby);
+        }
+
+        private void OnLobbyChatUpdate(LobbyChatUpdate_t callback)
+        {
+            // Only handle updates for our lobby
+            if (_lobbyId == CSteamID.Nil || callback.m_ulSteamIDLobby != _lobbyId.m_SteamID)
+                return;
+
+            // Check if a user entered the lobby
+            if ((callback.m_rgfChatMemberStateChange & (uint)EChatMemberStateChange.k_EChatMemberStateChangeEntered) != 0)
+            {
+                CSteamID joinedUser = new CSteamID(callback.m_ulSteamIDUserChanged);
+
+                // Ignore our own join event
+                if (joinedUser == SteamUser.GetSteamID())
+                    return;
+
+                // Host: detect client joining the lobby
+                if (IsHost && _remoteSteamId == CSteamID.Nil)
+                {
+                    _remoteSteamId = joinedUser;
+                    IsConnected = true;
+                    OnPeerConnected?.Invoke(new NetworkPeerId(joinedUser.m_SteamID, SteamFriends.GetFriendPersonaName(joinedUser)));
+                }
+            }
+            else if ((callback.m_rgfChatMemberStateChange & (uint)EChatMemberStateChange.k_EChatMemberStateChangeLeft) != 0 ||
+                     (callback.m_rgfChatMemberStateChange & (uint)EChatMemberStateChange.k_EChatMemberStateChangeDisconnected) != 0)
+            {
+                CSteamID leftUser = new CSteamID(callback.m_ulSteamIDUserChanged);
+
+                // Host: detect client leaving
+                if (IsHost && _remoteSteamId == leftUser)
+                {
+                    var peer = new NetworkPeerId(_remoteSteamId.m_SteamID);
+                    _remoteSteamId = CSteamID.Nil;
+                    IsConnected = false;
+                    OnPeerDisconnected?.Invoke(peer, DisconnectReason.GracefulDisconnect);
+                }
+            }
         }
 
         public void Dispose()
