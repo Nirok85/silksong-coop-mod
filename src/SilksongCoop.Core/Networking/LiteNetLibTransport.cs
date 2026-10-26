@@ -20,7 +20,9 @@ namespace SilksongCoop.Core.Networking
             Ack = 0x04,
             Ping = 0x05,
             Pong = 0x06,
-            Disconnect = 0x07
+            Disconnect = 0x07,
+            Challenge = 0x08,
+            ChallengeResponse = 0x09
         }
 
         private struct SentReliablePacket
@@ -37,6 +39,8 @@ namespace SilksongCoop.Core.Networking
         private NetworkPeerId? _remotePeerId;
         private readonly object _lock = new();
         private readonly RateLimiter _rateLimiter = new RateLimiter(maxTokens: 1000, refillRatePerSecond: 100);
+        private readonly ConnectionAuthenticator _authenticator = new ConnectionAuthenticator();
+        private string? _roomCode;
 
         private readonly Dictionary<byte, uint> _sendSequences = new();
         private readonly Dictionary<byte, uint> _expectedReceiveSequences = new();
@@ -78,6 +82,25 @@ namespace SilksongCoop.Core.Networking
         public LiteNetLibTransport(ulong peerId = 1, string displayName = "Player")
         {
             _localPeerId = new NetworkPeerId(peerId, displayName);
+        }
+
+        private bool ValidateRoomCode(string roomCode)
+        {
+            // Reject deprecated 8-character compact codes (weak 2-bit CRC)
+            if (RoomCodeCodec.IsDeprecatedCode(roomCode))
+                return false;
+
+            // Validate using secure decoder (12-character with CRC-8)
+            return RoomCodeCodec.TryDecodeSecure(roomCode, out _, out _);
+        }
+
+        /// <summary>
+        /// Sets the room code for connection authentication.
+        /// Must be called before StartHost or Connect.
+        /// </summary>
+        public void SetRoomCode(string roomCode)
+        {
+            _roomCode = roomCode;
         }
 
         private void ResetSessionState()
@@ -132,10 +155,20 @@ namespace SilksongCoop.Core.Networking
             IPAddress targetIp;
             int targetPort;
 
+            // Reject deprecated 8-character compact codes (weak 2-bit CRC)
+            if (RoomCodeCodec.IsDeprecatedCode(addressOrCode))
+            {
+                throw new ArgumentException(
+                    "8-character room codes are deprecated due to weak security. " +
+                    "Please use the 12-character code format (SK-XXXX-XXXX-XXXX).",
+                    nameof(addressOrCode));
+            }
+
             if (RoomCodeCodec.TryDecode(addressOrCode, out IPAddress decodedIp, out int decodedPort))
             {
                 targetIp = decodedIp;
                 targetPort = decodedPort;
+                _roomCode = addressOrCode; // Store for challenge-response authentication
             }
             else
             {
@@ -502,11 +535,60 @@ namespace SilksongCoop.Core.Networking
                             ulong clientPeerValue = payload.Length >= 8 ? BitConverter.ToUInt64(payload) : 2;
                             if (payload.Length > 8) clientPeerValue = 2; // Cap oversized payloads
                             _remotePeerId = new NetworkPeerId(clientPeerValue, "Client");
-                            _isConnected = true;
 
-                            // Send HandshakeAck back
-                            SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
-                            OnPeerConnected?.Invoke(_remotePeerId.Value);
+                            // Send challenge instead of immediately connecting
+                            if (_roomCode != null)
+                            {
+                                byte[] nonce = _authenticator.GenerateNonce();
+                                SendEnvelope(UdpFrameType.Challenge, 0, 0, DeliveryMethod.Unreliable, nonce);
+                            }
+                            else
+                            {
+                                // No room code set, fall back to old behavior (no authentication)
+                                _isConnected = true;
+                                SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
+                                OnPeerConnected?.Invoke(_remotePeerId.Value);
+                            }
+                        }
+                        break;
+
+                    case UdpFrameType.Challenge:
+                        if (!IsHost && !IsConnected && _roomCode != null)
+                        {
+                            // Received challenge from host, compute HMAC and send response
+                            if (payload.Length >= 16)
+                            {
+                                byte[] nonce = payload.Slice(0, 16).ToArray();
+                                byte[] signature = _authenticator.ComputeSignature(nonce, _roomCode);
+                                SendEnvelope(UdpFrameType.ChallengeResponse, 0, 0, DeliveryMethod.Unreliable, signature);
+                            }
+                        }
+                        break;
+
+                    case UdpFrameType.ChallengeResponse:
+                        if (IsHost && !IsConnected && _roomCode != null)
+                        {
+                            // Validate sender matches expected remote endpoint
+                            if (_remoteEndPoint != null && sender is IPEndPoint remoteEp && _remoteEndPoint is IPEndPoint knownEp)
+                            {
+                                if (!remoteEp.Address.Equals(knownEp.Address) || remoteEp.Port != knownEp.Port)
+                                    break; // Drop response from different sender
+                            }
+
+                            // Validate signature
+                            if (payload.Length >= 32 && _authenticator.ValidateSignature(payload.Slice(0, 32).ToArray(), _roomCode))
+                            {
+                                _isConnected = true;
+                                SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
+                                OnPeerConnected?.Invoke(_remotePeerId!.Value);
+                            }
+                            else
+                            {
+                                // Invalid signature, reset and ignore
+                                _remoteEndPoint = null;
+                                _remotePeerId = null;
+                                _authenticator.Reset();
+                            }
                         }
                         break;
 

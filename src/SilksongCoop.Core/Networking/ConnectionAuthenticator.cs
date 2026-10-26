@@ -1,0 +1,85 @@
+using System;
+using System.Security.Cryptography;
+using System.Text;
+
+namespace SilksongCoop.Core.Networking
+{
+    /// <summary>
+    /// Handles connection authentication using challenge-response with HMAC validation.
+    /// Prevents unauthorized connections and replay attacks.
+    /// </summary>
+    public class ConnectionAuthenticator
+    {
+        private byte[]? _pendingNonce;
+        private long _nonceTimestamp;
+        private const int NonceSizeBytes = 16;
+        private const long NonceExpiryMs = 10000; // 10 seconds to complete handshake
+
+        /// <summary>
+        /// Generates a cryptographically random nonce for challenge-response.
+        /// </summary>
+        public byte[] GenerateNonce()
+        {
+            var nonce = new byte[NonceSizeBytes];
+            using var rng = RandomNumberGenerator.Create();
+            rng.GetBytes(nonce);
+            _pendingNonce = nonce;
+            _nonceTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            return nonce;
+        }
+
+        /// <summary>
+        /// Computes HMAC-SHA256 signature using the room code as shared secret.
+        /// </summary>
+        public byte[] ComputeSignature(byte[] nonce, string roomCode)
+        {
+            using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(roomCode));
+            return hmac.ComputeHash(nonce);
+        }
+
+        /// <summary>
+        /// Validates a client's signature against the pending nonce.
+        /// Returns true if signature is valid and nonce hasn't expired.
+        /// </summary>
+        public bool ValidateSignature(byte[] receivedSignature, string roomCode)
+        {
+            if (_pendingNonce == null)
+                return false;
+
+            // Check nonce expiry
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (now - _nonceTimestamp > NonceExpiryMs)
+            {
+                _pendingNonce = null;
+                return false;
+            }
+
+            // Compute expected signature
+            byte[] expectedSignature = ComputeSignature(_pendingNonce, roomCode);
+
+            // Clear pending nonce after validation attempt
+            _pendingNonce = null;
+
+            // Constant-time comparison to prevent timing attacks
+            if (receivedSignature.Length != expectedSignature.Length)
+                return false;
+
+            int result = 0;
+            for (int i = 0; i < expectedSignature.Length; i++)
+            {
+                result |= receivedSignature[i] ^ expectedSignature[i];
+            }
+
+            return result == 0;
+        }
+
+        /// <summary>
+        /// Clears any pending authentication state.
+        /// </summary>
+        public void Reset()
+        {
+            _pendingNonce = null;
+            _nonceTimestamp = 0;
+        }
+    }
+}

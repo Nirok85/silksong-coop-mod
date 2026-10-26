@@ -108,6 +108,39 @@ namespace SilksongCoop.Core.Networking
             return false;
         }
 
+        /// <summary>
+        /// Checks if a room code uses the deprecated 8-character compact format.
+        /// 8-character codes have only 2-bit CRC and are vulnerable to tampering.
+        /// Prefer 12-character codes with full CRC-8 protection.
+        /// </summary>
+        public static bool IsDeprecatedCode(string? code)
+        {
+            if (string.IsNullOrWhiteSpace(code))
+                return false;
+
+            string clean = NormalizeCode(code);
+            return clean.Length == 8;
+        }
+
+        /// <summary>
+        /// Attempts to decode a secure room code (12-character format with CRC-8).
+        /// Rejects deprecated 8-character compact codes.
+        /// </summary>
+        public static bool TryDecodeSecure(string? code, out IPAddress ip, out int port)
+        {
+            ip = IPAddress.None;
+            port = 0;
+
+            if (string.IsNullOrWhiteSpace(code))
+                return false;
+
+            // Reject deprecated 8-character codes
+            if (IsDeprecatedCode(code))
+                return false;
+
+            return TryDecode(code, out ip, out port);
+        }
+
         public static byte ComputeCrc8(ReadOnlySpan<byte> data)
         {
             byte crc = 0x00;
