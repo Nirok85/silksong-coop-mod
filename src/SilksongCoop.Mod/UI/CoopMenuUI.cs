@@ -22,6 +22,8 @@ namespace SilksongCoop.Mod.UI
         private LiteNetLibTransport? _udpTransport;
         private GUISkin? _skin;
 
+        private GUISkin Skin => _skin ?? throw new InvalidOperationException("Skin not initialized");
+
         // ── Subsystems ─────────────────────────────────────────────────────────
         private readonly ToastNotifier _toasts = new ToastNotifier();
         private readonly ConnectionHistory _history = new ConnectionHistory();
@@ -181,7 +183,7 @@ namespace SilksongCoop.Mod.UI
             }
 
             GUI.color = watermarkColor;
-            GUI.Label(new Rect(10, 10, 400, 25), watermark, _styleTitle ?? _skin.label);
+            GUI.Label(new Rect(10, 10, 400, 25), watermark, _styleTitle ?? Skin.label);
             GUI.color = Color.white;
         }
 
@@ -216,7 +218,7 @@ namespace SilksongCoop.Mod.UI
 
             // Partner name
             GUI.color = SilksongSkin.TextTitle;
-            var nameStyle = _styleTitle ?? _skin.label;
+            var nameStyle = _styleTitle ?? Skin.label;
             nameStyle.fontSize = 11;
             GUI.Label(new Rect(x + 8f, y + 2f, hudW - 12f, 16f), peerName, nameStyle);
 
@@ -261,7 +263,7 @@ namespace SilksongCoop.Mod.UI
 
             // Label
             GUI.color = SilksongSkin.TextCream;
-            var style = _skin.label;
+            var style = Skin.label;
             style.fontSize = 9;
             style.alignment = TextAnchor.MiddleCenter;
             GUI.Label(new Rect(x, y, w, h), label, style);
@@ -292,14 +294,14 @@ namespace SilksongCoop.Mod.UI
                     : "Partner";
 
                 GUI.color = SilksongSkin.GoldBright;
-                var titleStyle = _styleTitle ?? _skin.label;
+                var titleStyle = _styleTitle ?? Skin.label;
                 titleStyle.fontSize = 16;
                 titleStyle.alignment = TextAnchor.MiddleCenter;
                 GUI.Label(new Rect(x, y + 8, bannerWidth, 24), $"SPECTATING {partnerName.ToUpperInvariant()}", titleStyle);
 
                 int secondsLeft = Mathf.CeilToInt(coordinator.RemainingSpectatorTime);
                 GUI.color = SilksongSkin.TextCream;
-                var subStyle = _skin.label;
+                var subStyle = Skin.label;
                 subStyle.fontSize = 13;
                 subStyle.alignment = TextAnchor.MiddleCenter;
                 GUI.Label(new Rect(x, y + 32, bannerWidth, 22), $"Reviving beside partner in <color=#D4A843><b>{secondsLeft}s</b></color>", subStyle);
@@ -327,13 +329,13 @@ namespace SilksongCoop.Mod.UI
                 GUI.DrawTexture(new Rect(x, y, bannerWidth, 2), SilksongSkin.WhitePixel);
 
                 GUI.color = SilksongSkin.RedError;
-                var titleStyle = _styleTitle ?? _skin.label;
+                var titleStyle = _styleTitle ?? Skin.label;
                 titleStyle.fontSize = 15;
                 titleStyle.alignment = TextAnchor.MiddleCenter;
                 GUI.Label(new Rect(x, y + 6, bannerWidth, 22), "TEAM WIPE", titleStyle);
 
                 GUI.color = SilksongSkin.TextCream;
-                var subStyle = _skin.label;
+                var subStyle = Skin.label;
                 subStyle.fontSize = 12;
                 subStyle.alignment = TextAnchor.MiddleCenter;
                 GUI.Label(new Rect(x, y + 28, bannerWidth, 18), "Both heroes have fallen — Reloading at last bench...", subStyle);
@@ -352,7 +354,7 @@ namespace SilksongCoop.Mod.UI
 
             // Title bar
             GUI.color = SilksongSkin.Gold;
-            var titleStyle = _styleTitle ?? _skin.label;
+            var titleStyle = _styleTitle ?? Skin.label;
             int origSize = titleStyle.fontSize;
             titleStyle.fontSize = 14;
             GUI.Label(new Rect(12, 4, 300, 20), "SILKSONG CO-OP", titleStyle);
@@ -396,7 +398,7 @@ namespace SilksongCoop.Mod.UI
 
         private void DrawTabButton(string label, Tab tab)
         {
-            var style = (_activeTab == tab ? _styleTabActive : _styleTab) ?? _skin.button;
+            var style = (_activeTab == tab ? _styleTabActive : _styleTab) ?? Skin.button;
             if (GUILayout.Button(label, style))
             {
                 _activeTab = tab;
@@ -412,7 +414,7 @@ namespace SilksongCoop.Mod.UI
             if (isConnected || isHosting)
             {
                 // Already hosting — show address with copy button
-                GUILayout.Label("YOUR SESSION", _styleTitle ?? _skin.label);
+                GUILayout.Label("YOUR SESSION", _styleTitle ?? Skin.label);
                 GUILayout.Space(4);
 
                 if (!string.IsNullOrEmpty(_currentHostAddress))
@@ -449,9 +451,9 @@ namespace SilksongCoop.Mod.UI
             }
             else
             {
-                GUILayout.Label("START A SESSION", _styleTitle ?? _skin.label);
+                GUILayout.Label("START A SESSION", _styleTitle ?? Skin.label);
                 GUILayout.Space(4);
-                GUILayout.Label("Host a game for your partner to join", _styleSubtitle ?? _skin.label);
+                GUILayout.Label("Host a game for your partner to join", _styleSubtitle ?? Skin.label);
                 GUILayout.Space(12);
 
                 // UDP button (large, prominent)
@@ -463,7 +465,7 @@ namespace SilksongCoop.Mod.UI
                 }
                 GUI.color = Color.white;
 
-                GUILayout.Label("Best with Radmin VPN or LAN. Share your IP:port with your partner.", _styleSubtitle ?? _skin.label);
+                GUILayout.Label("Best with Radmin VPN or LAN. Share your IP:port with your partner.", _styleSubtitle ?? Skin.label);
                 GUILayout.Space(10);
 
                 // Steam button
@@ -472,7 +474,7 @@ namespace SilksongCoop.Mod.UI
                     HostSteamSession();
                 }
 
-                GUILayout.Label("Invite friends directly through Steam. Requires Steam running.", _styleSubtitle ?? _skin.label);
+                GUILayout.Label("Invite friends directly through Steam. Requires Steam running.", _styleSubtitle ?? Skin.label);
             }
         }
 
@@ -488,9 +490,9 @@ namespace SilksongCoop.Mod.UI
                 return;
             }
 
-            GUILayout.Label("JOIN A SESSION", _styleTitle ?? _skin.label);
+            GUILayout.Label("JOIN A SESSION", _styleTitle ?? Skin.label);
             GUILayout.Space(4);
-            GUILayout.Label("Enter the host's IP:port or Room Code", _styleSubtitle ?? _skin.label);
+            GUILayout.Label("Enter the host's IP:port or Room Code", _styleSubtitle ?? Skin.label);
             GUILayout.Space(10);
 
             // Input field with placeholder
@@ -502,13 +504,13 @@ namespace SilksongCoop.Mod.UI
                 // Draw placeholder overlay
                 var fieldRect = GUILayoutUtility.GetRect(0f, 10000f, 24f, 24f);
                 int controlId = GUIUtility.GetControlID(FocusType.Keyboard);
-                _inputAddressOrCode = GUI.TextField(fieldRect, _inputAddressOrCode, _skin.textField);
+                _inputAddressOrCode = GUI.TextField(fieldRect, _inputAddressOrCode, Skin.textField);
 
                 if (GUI.GetNameOfFocusedControl() != "CoopAddrField")
                 {
                     // Draw placeholder text
                     GUI.color = SilksongSkin.TextMuted;
-                    var phStyle = new GUIStyle(_skin.textField) { normal = { textColor = SilksongSkin.TextMuted } };
+                    var phStyle = new GUIStyle(Skin.textField) { normal = { textColor = SilksongSkin.TextMuted } };
                     GUI.Label(fieldRect, "192.168.1.5:7777 or SK-...", phStyle);
                     GUI.color = Color.white;
                 }
@@ -554,7 +556,7 @@ namespace SilksongCoop.Mod.UI
             {
                 GUILayout.Space(12);
                 SilksongSkin.DrawDivider(1f, 2f, 4f);
-                GUILayout.Label("RECENT", _styleSubtitle ?? _skin.label);
+                GUILayout.Label("RECENT", _styleSubtitle ?? Skin.label);
 
                 foreach (var entry in recent)
                 {
@@ -599,14 +601,14 @@ namespace SilksongCoop.Mod.UI
 
             if (!isConnected)
             {
-                GUILayout.Label("NOT CONNECTED", _styleTitle ?? _skin.label);
+                GUILayout.Label("NOT CONNECTED", _styleTitle ?? Skin.label);
                 GUILayout.Space(6);
-                GUILayout.Label("Start or join a session to see connection details.", _styleSubtitle ?? _skin.label);
+                GUILayout.Label("Start or join a session to see connection details.", _styleSubtitle ?? Skin.label);
                 return;
             }
 
             // Connection status
-            GUILayout.Label("SESSION STATUS", _styleTitle ?? _skin.label);
+            GUILayout.Label("SESSION STATUS", _styleTitle ?? Skin.label);
             GUILayout.Space(4);
 
             // Status indicator
@@ -636,7 +638,7 @@ namespace SilksongCoop.Mod.UI
             SilksongSkin.DrawDivider(1f, 2f, 4f);
 
             // Network quality
-            GUILayout.Label("NETWORK", _styleTitle ?? _skin.label);
+            GUILayout.Label("NETWORK", _styleTitle ?? Skin.label);
             GUILayout.Space(4);
 
             int rtt = _sessionState.RoundTripTimeMs;
@@ -684,13 +686,13 @@ namespace SilksongCoop.Mod.UI
         // ─── SETTINGS TAB ─────────────────────────────────────────────────────
         private void DrawSettingsTab()
         {
-            GUILayout.Label("SETTINGS", _styleTitle ?? _skin.label);
+            GUILayout.Label("SETTINGS", _styleTitle ?? Skin.label);
             GUILayout.Space(6);
 
             var plugin = SilksongCoopPlugin.Instance;
             if (plugin == null)
             {
-                GUILayout.Label("Plugin not initialized.", _styleSubtitle ?? _skin.label);
+                GUILayout.Label("Plugin not initialized.", _styleSubtitle ?? Skin.label);
                 return;
             }
 
@@ -705,7 +707,7 @@ namespace SilksongCoop.Mod.UI
             {
                 plugin.TickRateHzConfig.Value = newTickRate;
             }
-            GUILayout.Label("Higher = smoother but more bandwidth (20-60 Hz)", _styleSubtitle ?? _skin.label);
+            GUILayout.Label("Higher = smoother but more bandwidth (20-60 Hz)", _styleSubtitle ?? Skin.label);
 
             GUILayout.Space(10);
 
@@ -721,7 +723,7 @@ namespace SilksongCoop.Mod.UI
                     plugin.DefaultUdpPortConfig.Value = newPort;
                 }
             }
-            GUILayout.Label("(1024–65535)", _styleSubtitle ?? _skin.label);
+            GUILayout.Label("(1024–65535)", _styleSubtitle ?? Skin.label);
             GUILayout.EndHorizontal();
 
             GUILayout.Space(10);
@@ -747,7 +749,7 @@ namespace SilksongCoop.Mod.UI
                 plugin.Player2HueShiftConfig.Value = newHue;
                 plugin.RefreshLocalVisuals(_sessionState != null && _sessionState.Role == SessionRole.Client);
             }
-            GUILayout.Label("Shift the hue of Player 2's cloak color", _styleSubtitle ?? _skin.label);
+            GUILayout.Label("Shift the hue of Player 2's cloak color", _styleSubtitle ?? Skin.label);
 
             GUILayout.Space(10);
 
@@ -777,13 +779,13 @@ namespace SilksongCoop.Mod.UI
                     plugin.DeathCoordinator.ReviveCooldownDuration = Math.Clamp(newReviveCd, 15f, 30f);
                 }
             }
-            GUILayout.Label("Time before solo-death revive (15–30 seconds)", _styleSubtitle ?? _skin.label);
+            GUILayout.Label("Time before solo-death revive (15–30 seconds)", _styleSubtitle ?? Skin.label);
 
             GUILayout.Space(16);
             SilksongSkin.DrawDivider(1f, 4f, 4f);
 
             // Info
-            GUILayout.Label($"<color=#998877>Silksong Co-op Mod v{SilksongCoopPlugin.PluginVersion}</color>", _styleSubtitle ?? _skin.label);
+            GUILayout.Label($"<color=#998877>Silksong Co-op Mod v{SilksongCoopPlugin.PluginVersion}</color>", _styleSubtitle ?? Skin.label);
         }
 
         // ─── Disconnect ───────────────────────────────────────────────────────
@@ -791,7 +793,7 @@ namespace SilksongCoop.Mod.UI
         {
             if (_showDisconnectConfirm)
             {
-                GUILayout.BeginVertical(_skin.box);
+                GUILayout.BeginVertical(Skin.box);
                 GUILayout.Label("Are you sure you want to disconnect?");
                 GUILayout.Space(4);
                 GUILayout.BeginHorizontal();

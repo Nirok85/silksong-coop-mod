@@ -2,13 +2,14 @@ using System;
 using System.Collections.Generic;
 using HarmonyLib;
 using SilksongCoop.Core.Protocol.Packets;
+using SilksongCoop.Mod.State;
 
 namespace SilksongCoop.Mod.Hooks
 {
     [HarmonyPatch]
     public static class InventoryHooks
     {
-        public static int RemoteUnlockDepth = 0; // Use counter instead of bool for reentrancy safety
+        // Guard flag replaced by RemoteApplyScope.IsActive
 
         private static readonly HashSet<string> SharedAbilityBools = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -35,7 +36,7 @@ namespace SilksongCoop.Mod.Hooks
         [HarmonyPatch(typeof(ToolCrest), nameof(ToolCrest.Unlock))]
         public static void PostfixToolCrestUnlock(ToolCrest __instance)
         {
-            if (RemoteUnlockDepth > 0) return;
+            if (RemoteApplyScope.IsActive) return;
             if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
             if (SilksongCoopPlugin.Instance?.InventorySync == null) return;
 
@@ -56,7 +57,7 @@ namespace SilksongCoop.Mod.Hooks
         [HarmonyPatch(typeof(ToolItem), nameof(ToolItem.Unlock))]
         public static void PostfixToolItemUnlock(ToolItem __instance)
         {
-            if (RemoteUnlockDepth > 0) return;
+            if (RemoteApplyScope.IsActive) return;
             if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
             if (SilksongCoopPlugin.Instance?.InventorySync == null) return;
 
@@ -78,7 +79,7 @@ namespace SilksongCoop.Mod.Hooks
         [HarmonyPatch(typeof(PlayerData), nameof(PlayerData.SetBool))]
         public static void PostfixSetBool(string boolName, bool value)
         {
-            if (RemoteUnlockDepth > 0) return;
+            if (RemoteApplyScope.IsActive) return;
             if (!value) return; // Only synchronize discovery/unlocks (value == true)
             if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
             if (SilksongCoopPlugin.Instance?.InventorySync == null) return;

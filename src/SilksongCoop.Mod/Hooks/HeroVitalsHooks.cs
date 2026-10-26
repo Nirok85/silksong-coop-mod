@@ -1,20 +1,20 @@
 using System;
 using HarmonyLib;
 using SilksongCoop.Core.Protocol.Packets;
+using SilksongCoop.Mod.State;
 
 namespace SilksongCoop.Mod.Hooks
 {
     [HarmonyPatch]
     public static class HeroVitalsHooks
     {
-        public static bool IsApplyingRemoteUpgrade = false;
         private static int _lastNailUpgradeLevel = -1;
 
         [HarmonyPostfix]
         [HarmonyPatch(typeof(HeroController), nameof(HeroController.AddToMaxHealth))]
         public static void PostfixAddToMaxHealth(int amount)
         {
-            if (IsApplyingRemoteUpgrade) return;
+            if (RemoteApplyScope.IsActive) return;
             
             try
             {
@@ -33,7 +33,7 @@ namespace SilksongCoop.Mod.Hooks
         [HarmonyPatch(typeof(HeroController), nameof(HeroController.AddToMaxSilk))]
         public static void PostfixAddToMaxSilk(int amount)
         {
-            if (IsApplyingRemoteUpgrade) return;
+            if (RemoteApplyScope.IsActive) return;
             
             try
             {
@@ -103,7 +103,7 @@ namespace SilksongCoop.Mod.Hooks
         [HarmonyPatch(typeof(PlayerData), nameof(PlayerData.SetInt))]
         public static void PostfixSetInt(string intName, int value)
         {
-            if (IsApplyingRemoteUpgrade) return;
+            if (RemoteApplyScope.IsActive) return;
             
             try
             {
@@ -126,7 +126,7 @@ namespace SilksongCoop.Mod.Hooks
         [HarmonyPatch(typeof(PlayerData), nameof(PlayerData.IntAdd))]
         public static void PostfixIntAdd(string intName, int amount)
         {
-            if (IsApplyingRemoteUpgrade) return;
+            if (RemoteApplyScope.IsActive) return;
             
             try
             {

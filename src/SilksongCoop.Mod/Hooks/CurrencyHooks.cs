@@ -1,6 +1,7 @@
 using System;
 using HarmonyLib;
 using SilksongCoop.Core.Protocol.Packets;
+using SilksongCoop.Mod.State;
 
 namespace SilksongCoop.Mod.Hooks
 {
@@ -16,7 +17,7 @@ namespace SilksongCoop.Mod.Hooks
             try
             {
                 if (amount == 0) return;
-                if (IsApplyingRemoteCurrency) return;
+                if (RemoteApplyScope.IsActive) return;
                 if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
                 if (SilksongCoopPlugin.Instance?.VitalsSync == null) return;
 

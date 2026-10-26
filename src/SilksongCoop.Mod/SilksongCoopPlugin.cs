@@ -13,6 +13,7 @@ using SilksongCoop.Mod.Clones;
 using SilksongCoop.Mod.Hooks;
 using SilksongCoop.Mod.Networking;
 using SilksongCoop.Mod.Revive;
+using SilksongCoop.Mod.State;
 using SilksongCoop.Mod.UI;
 using SilksongCoop.Mod.Visuals;
 using UnityEngine;
@@ -156,16 +157,11 @@ namespace SilksongCoop.Mod
                 var pd = PlayerData.instance;
                 if (pd != null)
                 {
-                    HeroVitalsHooks.IsApplyingRemoteUpgrade = true;
-                    try
+                    using (RemoteApplyScope.Begin())
                     {
                         pd.maxHealthBase = newMax;
                         pd.maxHealth = newMax;
                         HeroController.instance?.MaxHealthKeepBlue();
-                    }
-                    finally
-                    {
-                        HeroVitalsHooks.IsApplyingRemoteUpgrade = false;
                     }
                 }
             };
@@ -175,17 +171,12 @@ namespace SilksongCoop.Mod
                 var pd = PlayerData.instance;
                 if (pd != null)
                 {
-                    HeroVitalsHooks.IsApplyingRemoteUpgrade = true;
-                    try
+                    using (RemoteApplyScope.Begin())
                     {
                         if (newLevel > pd.nailUpgrades)
                         {
                             pd.nailUpgrades = newLevel;
                         }
-                    }
-                    finally
-                    {
-                        HeroVitalsHooks.IsApplyingRemoteUpgrade = false;
                     }
                 }
             };
@@ -195,8 +186,7 @@ namespace SilksongCoop.Mod
                 var pd = PlayerData.instance;
                 if (pd != null)
                 {
-                    HeroVitalsHooks.IsApplyingRemoteUpgrade = true;
-                    try
+                    using (RemoteApplyScope.Begin())
                     {
                         int newMaxSilk = newSpools * 9;
                         if (newMaxSilk > pd.silkMax)
@@ -204,10 +194,6 @@ namespace SilksongCoop.Mod
                             pd.silkMax = newMaxSilk;
                             HeroController.instance?.RefreshSilk();
                         }
-                    }
-                    finally
-                    {
-                        HeroVitalsHooks.IsApplyingRemoteUpgrade = false;
                     }
                 }
             };
@@ -217,15 +203,10 @@ namespace SilksongCoop.Mod
                 var pd = PlayerData.instance;
                 if (pd != null)
                 {
-                    CurrencyHooks.IsApplyingRemoteCurrency = true;
-                    try
+                    using (RemoteApplyScope.Begin())
                     {
                         var silkgurrencyType = (type == Core.Protocol.Packets.CurrencyType.Rosaries) ? CurrencyType.Money : CurrencyType.Shard;
                         CurrencyManager.ChangeCurrency(delta, silkgurrencyType, true);
-                    }
-                    finally
-                    {
-                        CurrencyHooks.IsApplyingRemoteCurrency = false;
                     }
                 }
             };
@@ -608,14 +589,14 @@ namespace SilksongCoop.Mod
 
             try
             {
-                InventoryHooks.RemoteUnlockDepth++;
-
-                var playerData = PlayerData.instance;
-                if (playerData == null)
+                using (RemoteApplyScope.Begin())
                 {
-                    Logger.LogWarning("[Coop] Cannot apply remote item unlock: PlayerData.instance is null");
-                    return;
-                }
+                    var playerData = PlayerData.instance;
+                    if (playerData == null)
+                    {
+                        Logger.LogWarning("[Coop] Cannot apply remote item unlock: PlayerData.instance is null");
+                        return;
+                    }
 
                 switch (category)
                 {
@@ -688,13 +669,10 @@ namespace SilksongCoop.Mod
                         break;
                 }
             }
+            }
             catch (Exception ex)
             {
                 Logger.LogError($"[Coop] Failed applying remote item unlock for {itemId} ({category}): {ex.Message}");
-            }
-            finally
-            {
-                InventoryHooks.RemoteUnlockDepth--;
             }
         }
 
