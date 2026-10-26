@@ -99,6 +99,7 @@ namespace SilksongCoop.Mod
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
                     ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer.ToArray(), 0, writer.Position, DeliveryMethod.ReliableOrdered, 2);
+                    MenuUI?.Diagnostics?.RecordSent(writer.Position);
                 }
             };
 
@@ -110,6 +111,7 @@ namespace SilksongCoop.Mod
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
                     ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer.ToArray(), 0, writer.Position, DeliveryMethod.ReliableOrdered, 3);
+                    MenuUI?.Diagnostics?.RecordSent(writer.Position);
                 }
             };
 
@@ -121,6 +123,7 @@ namespace SilksongCoop.Mod
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
                     ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer.ToArray(), 0, writer.Position, DeliveryMethod.ReliableOrdered, 4);
+                    MenuUI?.Diagnostics?.RecordSent(writer.Position);
                 }
             };
 
@@ -132,6 +135,7 @@ namespace SilksongCoop.Mod
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
                     ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer.ToArray(), 0, writer.Position, DeliveryMethod.ReliableOrdered, 3);
+                    MenuUI?.Diagnostics?.RecordSent(writer.Position);
                 }
             };
 
@@ -660,7 +664,8 @@ namespace SilksongCoop.Mod
                 {
                     Logger.LogInfo($"[Coop] Peer connected: {peer}");
                     SessionState?.SetConnected(peer);
-                    MenuUI?.SetStatusMessage($"Connected to {peer.DisplayName}! You are {(transport.IsHost ? "Host (Player 1)" : "Client (Player 2 - Blue)")}");
+                    MenuUI?.Diagnostics?.OnSessionStarted();
+                    MenuUI?.SetStatusMessage($"Connected to {peer.DisplayName}");
 
                     if (CloneSpawner == null)
                     {
@@ -704,6 +709,7 @@ namespace SilksongCoop.Mod
                 {
                     Logger.LogInfo($"[Coop] Peer disconnected: {peer}, reason: {reason}");
                     SessionState?.SetDisconnected(reason);
+                    MenuUI?.Diagnostics?.OnSessionEnded();
                     CloneSpawner?.DespawnRemotePlayer(peer);
                     RefreshLocalVisuals(false);
                 }
@@ -718,6 +724,7 @@ namespace SilksongCoop.Mod
                 try
                 {
                     SessionState?.RecordReceived(length);
+                    MenuUI?.Diagnostics?.RecordReceived(length);
 
                     if (length < PacketHeader.HeaderSize) return;
 
@@ -872,6 +879,7 @@ namespace SilksongCoop.Mod
                     writer.Position,
                     DeliveryMethod.Unreliable,
                     0);
+                MenuUI?.Diagnostics?.RecordSent(writer.Position);
             }
             catch (Exception ex)
             {

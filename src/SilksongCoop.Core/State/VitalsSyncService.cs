@@ -21,6 +21,13 @@ namespace SilksongCoop.Core.State
         public int SharedRosaries { get; private set; } = 0;
         public int SharedShellShards { get; private set; } = 0;
 
+        // Remote (partner) vitals for HUD display. Updated from incoming VitalsSync packets.
+        public int RemoteHealth { get; private set; } = 0;
+        public int RemoteSilk { get; private set; } = 0;
+        public int RemoteMaxHealth { get; private set; } = 0;
+        public int RemoteMaxSilk { get; private set; } = 0;
+        public bool HasRemoteData { get; private set; } = false;
+
         private readonly object _stateLock = new object();
 
         public event Action<int, int>? OnRemoteVitalsObserved;
@@ -190,6 +197,16 @@ namespace SilksongCoop.Core.State
         {
             try
             {
+                // Store remote vitals for HUD display
+                lock (_stateLock)
+                {
+                    RemoteHealth = packet.CurrentHealth;
+                    RemoteSilk = packet.CurrentSilk;
+                    RemoteMaxHealth = packet.MaxHealth;
+                    RemoteMaxSilk = packet.MaxSilkSpools;
+                    HasRemoteData = true;
+                }
+
                 // Update remote player observation (for HUD display)
                 OnRemoteVitalsObserved?.Invoke(packet.CurrentHealth, packet.CurrentSilk);
 
