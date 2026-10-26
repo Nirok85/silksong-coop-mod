@@ -3,8 +3,8 @@
 ![Platform](https://img.shields.io/badge/Platform-PC%20%7C%20Steam-blue)
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
 ![Loader](https://img.shields.io/badge/ModLoader-BepInEx%205.4.x-purple)
-![Tests](https://img.shields.io/badge/Tests-603%20%2F%20603%20Passing%20(100%25)-brightgreen)
-![Status](https://img.shields.io/badge/Audit-VICTORY%20CONFIRMED-success)
+![Tests](https://img.shields.io/badge/Tests-607%20%2F%20607%20Passing%20(100%25)-brightgreen)
+![Status](https://img.shields.io/badge/Version-2.0.0-success)
 
 Полнофункциональный кооперативный мод для **Hollow Knight: Silksong**, позволяющий двум игрокам совместно исследовать мир Фарлума в реальном времени.
 
@@ -158,7 +158,10 @@ silksong_coop_mod/
 ├── src\
 │   ├── SilksongCoop.Core\            # Платформонезависимое ядро (netstandard2.1)
 │   │   ├── Networking\               # Абстракция INetworkTransport, LiteNetLib, RoomCodeCodec
+│   │   │   ├── ConnectionAuthenticator.cs  # Challenge-response аутентификация
+│   │   │   └── RateLimiter.cs              # Ограничение скорости (token bucket)
 │   │   ├── Protocol\                 # 12-байтный бинарный протокол, PacketReader/Writer
+│   │   │   └── PacketValidator.cs          # Валидация полей пакетов
 │   │   ├── Interpolation\            # Сплайны Эрмита, буфер снапшотов, Dead Reckoning
 │   │   ├── State\                    # Стейт-машины сессии, смерти, синхронизации здоровья и кошелька
 │   │   └── Visuals\                  # Математика поворота цветового пространства HSV/Rodrigues
@@ -168,11 +171,13 @@ silksong_coop_mod/
 │       ├── Visuals\                  # PaletteSwapController (CAN_HUESHIFT), DashTrailController
 │       ├── Hooks\                    # Harmony-хуки (HeroVitals, Currency, Death, Inventory)
 │       ├── Networking\               # SteamP2PTransport (Steamworks.NET P2P)
-│       └── UI\                       # CoopMenuUI (GUI интерфейс F10)
+│       ├── Settings\                 # KeybindManager, QualityPresetManager
+│       └── UI\                       # CoopMenuUI (GUI интерфейс F10), DiagnosticsOverlay (F11)
 │
 └── tests\
     └── SilksongCoop.Tests\           # Набор тестов (net8.0, xUnit)
         ├── TestHarness\              # DualClientTestHarness (симуляция 2 клиентов без Unity)
+        ├── IntegrationTests\         # Интеграционные тесты (нагрузочные, хаос-тесты)
         ├── Tier1_FeatureTests\       # 28 тестов покрытия требований (F01–F28)
         ├── Tier2_BoundaryTests\      # 25 тестов граничных значений
         ├── Tier3_PairwiseTests\      # 8 тестов пересечения механик
@@ -184,19 +189,21 @@ silksong_coop_mod/
 
 ## 🧪 Тестирование и верификация
 
-Проект прошёл полную сертификацию независимого аудитора. Все 603 теста выполняются командой:
+Проект прошёл полную сертификацию независимого аудитора. Все 607 тестов выполняются командой:
 ```bash
 dotnet test SilksongCoop.sln -c Release
 ```
 
 Результат:
 ```text
-Общее количество тестов: 603
-Пройдено:                603 (100.0%)
+Общее количество тестов: 607
+Пройдено:                607 (100.0%)
 Провалено:               0
 Пропущено:               0
 Время выполнения:        ~3.9 секунды
 ```
+
+Включая 4 новых интеграционных теста для проверки нагрузки и устойчивости к сетевым сбоям.
 
 ---
 
