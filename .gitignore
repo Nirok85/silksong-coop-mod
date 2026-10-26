@@ -52,3 +52,6 @@ Thumbs.db
 # Test results
 TestResults/
 *.trx
+backups/
+*.bak*
+
