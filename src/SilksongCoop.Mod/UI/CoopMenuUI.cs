@@ -31,6 +31,7 @@ namespace SilksongCoop.Mod.UI
         private readonly ToastNotifier _toasts = new ToastNotifier();
         private readonly ConnectionHistory _history = new ConnectionHistory();
         private readonly NetworkDiagnostics _diagnostics = new NetworkDiagnostics();
+        private DiagnosticsOverlay? _diagnosticsOverlay;
 
         // ── UI state ───────────────────────────────────────────────────────────
         private Tab _activeTab = Tab.Host;
@@ -77,6 +78,7 @@ namespace SilksongCoop.Mod.UI
             _udpTransport = udpTransport;
             _keybinds = keybinds;
             _qualityPresets = qualityPresets;
+            _diagnosticsOverlay = new DiagnosticsOverlay(_diagnostics);
         }
 
         public void SetStatusMessage(string message)
@@ -95,6 +97,22 @@ namespace SilksongCoop.Mod.UI
             else if (_keybinds == null && Input.GetKeyDown(KeyCode.F10))
             {
                 IsVisible = !IsVisible;
+            }
+
+            // Toggle diagnostics overlay with F11
+            if (_keybinds != null && _keybinds.IsKeyDown(KeybindManager.ToggleDiagnostics))
+            {
+                if (_diagnosticsOverlay != null)
+                {
+                    _diagnosticsOverlay.IsVisible = !_diagnosticsOverlay.IsVisible;
+                }
+            }
+            else if (_keybinds == null && Input.GetKeyDown(KeyCode.F11))
+            {
+                if (_diagnosticsOverlay != null)
+                {
+                    _diagnosticsOverlay.IsVisible = !_diagnosticsOverlay.IsVisible;
+                }
             }
 
             // Keep Steam lobby id in sync with the transport (lobby created asynchronously)
@@ -148,6 +166,12 @@ namespace SilksongCoop.Mod.UI
             if (_sessionState != null && _sessionState.IsConnected)
             {
                 DrawSpectatorOverlay();
+            }
+
+            // ── Diagnostics overlay (F11 toggle) ────────────────────────────────
+            if (_diagnosticsOverlay != null)
+            {
+                _diagnosticsOverlay.OnGUI();
             }
 
             // ── Toast notifications (always on top) ────────────────────────────
