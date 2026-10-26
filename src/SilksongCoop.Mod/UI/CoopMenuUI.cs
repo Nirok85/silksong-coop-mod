@@ -346,10 +346,22 @@ namespace SilksongCoop.Mod.UI
         {
             try
             {
-                if (_udpTransport == null)
-                    _udpTransport = new LiteNetLibTransport(1, "Host");
+                var plugin = SilksongCoopPlugin.Instance;
+                if (plugin == null)
+                {
+                    _statusMessage = "Plugin not initialized";
+                    return;
+                }
 
-                int udpPort = SilksongCoopPlugin.Instance?.DefaultUdpPortConfig?.Value ?? 7777;
+                // Use plugin's UDP transport instead of creating new one
+                _udpTransport = plugin.UdpTransport;
+                if (_udpTransport == null)
+                {
+                    _statusMessage = "UDP transport not available";
+                    return;
+                }
+
+                int udpPort = plugin.DefaultUdpPortConfig?.Value ?? 7777;
                 _udpTransport.StartHost(udpPort);
                 _currentTransport = _udpTransport;
 
@@ -358,6 +370,11 @@ namespace SilksongCoop.Mod.UI
                 string code = RoomCodeCodec.Encode(localIp, udpPort);
 
                 _sessionState?.SetHosting(_udpTransport.LocalPeerId, code);
+                
+                // CRITICAL FIX: Set active transport so plugin polls this transport
+                plugin.SetActiveTransport(_udpTransport);
+                SilksongCoopPlugin.LogWarn($"[Coop] Active transport set to UDP for hosting on port {udpPort}");
+
                 // Automatically copy the room code to the clipboard so the host can share it
                 GUIUtility.systemCopyBuffer = code;
                 _statusMessage = $"Hosting UDP on port {udpPort}. Room code copied to clipboard: {code}";
@@ -365,6 +382,7 @@ namespace SilksongCoop.Mod.UI
             catch (Exception ex)
             {
                 _statusMessage = $"Failed to host UDP: {ex.Message}";
+                SilksongCoopPlugin.LogWarn($"[Coop] HostUdpSession error: {ex.Message}");
             }
         }
 
@@ -425,12 +443,25 @@ namespace SilksongCoop.Mod.UI
         {
             try
             {
+                var plugin = SilksongCoopPlugin.Instance;
+                if (plugin == null)
+                {
+                    _statusMessage = "Plugin not initialized";
+                    return;
+                }
+
+                // Use plugin's Steam transport instead of creating new one
+                _steamTransport = plugin.SteamTransport;
                 if (_steamTransport == null)
-                    _steamTransport = new SteamP2PTransport();
+                {
+                    _statusMessage = "Steam transport not available. Ensure Steam is running.";
+                    return;
+                }
 
                 _steamTransport.StartHost();
                 _currentTransport = _steamTransport;
-                SilksongCoopPlugin.Instance?.SetActiveTransport(_steamTransport);
+                plugin.SetActiveTransport(_steamTransport);
+                SilksongCoopPlugin.LogWarn($"[Coop] Active transport set to Steam for hosting");
 
                 _sessionState?.SetHosting(_steamTransport.LocalPeerId, "Steam-Lobby");
                 _statusMessage = "Steam P2P lobby created. Use Invite Friends button.";
@@ -438,6 +469,7 @@ namespace SilksongCoop.Mod.UI
             catch (Exception ex)
             {
                 _statusMessage = $"Failed to host Steam: {ex.Message}. Ensure Steam is running and you are logged in. Use 'Host Direct UDP' as a fallback.";
+                SilksongCoopPlugin.LogWarn($"[Coop] HostSteamSession error: {ex.Message}");
             }
         }
 
@@ -451,12 +483,28 @@ namespace SilksongCoop.Mod.UI
                     return;
                 }
 
+                var plugin = SilksongCoopPlugin.Instance;
+                if (plugin == null)
+                {
+                    _statusMessage = "Plugin not initialized";
+                    return;
+                }
+
+                // Use plugin's UDP transport instead of creating new one
+                _udpTransport = plugin.UdpTransport;
                 if (_udpTransport == null)
-                    _udpTransport = new LiteNetLibTransport(2, "Client");
+                {
+                    _statusMessage = "UDP transport not available";
+                    return;
+                }
 
                 _currentTransport = _udpTransport;
                 _udpTransport.Connect(addressOrCode.Trim());
                 _lastConnectionTarget = addressOrCode.Trim();
+
+                // CRITICAL FIX: Set active transport so plugin polls this transport
+                plugin.SetActiveTransport(_udpTransport);
+                SilksongCoopPlugin.LogWarn($"[Coop] Active transport set to UDP for joining {addressOrCode}");
 
                 _sessionState?.SetConnecting(_udpTransport.LocalPeerId, addressOrCode);
                 _statusMessage = $"Connecting to {addressOrCode}...";
@@ -464,6 +512,7 @@ namespace SilksongCoop.Mod.UI
             catch (Exception ex)
             {
                 _statusMessage = $"Join error: {ex.Message}";
+                SilksongCoopPlugin.LogWarn($"[Coop] JoinUdpSession error: {ex.Message}");
             }
         }
 
@@ -471,13 +520,26 @@ namespace SilksongCoop.Mod.UI
         {
             try
             {
+                var plugin = SilksongCoopPlugin.Instance;
+                if (plugin == null)
+                {
+                    _statusMessage = "Plugin not initialized";
+                    return;
+                }
+
+                // Use plugin's Steam transport instead of creating new one
+                _steamTransport = plugin.SteamTransport;
                 if (_steamTransport == null)
-                    _steamTransport = new SteamP2PTransport();
+                {
+                    _statusMessage = "Steam transport not available. Ensure Steam is running.";
+                    return;
+                }
 
                 _currentTransport = _steamTransport;
                 _steamTransport.Connect(lobbyIdString.Trim());
                 _lastConnectionTarget = lobbyIdString.Trim();
-                SilksongCoopPlugin.Instance?.SetActiveTransport(_steamTransport);
+                plugin.SetActiveTransport(_steamTransport);
+                SilksongCoopPlugin.LogWarn($"[Coop] Active transport set to Steam for joining lobby {lobbyIdString}");
 
                 if (ulong.TryParse(lobbyIdString.Trim(), out ulong parsedLobby))
                 {
@@ -490,14 +552,32 @@ namespace SilksongCoop.Mod.UI
             catch (Exception ex)
             {
                 _statusMessage = $"Steam join error: {ex.Message}";
+                SilksongCoopPlugin.LogWarn($"[Coop] JoinSteamSession error: {ex.Message}");
             }
         }
 
         private void DisconnectSession()
         {
-            _currentTransport?.Disconnect();
-            _sessionState?.SetDisconnected(DisconnectReason.GracefulDisconnect);
-            _statusMessage = "Session disconnected.";
+            try
+            {
+                _currentTransport?.Disconnect();
+                _sessionState?.SetDisconnected(DisconnectReason.GracefulDisconnect);
+                
+                // Restore default active transport to UDP
+                var plugin = SilksongCoopPlugin.Instance;
+                if (plugin != null && plugin.UdpTransport != null)
+                {
+                    plugin.SetActiveTransport(plugin.UdpTransport);
+                }
+                
+                _statusMessage = "Session disconnected.";
+                SilksongCoopPlugin.LogWarn($"[Coop] Session disconnected");
+            }
+            catch (Exception ex)
+            {
+                _statusMessage = $"Disconnect error: {ex.Message}";
+                SilksongCoopPlugin.LogWarn($"[Coop] DisconnectSession error: {ex.Message}");
+            }
         }
     }
 }

@@ -304,7 +304,17 @@ namespace SilksongCoop.Mod
 
         public void SetActiveTransport(INetworkTransport transport)
         {
+            if (transport == null)
+            {
+                Logger.LogWarning("[Coop] SetActiveTransport called with null transport");
+                return;
+            }
+
+            var oldTransport = ActiveTransport;
             ActiveTransport = transport;
+            
+            string transportType = transport is SteamP2PTransport ? "Steam" : "UDP";
+            Logger.LogInfo($"[Coop] Active transport changed from {(oldTransport == null ? "null" : (oldTransport is SteamP2PTransport ? "Steam" : "UDP"))} to {transportType}");
         }
 
         public void RefreshLocalVisuals(bool isPlayer2)
