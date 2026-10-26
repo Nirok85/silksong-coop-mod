@@ -78,12 +78,6 @@ namespace SilksongCoop.Core.Networking
             client.SetPeer(host);
             client.Connect("host");
 
-            // Complete immediate connection handshake
-            host.IsConnected = true;
-            client.IsConnected = true;
-            host.OnPeerConnected?.Invoke(client.LocalPeerId);
-            client.OnPeerConnected?.Invoke(host.LocalPeerId);
-
             return (host, client);
         }
 

@@ -104,10 +104,13 @@ namespace SilksongCoop.Mod.Clones
             ushort normalizedTime,
             uint timestampMs)
         {
-            // Fix: Proper uint wraparound-aware comparison for packet ordering
+            // Proper packet ordering: handle both normal progression and clock wrap detection
             // A packet is newer if:
             // 1. LastTimestampMs is 0 (first packet), OR
-            // 2. The signed difference indicates it's newer (handles wraparound)
+            // 2. Timestamp is ahead (normal case), OR
+            // 3. Timestamp is behind by more than 10 seconds (clock wrap / session reset)
+            // The 10-second threshold prevents rejecting legitimate session resets while
+            // still filtering out stale packets from minor network jitter.
             long diff = (long)timestampMs - (long)_lastTimestampMs;
             bool isNewerPacket = !_hasClockOffset || diff > 0 || diff < -10000;
             if (isNewerPacket)
