@@ -17,6 +17,7 @@ namespace SilksongCoop.Mod.Hooks
             if (IsApplyingRemoteUpgrade) return;
             if (SilksongCoopPlugin.Instance?.VitalsSync != null && SilksongCoopPlugin.Instance.SessionState.IsConnected)
             {
+                if (HeroController.instance == null || PlayerData.instance == null) return;
                 var pd = PlayerData.instance;
                 if (pd != null)
                 {
@@ -32,6 +33,7 @@ namespace SilksongCoop.Mod.Hooks
             if (IsApplyingRemoteUpgrade) return;
             if (SilksongCoopPlugin.Instance?.VitalsSync != null && SilksongCoopPlugin.Instance.SessionState.IsConnected)
             {
+                if (HeroController.instance == null || PlayerData.instance == null) return;
                 var pd = PlayerData.instance;
                 if (pd != null)
                 {
@@ -47,6 +49,7 @@ namespace SilksongCoop.Mod.Hooks
             // Current health is local only!
             if (SilksongCoopPlugin.Instance?.VitalsSync != null && SilksongCoopPlugin.Instance.SessionState.IsConnected)
             {
+                if (HeroController.instance == null || PlayerData.instance == null) return;
                 var pd = PlayerData.instance;
                 if (pd != null)
                 {
@@ -62,6 +65,7 @@ namespace SilksongCoop.Mod.Hooks
             // Current silk is local only!
             if (SilksongCoopPlugin.Instance?.VitalsSync != null && SilksongCoopPlugin.Instance.SessionState.IsConnected)
             {
+                if (HeroController.instance == null || PlayerData.instance == null) return;
                 var pd = PlayerData.instance;
                 if (pd != null)
                 {
@@ -76,6 +80,7 @@ namespace SilksongCoop.Mod.Hooks
         {
             if (SilksongCoopPlugin.Instance?.VitalsSync != null && SilksongCoopPlugin.Instance.SessionState.IsConnected)
             {
+                if (HeroController.instance == null || PlayerData.instance == null) return;
                 var pd = PlayerData.instance;
                 if (pd != null)
                 {

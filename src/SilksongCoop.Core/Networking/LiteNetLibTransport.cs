@@ -582,14 +582,15 @@ namespace SilksongCoop.Core.Networking
 
         private void CloseSocket()
         {
-            if (_socket != null)
+            var socket = _socket;
+            _socket = null; // Clear reference first to prevent use-after-close
+            if (socket != null)
             {
                 try
                 {
-                    _socket.Close();
+                    socket.Close();
                 }
                 catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Socket close error: {ex.Message}"); }
-                _socket = null;
             }
         }
 

@@ -21,6 +21,7 @@ namespace SilksongCoop.Mod.UI
 
         private Rect _windowRect = new Rect(40, 40, 420, 480);
         private string _inputAddressOrCode = "";
+        private string _lastConnectionTarget = "";
         private string _statusMessage = "Ready. Press F10 to toggle this menu.";
         private int _windowId; // Fix: Use unique window ID per instance
 
@@ -204,7 +205,8 @@ namespace SilksongCoop.Mod.UI
             if (_sessionState != null && _sessionState.IsConnected)
             {
                 GUILayout.Label($"<b>Connected Peer:</b> {_sessionState.RemotePeerId?.ToString() ?? "Unknown"}");
-                GUILayout.Label($"<b>Round-Trip Time:</b> {_sessionState.RoundTripTimeMs} ms");
+                string rttColor = _sessionState.RoundTripTimeMs < 50 ? "#66FF66" : _sessionState.RoundTripTimeMs < 150 ? "#FFFF66" : "#FF6666";
+                GUILayout.Label($"<b>Round-Trip Time:</b> <color={rttColor}>{_sessionState.RoundTripTimeMs} ms</color>");
                 GUILayout.Label($"<b>Packets:</b> Sent: {_sessionState.SentPackets} | Recv: {_sessionState.ReceivedPackets}");
             }
 
@@ -304,6 +306,23 @@ namespace SilksongCoop.Mod.UI
                 }
             }
 
+            // Reconnect button when disconnected but we have a previous target
+            if ((_sessionState == null || !_sessionState.IsConnected) && !string.IsNullOrEmpty(_lastConnectionTarget))
+            {
+                GUILayout.Space(10);
+                if (GUILayout.Button($"Reconnect to {_lastConnectionTarget}", GUILayout.Height(30)))
+                {
+                    if (ulong.TryParse(_lastConnectionTarget, out _))
+                    {
+                        JoinSteamSession(_lastConnectionTarget);
+                    }
+                    else if (_lastConnectionTarget.Contains(":") || _lastConnectionTarget.StartsWith("SK-"))
+                    {
+                        JoinUdpSession(_lastConnectionTarget);
+                    }
+                }
+            }
+
             GUILayout.Space(15);
             GUILayout.Label($"<color=#AAAAAA>{_statusMessage}</color>");
         }
@@ -330,17 +349,18 @@ namespace SilksongCoop.Mod.UI
                 if (_udpTransport == null)
                     _udpTransport = new LiteNetLibTransport(1, "Host");
 
-                _udpTransport.StartHost(7777);
+                int udpPort = SilksongCoopPlugin.Instance?.DefaultUdpPortConfig?.Value ?? 7777;
+                _udpTransport.StartHost(udpPort);
                 _currentTransport = _udpTransport;
 
                 // Fix: Detect actual local IP address instead of hardcoding localhost
                 string localIp = GetLocalIpAddress();
-                string code = RoomCodeCodec.Encode(localIp, 7777);
+                string code = RoomCodeCodec.Encode(localIp, udpPort);
 
                 _sessionState?.SetHosting(_udpTransport.LocalPeerId, code);
                 // Automatically copy the room code to the clipboard so the host can share it
                 GUIUtility.systemCopyBuffer = code;
-                _statusMessage = $"Hosting UDP on port 7777. Room code copied to clipboard: {code}";
+                _statusMessage = $"Hosting UDP on port {udpPort}. Room code copied to clipboard: {code}";
             }
             catch (Exception ex)
             {
@@ -436,6 +456,7 @@ namespace SilksongCoop.Mod.UI
 
                 _currentTransport = _udpTransport;
                 _udpTransport.Connect(addressOrCode.Trim());
+                _lastConnectionTarget = addressOrCode.Trim();
 
                 _sessionState?.SetConnecting(_udpTransport.LocalPeerId, addressOrCode);
                 _statusMessage = $"Connecting to {addressOrCode}...";
@@ -455,6 +476,7 @@ namespace SilksongCoop.Mod.UI
 
                 _currentTransport = _steamTransport;
                 _steamTransport.Connect(lobbyIdString.Trim());
+                _lastConnectionTarget = lobbyIdString.Trim();
                 SilksongCoopPlugin.Instance?.SetActiveTransport(_steamTransport);
 
                 if (ulong.TryParse(lobbyIdString.Trim(), out ulong parsedLobby))

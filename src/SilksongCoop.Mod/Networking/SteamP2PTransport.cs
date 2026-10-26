@@ -34,6 +34,8 @@ namespace SilksongCoop.Mod.Networking
         public NetworkPeerId LocalPeerId { get; private set; }
         public CSteamID CurrentLobbyId => _lobbyId;
 
+        public static BepInEx.Logging.ManualLogSource? Logger { get; set; }
+
         public static bool IsSteamAvailable
         {
             get
@@ -65,7 +67,7 @@ namespace SilksongCoop.Mod.Networking
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Steam initialization error: {ex.Message}");
+                Logger?.LogWarning($"Steam initialization error: {ex.Message}");
             }
 
             LocalPeerId = new NetworkPeerId(localId, localName);
@@ -125,7 +127,7 @@ namespace SilksongCoop.Mod.Networking
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Error leaving lobby: {ex.Message}");
+                    Logger?.LogWarning($"Error leaving lobby: {ex.Message}");
                 }
                 _lobbyId = CSteamID.Nil;
             }
@@ -138,7 +140,7 @@ namespace SilksongCoop.Mod.Networking
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Error closing P2P session: {ex.Message}");
+                    Logger?.LogWarning($"Error closing P2P session: {ex.Message}");
                 }
 
                 var remotePeer = new NetworkPeerId(_remoteSteamId.m_SteamID);
@@ -174,7 +176,7 @@ namespace SilksongCoop.Mod.Networking
             bool sent = SteamNetworking.SendP2PPacket(_remoteSteamId, bufferToSend, (uint)length, sendType, channel);
             if (!sent)
             {
-                System.Diagnostics.Debug.WriteLine($"Failed to send P2P packet to {_remoteSteamId.m_SteamID} on channel {channel}");
+                Logger?.LogWarning($"Failed to send P2P packet to {_remoteSteamId.m_SteamID} on channel {channel}");
             }
         }
 
@@ -208,7 +210,7 @@ namespace SilksongCoop.Mod.Networking
                         else if (_remoteSteamId != remoteId)
                         {
                             // Fix: Reject packets from unexpected peers (security fix)
-                            System.Diagnostics.Debug.WriteLine($"Rejected packet from unexpected peer: {remoteId.m_SteamID}");
+                            Logger?.LogWarning($"Rejected packet from unexpected peer: {remoteId.m_SteamID}");
                             continue;
                         }
 
@@ -237,7 +239,7 @@ namespace SilksongCoop.Mod.Networking
         {
             if (callback.m_EChatRoomEnterResponse != (uint)EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess)
             {
-                System.Diagnostics.Debug.WriteLine($"Failed to enter lobby: {callback.m_EChatRoomEnterResponse}");
+                Logger?.LogWarning($"Failed to enter lobby: {callback.m_EChatRoomEnterResponse}");
                 OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.ConnectionFailed);
                 return;
             }
@@ -259,7 +261,7 @@ namespace SilksongCoop.Mod.Networking
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Failed to send Steam handshake: {ex.Message}");
+                    Logger?.LogWarning($"Failed to send Steam handshake: {ex.Message}");
                 }
             }
         }
@@ -281,7 +283,7 @@ namespace SilksongCoop.Mod.Networking
             {
                 // Fix: Reject session requests from unexpected peers
                 SteamNetworking.CloseP2PSessionWithUser(callback.m_steamIDRemote);
-                System.Diagnostics.Debug.WriteLine($"Rejected P2P session request from unexpected peer: {callback.m_steamIDRemote.m_SteamID}");
+                Logger?.LogWarning($"Rejected P2P session request from unexpected peer: {callback.m_steamIDRemote.m_SteamID}");
             }
         }
 

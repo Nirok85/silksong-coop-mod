@@ -18,6 +18,9 @@ namespace SilksongCoop.Mod.Hooks
                 return true; // Not connected, normal bench respawn
             }
 
+            // Guard against scene transitions
+            if (GameManager.instance == null) return true;
+
             var coordinator = SilksongCoopPlugin.Instance.DeathCoordinator;
             if (coordinator == null) return true;
 

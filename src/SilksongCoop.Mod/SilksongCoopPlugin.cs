@@ -7,6 +7,7 @@ using SilksongCoop.Core.Revive;
 using SilksongCoop.Core.State;
 using SilksongCoop.Core.Protocol;
 using SilksongCoop.Core.Protocol.Packets;
+using SilksongCoop.Core.Visuals;
 using SilksongCoop.Mod.Clones;
 using SilksongCoop.Mod.Hooks;
 using SilksongCoop.Mod.Networking;
@@ -33,6 +34,15 @@ namespace SilksongCoop.Mod
         public InventorySyncService InventorySync { get; private set; } = null!;
         public IGroundProber GroundProber { get; set; } = new UnityGroundProber();
 
+        // BepInEx Config entries
+        public BepInEx.Configuration.ConfigEntry<float>? ReviveCooldownConfig;
+        public BepInEx.Configuration.ConfigEntry<float>? ReviveHealthPercentConfig;
+        public BepInEx.Configuration.ConfigEntry<float>? ReviveInvulnerabilityConfig;
+        public BepInEx.Configuration.ConfigEntry<bool>? EnablePlayer2DashTrailConfig;
+        public BepInEx.Configuration.ConfigEntry<float>? Player2HueShiftConfig;
+        public BepInEx.Configuration.ConfigEntry<int>? DefaultUdpPortConfig;
+        public BepInEx.Configuration.ConfigEntry<int>? TickRateHzConfig;
+
         public INetworkTransport? ActiveTransport { get; private set; }
         public SteamP2PTransport? SteamTransport { get; private set; }
         public LiteNetLibTransport? UdpTransport { get; private set; }
@@ -46,12 +56,33 @@ namespace SilksongCoop.Mod
         private void Awake()
         {
             Instance = this;
+            SteamP2PTransport.Logger = Logger;
             Logger.LogInfo($"Initializing {PluginName} v{PluginVersion}...");
 
             SessionState = new CoopSessionState();
             VitalsSync = new VitalsSyncService();
             DeathCoordinator = new DeathLifecycleCoordinator();
             InventorySync = new InventorySyncService();
+
+            // Initialize BepInEx configuration
+            try
+            {
+                ReviveCooldownConfig = Config.Bind("Gameplay", "ReviveCooldownSeconds", 20.0f, "Revive cooldown for solo death (15-30 seconds)");
+                ReviveHealthPercentConfig = Config.Bind("Gameplay", "ReviveHealthPercent", 0.5f, "Fraction of max HP restored on revive (0.1-1.0)");
+                ReviveInvulnerabilityConfig = Config.Bind("Gameplay", "ReviveInvulnerabilitySeconds", 2.5f, "Damage immunity after revive (seconds)");
+                EnablePlayer2DashTrailConfig = Config.Bind("Visuals", "EnablePlayer2DashTrail", true, "Enable cyan dash trail for Player 2");
+                Player2HueShiftConfig = Config.Bind("Visuals", "Player2HueShift", 0.58f, "Hue shift for Player 2 cloak (0.58 = azure blue)");
+                DefaultUdpPortConfig = Config.Bind("Network", "DefaultUdpPort", 7777, "Default UDP port for direct connections");
+                TickRateHzConfig = Config.Bind("Network", "TickRateHz", 30, "Network replication tick rate (20-60 Hz)");
+
+                // Apply config values
+                DeathCoordinator.ReviveCooldownDuration = Math.Clamp(ReviveCooldownConfig.Value, 15f, 30f);
+                Logger.LogInfo($"[Coop] Config loaded: ReviveCooldown={DeathCoordinator.ReviveCooldownDuration}s, HueShift={Player2HueShiftConfig.Value}");
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed to load config: {ex.Message}");
+            }
 
             // Setup outgoing network callbacks - use stackalloc to avoid heap allocation pressure
             VitalsSync.OnOutgoingVitalsBroadcast += packet =>
@@ -278,7 +309,8 @@ namespace SilksongCoop.Mod
                 if (hero != null && hero.gameObject != null)
                 {
                     var palette = hero.gameObject.GetComponent<PaletteSwapController>() ?? hero.gameObject.AddComponent<PaletteSwapController>();
-                    palette.SetPlayer2(isPlayer2);
+                    float hueShift = Player2HueShiftConfig?.Value ?? PaletteSwapMath.Player2HueShift;
+                    palette.SetPlayer2(isPlayer2, hueShift);
 
                     var dash = hero.gameObject.GetComponent<DashTrailController>() ?? hero.gameObject.AddComponent<DashTrailController>();
                     dash.Initialize(isPlayer2);
@@ -414,6 +446,8 @@ namespace SilksongCoop.Mod
             float elapsed = 0f;
             while (elapsed < duration)
             {
+                if (hero == null || hero.gameObject == null)
+                    yield break; // Hero destroyed (scene transition) — abort coroutine
                 yield return null;
                 elapsed += Time.deltaTime;
             }

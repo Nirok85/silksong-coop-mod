@@ -18,6 +18,9 @@ namespace SilksongCoop.Mod.Hooks
             if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
             if (SilksongCoopPlugin.Instance?.VitalsSync == null) return;
 
+            // Guard against scene transitions
+            if (PlayerData.instance == null) return;
+
             var pd = PlayerData.instance;
             if (pd == null) return;
 
