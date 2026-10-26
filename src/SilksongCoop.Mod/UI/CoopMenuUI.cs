@@ -76,7 +76,15 @@ namespace SilksongCoop.Mod.UI
             }
             else if (_sessionState != null && _sessionState.Status == SessionStatus.Hosting)
             {
-                watermark = "[F10] Co-op: Hosting (waiting for partner...)";
+                string code = _sessionState.CurrentRoomCode;
+                if (!string.IsNullOrEmpty(code) && code != "Steam-Lobby")
+                {
+                    watermark = $"[F10] Co-op: Hosting — Code: {code}";
+                }
+                else
+                {
+                    watermark = "[F10] Co-op: Hosting (waiting for partner...)";
+                }
                 watermarkColor = new Color(1f, 0.9f, 0.4f, 0.9f);
             }
             else if (_sessionState != null && _sessionState.Status == SessionStatus.Connecting)
@@ -200,6 +208,20 @@ namespace SilksongCoop.Mod.UI
 
             if (_sessionState == null || !_sessionState.IsConnected)
             {
+                // Show room code if currently hosting
+                if (_sessionState != null && _sessionState.Status == SessionStatus.Hosting && !string.IsNullOrEmpty(_sessionState.CurrentRoomCode) && _sessionState.CurrentRoomCode != "Steam-Lobby")
+                {
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label($"<b>Room Code:</b> {_sessionState.CurrentRoomCode}");
+                    if (GUILayout.Button("Copy", GUILayout.Width(60)))
+                    {
+                        GUIUtility.systemCopyBuffer = _sessionState.CurrentRoomCode;
+                        _statusMessage = "Room code copied to clipboard!";
+                    }
+                    GUILayout.EndHorizontal();
+                    GUILayout.Space(10);
+                }
+
                 // HOST SECTION
                 GUILayout.Label("<b>HOST A SESSION</b>");
                 GUILayout.BeginHorizontal();
@@ -310,7 +332,9 @@ namespace SilksongCoop.Mod.UI
                 string code = RoomCodeCodec.Encode(localIp, 7777);
 
                 _sessionState?.SetHosting(_udpTransport.LocalPeerId, code);
-                _statusMessage = $"Hosting UDP on port 7777. Share room code: {code}";
+                // Automatically copy the room code to the clipboard so the host can share it
+                GUIUtility.systemCopyBuffer = code;
+                _statusMessage = $"Hosting UDP on port 7777. Room code copied to clipboard: {code}";
             }
             catch (Exception ex)
             {
