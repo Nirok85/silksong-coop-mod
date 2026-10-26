@@ -36,6 +36,7 @@ namespace SilksongCoop.Core.Networking
         private EndPoint? _remoteEndPoint;
         private NetworkPeerId? _remotePeerId;
         private readonly object _lock = new();
+        private readonly RateLimiter _rateLimiter = new RateLimiter(maxTokens: 1000, refillRatePerSecond: 100);
 
         private readonly Dictionary<byte, uint> _sendSequences = new();
         private readonly Dictionary<byte, uint> _expectedReceiveSequences = new();
@@ -452,6 +453,13 @@ namespace SilksongCoop.Core.Networking
                 // Validate enum ranges
                 if (!Enum.IsDefined(typeof(UdpFrameType), frameType)) return;
                 if (!Enum.IsDefined(typeof(DeliveryMethod), method)) return;
+
+                // Rate limiting: check if peer is allowed to send
+                if (_remotePeerId.HasValue && !_rateLimiter.TryConsume(_remotePeerId.Value))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[LiteNetLibTransport] Rate limit exceeded for peer {_remotePeerId.Value}");
+                    return;
+                }
 
                 // Sender validation: when connected, only accept from known remote endpoint
                 if (IsConnected && _remoteEndPoint != null)

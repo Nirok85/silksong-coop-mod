@@ -802,6 +802,7 @@ namespace SilksongCoop.Mod
                     {
                         case PacketType.TransformSync:
                             var trans = TransformSyncPacket.Deserialize(ref reader);
+                            if (!PacketValidator.ValidateTransformSync(trans)) return;
                             CloneSpawner?.UpdateRemoteTransform(
                                 peer,
                                 trans.PositionX, trans.PositionY,
@@ -820,11 +821,13 @@ namespace SilksongCoop.Mod
 
                         case PacketType.VitalsSync:
                             var vitals = VitalsSyncPacket.Deserialize(ref reader);
+                            if (!PacketValidator.ValidateVitalsSync(vitals)) return;
                             VitalsSync?.HandleVitalsPacket(peer, vitals);
                             break;
 
                         case PacketType.CurrencySync:
                             var currency = CurrencySyncPacket.Deserialize(ref reader);
+                            if (!PacketValidator.ValidateCurrencySync(currency)) return;
                             VitalsSync?.HandleCurrencyPacket(peer, currency);
                             break;
 
