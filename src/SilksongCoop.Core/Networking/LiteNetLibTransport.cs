@@ -390,169 +390,190 @@ namespace SilksongCoop.Core.Networking
 
         private void ProcessIncomingDatagram(ReadOnlySpan<byte> datagram, EndPoint sender)
         {
-            UdpFrameType frameType = (UdpFrameType)datagram[0];
-            byte channel = datagram[1];
-            DeliveryMethod method = (DeliveryMethod)datagram[2];
-            uint sequence = BitConverter.ToUInt32(datagram.Slice(3, 4));
-            byte payloadLenByte = datagram[7]; // or length calculation
-            ReadOnlySpan<byte> payload = datagram.Slice(8);
-
-            switch (frameType)
+            try
             {
-                case UdpFrameType.Handshake:
-                    if (IsHost && !IsConnected && _remoteEndPoint == null)
-                    {
-                        // Validate sender is not ourselves
-                        if (sender is IPEndPoint ep && ep.Address.Equals(IPAddress.Loopback) && ep.Port == BoundPort)
-                            break; // Ignore self-handshake
+                UdpFrameType frameType = (UdpFrameType)datagram[0];
+                byte channel = datagram[1];
+                DeliveryMethod method = (DeliveryMethod)datagram[2];
+                uint sequence = BitConverter.ToUInt32(datagram.Slice(3, 4));
+                byte payloadLenByte = datagram[7]; // or length calculation
+                ReadOnlySpan<byte> payload = datagram.Slice(8);
 
-                        _remoteEndPoint = sender;
-                        ulong clientPeerValue = payload.Length >= 8 ? BitConverter.ToUInt64(payload) : 2;
-                        _remotePeerId = new NetworkPeerId(clientPeerValue, "Client");
-                        IsConnected = true;
-
-                        // Send HandshakeAck back
-                        SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
-                        OnPeerConnected?.Invoke(_remotePeerId.Value);
-                    }
-                    break;
-
-                case UdpFrameType.HandshakeAck:
-                    if (!IsHost && !IsConnected)
-                    {
-                        _remoteEndPoint = sender;
-                        ulong hostPeerValue = payload.Length >= 8 ? BitConverter.ToUInt64(payload) : 1;
-                        _remotePeerId = new NetworkPeerId(hostPeerValue, "Host");
-                        IsConnected = true;
-
-                        OnPeerConnected?.Invoke(_remotePeerId.Value);
-                    }
-                    break;
-
-                case UdpFrameType.Data:
-                    // If reliable, send ACK immediately
-                    if (method == DeliveryMethod.ReliableOrdered)
-                    {
-                        byte[] ackPayload = new byte[5];
-                        ackPayload[0] = channel;
-                        Buffer.BlockCopy(BitConverter.GetBytes(sequence), 0, ackPayload, 1, 4);
-                        SendEnvelope(UdpFrameType.Ack, channel, sequence, DeliveryMethod.Unreliable, ackPayload);
-                    }
-
-                    HandleIncomingData(channel, method, sequence, payload);
-                    break;
-
-                case UdpFrameType.Ack:
-                    if (payload.Length >= 5)
-                    {
-                        byte ackChannel = payload[0];
-                        uint ackSeq = BitConverter.ToUInt32(payload.Slice(1, 4));
-
-                        var ackNode = _unacknowledged.First;
-                        while (ackNode != null)
+                switch (frameType)
+                {
+                    case UdpFrameType.Handshake:
+                        if (IsHost && !IsConnected && _remoteEndPoint == null)
                         {
-                            var ackNext = ackNode.Next;
-                            if (ackNode.Value.Channel == ackChannel && ackNode.Value.Sequence == ackSeq)
+                            // Validate sender is not ourselves
+                            if (sender is IPEndPoint ep && ep.Address.Equals(IPAddress.Loopback) && ep.Port == BoundPort)
+                                break; // Ignore self-handshake
+
+                            _remoteEndPoint = sender;
+                            ulong clientPeerValue = payload.Length >= 8 ? BitConverter.ToUInt64(payload) : 2;
+                            _remotePeerId = new NetworkPeerId(clientPeerValue, "Client");
+                            IsConnected = true;
+
+                            // Send HandshakeAck back
+                            SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
+                            OnPeerConnected?.Invoke(_remotePeerId.Value);
+                        }
+                        break;
+
+                    case UdpFrameType.HandshakeAck:
+                        if (!IsHost && !IsConnected)
+                        {
+                            _remoteEndPoint = sender;
+                            ulong hostPeerValue = payload.Length >= 8 ? BitConverter.ToUInt64(payload) : 1;
+                            _remotePeerId = new NetworkPeerId(hostPeerValue, "Host");
+                            IsConnected = true;
+
+                            OnPeerConnected?.Invoke(_remotePeerId.Value);
+                        }
+                        break;
+
+                    case UdpFrameType.Data:
+                        // If reliable, send ACK immediately
+                        if (method == DeliveryMethod.ReliableOrdered)
+                        {
+                            byte[] ackPayload = new byte[5];
+                            ackPayload[0] = channel;
+                            Buffer.BlockCopy(BitConverter.GetBytes(sequence), 0, ackPayload, 1, 4);
+                            SendEnvelope(UdpFrameType.Ack, channel, sequence, DeliveryMethod.Unreliable, ackPayload);
+                        }
+
+                        HandleIncomingData(channel, method, sequence, payload);
+                        break;
+
+                    case UdpFrameType.Ack:
+                        if (payload.Length >= 5)
+                        {
+                            byte ackChannel = payload[0];
+                            uint ackSeq = BitConverter.ToUInt32(payload.Slice(1, 4));
+
+                            var ackNode = _unacknowledged.First;
+                            while (ackNode != null)
                             {
-                                _unacknowledged.Remove(ackNode);
+                                var ackNext = ackNode.Next;
+                                if (ackNode.Value.Channel == ackChannel && ackNode.Value.Sequence == ackSeq)
+                                {
+                                    _unacknowledged.Remove(ackNode);
+                                }
+                                ackNode = ackNext;
                             }
-                            ackNode = ackNext;
                         }
-                    }
-                    break;
+                        break;
 
-                case UdpFrameType.Ping:
-                    SendEnvelope(UdpFrameType.Pong, 0, 0, DeliveryMethod.Unreliable, payload);
-                    break;
+                    case UdpFrameType.Ping:
+                        SendEnvelope(UdpFrameType.Pong, 0, 0, DeliveryMethod.Unreliable, payload);
+                        break;
 
-                case UdpFrameType.Pong:
-                    if (payload.Length >= 8)
-                    {
-                        long sentTime = BitConverter.ToInt64(payload);
-                        long rtt = GetTimestampMs() - sentTime;
-                        if (rtt >= 0 && rtt < 2000)
+                    case UdpFrameType.Pong:
+                        if (payload.Length >= 8)
                         {
-                            _rttMs = (int)rtt;
+                            long sentTime = BitConverter.ToInt64(payload);
+                            long rtt = GetTimestampMs() - sentTime;
+                            if (rtt >= 0 && rtt < 2000)
+                            {
+                                _rttMs = (int)rtt;
+                            }
                         }
-                    }
-                    break;
+                        break;
 
-                case UdpFrameType.Disconnect:
-                    if (IsConnected)
-                    {
-                        var peer = _remotePeerId ?? new NetworkPeerId(0);
-                        IsConnected = false;
-                        _remoteEndPoint = null;
-                        _remotePeerId = null;
-                        ResetSessionState();
-                        OnPeerDisconnected?.Invoke(peer, DisconnectReason.GracefulDisconnect);
-                    }
-                    break;
+                    case UdpFrameType.Disconnect:
+                        if (IsConnected)
+                        {
+                            var peer = _remotePeerId ?? new NetworkPeerId(0);
+                            IsConnected = false;
+                            _remoteEndPoint = null;
+                            _remotePeerId = null;
+                            ResetSessionState();
+                            OnPeerDisconnected?.Invoke(peer, DisconnectReason.GracefulDisconnect);
+                        }
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LiteNetLibTransport] ProcessIncomingDatagram error: {ex.Message}");
             }
         }
 
         private void HandleIncomingData(byte channel, DeliveryMethod method, uint sequence, ReadOnlySpan<byte> payload)
         {
-            byte[] data = payload.ToArray();
-
-            if (method == DeliveryMethod.ReliableOrdered)
+            try
             {
-                if (!_pendingReliable.TryGetValue(channel, out var pending))
+                byte[] data = payload.ToArray();
+
+                if (method == DeliveryMethod.ReliableOrdered)
                 {
-                    pending = new SortedDictionary<uint, byte[]>();
-                    _pendingReliable[channel] = pending;
-                }
-
-                _expectedReceiveSequences.TryGetValue(channel, out uint expected);
-
-                if (sequence == expected)
-                {
-                    DispatchData(data);
-                    if (!IsConnected) return;
-
-                    expected++;
-                    _expectedReceiveSequences[channel] = expected;
-
-                    while (pending.TryGetValue(expected, out var nextData))
+                    if (!_pendingReliable.TryGetValue(channel, out var pending))
                     {
-                        pending.Remove(expected);
-                        DispatchData(nextData);
+                        pending = new SortedDictionary<uint, byte[]>();
+                        _pendingReliable[channel] = pending;
+                    }
+
+                    _expectedReceiveSequences.TryGetValue(channel, out uint expected);
+
+                    if (sequence == expected)
+                    {
+                        DispatchData(data);
                         if (!IsConnected) return;
 
                         expected++;
                         _expectedReceiveSequences[channel] = expected;
+
+                        while (pending.TryGetValue(expected, out var nextData))
+                        {
+                            pending.Remove(expected);
+                            DispatchData(nextData);
+                            if (!IsConnected) return;
+
+                            expected++;
+                            _expectedReceiveSequences[channel] = expected;
+                        }
+                    }
+                    else if (sequence > expected)
+                    {
+                        pending[sequence] = data;
                     }
                 }
-                else if (sequence > expected)
+                else if (method == DeliveryMethod.Sequenced)
                 {
-                    pending[sequence] = data;
+                    _latestSequencedReceived.TryGetValue(channel, out uint latest);
+                    if (sequence >= latest)
+                    {
+                        _latestSequencedReceived[channel] = sequence + 1;
+                        DispatchData(data);
+                    }
                 }
-            }
-            else if (method == DeliveryMethod.Sequenced)
-            {
-                _latestSequencedReceived.TryGetValue(channel, out uint latest);
-                if (sequence >= latest)
+                else
                 {
-                    _latestSequencedReceived[channel] = sequence + 1;
                     DispatchData(data);
                 }
             }
-            else
+            catch (Exception ex)
             {
-                DispatchData(data);
+                System.Diagnostics.Debug.WriteLine($"[LiteNetLibTransport] HandleIncomingData error: {ex.Message}");
             }
         }
 
         private void DispatchData(byte[] data)
         {
-            // Fix: Ensure we have a valid peer before dispatching
-            if (!_remotePeerId.HasValue)
+            try
             {
-                // No remote peer established yet, drop the data
-                return;
+                // Fix: Ensure we have a valid peer before dispatching
+                if (!_remotePeerId.HasValue)
+                {
+                    // No remote peer established yet, drop the data
+                    return;
+                }
+                var peer = _remotePeerId.Value;
+                OnDataReceived?.Invoke(peer, data, 0, data.Length);
             }
-            var peer = _remotePeerId.Value;
-            OnDataReceived?.Invoke(peer, data, 0, data.Length);
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LiteNetLibTransport] DispatchData error: {ex.Message}");
+            }
         }
 
         private void SendEnvelope(UdpFrameType type, byte channel, uint sequence, DeliveryMethod method, ReadOnlySpan<byte> payload)

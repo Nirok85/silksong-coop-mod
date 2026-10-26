@@ -37,6 +37,8 @@ namespace SilksongCoop.Mod.Clones
         private int _currentClipHash;
         private float _currentNormalizedTime;
         private uint _lastTimestampMs;
+        private bool _hasClockOffset;
+        private double _clockOffsetMs;
 
         public NetworkPeerId PeerId => _peerId;
         public bool IsPlayer2 => _isPlayer2;
@@ -58,6 +60,9 @@ namespace SilksongCoop.Mod.Clones
             _peerId = peerId;
             _isPlayer2 = isPlayer2;
             _lastTimestampMs = 0;
+            _hasClockOffset = false;
+            _clockOffsetMs = 0.0;
+            _buffer.Clear();
             _paletteSwap?.SetPlayer2(isPlayer2);
             _dashTrail?.Initialize(isPlayer2);
         }
@@ -104,13 +109,25 @@ namespace SilksongCoop.Mod.Clones
             // 1. LastTimestampMs is 0 (first packet), OR
             // 2. The signed difference indicates it's newer (handles wraparound)
             long diff = (long)timestampMs - (long)_lastTimestampMs;
-            bool isNewerPacket = _lastTimestampMs == 0 || diff > 0 || diff < -10000;
+            bool isNewerPacket = !_hasClockOffset || diff > 0 || diff < -10000;
             if (isNewerPacket)
             {
+                // The sender's timestamps come from its own session clock. Map them into
+                // this client's local clock once so SnapshotBuffer can compare against
+                // Time.timeAsDouble during interpolation. Without this the buffer never
+                // brackets the render time and the clone freezes at its spawn point.
+                double localNowMs = Time.timeAsDouble * 1000.0;
+                if (!_hasClockOffset)
+                {
+                    _clockOffsetMs = localNowMs - timestampMs;
+                    _hasClockOffset = true;
+                }
+                double mappedTimestampMs = timestampMs + _clockOffsetMs;
+
                 _buffer.AddSnapshot(new TransformSnapshot
                 {
                     Tick = timestampMs,
-                    TimestampMs = timestampMs,
+                    TimestampMs = mappedTimestampMs,
                     PositionX = posX,
                     PositionY = posY,
                     VelocityX = velX,
@@ -208,72 +225,79 @@ namespace SilksongCoop.Mod.Clones
 
         private void Update()
         {
-            // Auto-bind animation library and sprite collection if local HeroController loaded late
-            EnsureAnimationLibraryBound();
-
-            // Evaluate render time for interpolation
-            double currentLocalMs = Time.timeAsDouble * 1000.0;
-            double renderTime = currentLocalMs - TargetDelayMs;
-
-            bool isGrounded = (_stateFlags & TransformSyncPacket.FlagGrounded) != 0;
-            bool isWallSliding = (_stateFlags & TransformSyncPacket.FlagWallSliding) != 0;
-            _dashTrail?.UpdateLifecycle(Time.deltaTime, isGrounded, isWallSliding);
-
-            if (_buffer.TryGetSnapshotsForTime(renderTime, out var s0, out var s1, out double t))
+            try
             {
-                if (t < 1.0)
+                // Auto-bind animation library and sprite collection if local HeroController loaded late
+                EnsureAnimationLibraryBound();
+
+                // Evaluate render time for interpolation
+                double currentLocalMs = Time.timeAsDouble * 1000.0;
+                double renderTime = currentLocalMs - TargetDelayMs;
+
+                bool isGrounded = (_stateFlags & TransformSyncPacket.FlagGrounded) != 0;
+                bool isWallSliding = (_stateFlags & TransformSyncPacket.FlagWallSliding) != 0;
+                _dashTrail?.UpdateLifecycle(Time.deltaTime, isGrounded, isWallSliding);
+
+                if (_buffer.TryGetSnapshotsForTime(renderTime, out var s0, out var s1, out double t))
                 {
-                    float segmentDt = Math.Max(0.001f, (float)(s1.TimestampMs - s0.TimestampMs) / 1000f);
-                    var (interpX, interpY) = HermiteSpline.InterpolatePosition2D(
-                        s0.PositionX, s0.PositionY,
-                        s0.VelocityX, s0.VelocityY,
-                        s1.PositionX, s1.PositionY,
-                        s1.VelocityX, s1.VelocityY,
-                        segmentDt, (float)t);
-
-                    var (velX, velY) = HermiteSpline.InterpolateVelocity2D(
-                        s0.PositionX, s0.PositionY,
-                        s0.VelocityX, s0.VelocityY,
-                        s1.PositionX, s1.PositionY,
-                        s1.VelocityX, s1.VelocityY,
-                        segmentDt, (float)t);
-
-                    // Check for snap distance threshold (e.g. teleport / room transition)
-                    if (DeadReckoning.ShouldSnap(transform.position.x, transform.position.y, interpX, interpY))
+                    if (t < 1.0)
                     {
-                        transform.position = new Vector3(s1.PositionX, s1.PositionY, transform.position.z);
+                        float segmentDt = Math.Max(0.001f, (float)(s1.TimestampMs - s0.TimestampMs) / 1000f);
+                        var (interpX, interpY) = HermiteSpline.InterpolatePosition2D(
+                            s0.PositionX, s0.PositionY,
+                            s0.VelocityX, s0.VelocityY,
+                            s1.PositionX, s1.PositionY,
+                            s1.VelocityX, s1.VelocityY,
+                            segmentDt, (float)t);
+
+                        var (velX, velY) = HermiteSpline.InterpolateVelocity2D(
+                            s0.PositionX, s0.PositionY,
+                            s0.VelocityX, s0.VelocityY,
+                            s1.PositionX, s1.PositionY,
+                            s1.VelocityX, s1.VelocityY,
+                            segmentDt, (float)t);
+
+                        // Check for snap distance threshold (e.g. teleport / room transition)
+                        if (DeadReckoning.ShouldSnap(transform.position.x, transform.position.y, interpX, interpY))
+                        {
+                            transform.position = new Vector3(s1.PositionX, s1.PositionY, transform.position.z);
+                            _currentVelX = s1.VelocityX;
+                            _currentVelY = s1.VelocityY;
+                        }
+                        else
+                        {
+                            transform.position = new Vector3(interpX, interpY, transform.position.z);
+                            _currentVelX = velX;
+                            _currentVelY = velY;
+                        }
+                    }
+                    else
+                    {
+                        // Extrapolate past newest snapshot via DeadReckoning
+                        float extrapDt = (float)(renderTime - s1.TimestampMs) / 1000f;
+                        if (extrapDt > 0f)
+                        {
+                            var (extrapX, extrapY) = DeadReckoning.ExtrapolatePosition(
+                                s1.PositionX, s1.PositionY,
+                                s1.VelocityX, s1.VelocityY,
+                                isGrounded,
+                                extrapDt);
+
+                            transform.position = new Vector3(extrapX, extrapY, transform.position.z);
+                        }
+                        else
+                        {
+                            transform.position = new Vector3(s1.PositionX, s1.PositionY, transform.position.z);
+                        }
+
                         _currentVelX = s1.VelocityX;
                         _currentVelY = s1.VelocityY;
                     }
-                    else
-                    {
-                        transform.position = new Vector3(interpX, interpY, transform.position.z);
-                        _currentVelX = velX;
-                        _currentVelY = velY;
-                    }
                 }
-                else
-                {
-                    // Extrapolate past newest snapshot via DeadReckoning
-                    float extrapDt = (float)(renderTime - s1.TimestampMs) / 1000f;
-                    if (extrapDt > 0f)
-                    {
-                        var (extrapX, extrapY) = DeadReckoning.ExtrapolatePosition(
-                            s1.PositionX, s1.PositionY,
-                            s1.VelocityX, s1.VelocityY,
-                            isGrounded,
-                            extrapDt);
-
-                        transform.position = new Vector3(extrapX, extrapY, transform.position.z);
-                    }
-                    else
-                    {
-                        transform.position = new Vector3(s1.PositionX, s1.PositionY, transform.position.z);
-                    }
-
-                    _currentVelX = s1.VelocityX;
-                    _currentVelY = s1.VelocityY;
-                }
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[RemotePlayerController] Update error for peer {_peerId}: {ex.Message}");
             }
         }
 

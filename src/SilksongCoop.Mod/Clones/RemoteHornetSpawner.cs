@@ -36,76 +36,90 @@ namespace SilksongCoop.Mod.Clones
 
         public void SpawnRemotePlayer(NetworkPeerId peerId, bool isPlayer2)
         {
-            // Edge Case E01: If clone already exists for this peer, clean up prior instance
-            if (_activeClones.TryGetValue(peerId, out var existing))
+            try
             {
-                if (existing != null && existing.gameObject != null)
+                // Edge Case E01: If clone already exists for this peer, clean up prior instance
+                if (_activeClones.TryGetValue(peerId, out var existing))
                 {
-                    Destroy(existing.gameObject);
-                }
-                _activeClones.Remove(peerId);
-            }
-
-            // Create clean GameObject hierarchy (Layer 0 avoids camera targets and damage triggers)
-            var cloneGo = new GameObject($"RemoteHornet_{peerId.Value}");
-            cloneGo.layer = 0;
-            DontDestroyOnLoad(cloneGo);
-
-            // Add mesh filter and renderer
-            cloneGo.AddComponent<MeshFilter>();
-            var meshRenderer = cloneGo.AddComponent<MeshRenderer>();
-
-            // Setup tk2dSprite
-            tk2dSprite sprite = cloneGo.AddComponent<tk2dSprite>();
-
-            // Setup tk2dSpriteAnimator
-            tk2dSpriteAnimator animator = cloneGo.AddComponent<tk2dSpriteAnimator>();
-
-            // Borrow Hornet sprite collection and animation library from local HeroController if available
-            var hero = HeroController.instance;
-            if (hero != null && hero.AnimCtrl != null && hero.AnimCtrl.animator != null)
-            {
-                var heroAnimator = hero.AnimCtrl.animator;
-                if (heroAnimator.Library != null)
-                {
-                    animator.Library = heroAnimator.Library;
+                    if (existing != null && existing.gameObject != null)
+                    {
+                        Destroy(existing.gameObject);
+                    }
+                    _activeClones.Remove(peerId);
                 }
 
-                if (heroAnimator.Sprite != null && heroAnimator.Sprite.Collection != null)
+                // Create clean GameObject hierarchy (Layer 0 avoids camera targets and damage triggers)
+                var cloneGo = new GameObject($"RemoteHornet_{peerId.Value}");
+                cloneGo.layer = 0;
+                DontDestroyOnLoad(cloneGo);
+
+                // Add mesh filter and renderer
+                cloneGo.AddComponent<MeshFilter>();
+                var meshRenderer = cloneGo.AddComponent<MeshRenderer>();
+
+                // Setup tk2dSprite
+                tk2dSprite sprite = cloneGo.AddComponent<tk2dSprite>();
+
+                // Setup tk2dSpriteAnimator
+                tk2dSpriteAnimator animator = cloneGo.AddComponent<tk2dSpriteAnimator>();
+
+                // Borrow Hornet sprite collection and animation library from local HeroController if available
+                var hero = HeroController.instance;
+                if (hero != null && hero.AnimCtrl != null && hero.AnimCtrl.animator != null)
                 {
-                    sprite.SetSprite(heroAnimator.Sprite.Collection, heroAnimator.Sprite.spriteId);
+                    var heroAnimator = hero.AnimCtrl.animator;
+                    if (heroAnimator.Library != null)
+                    {
+                        animator.Library = heroAnimator.Library;
+                    }
+
+                    if (heroAnimator.Sprite != null && heroAnimator.Sprite.Collection != null)
+                    {
+                        sprite.SetSprite(heroAnimator.Sprite.Collection, heroAnimator.Sprite.spriteId);
+                    }
                 }
+
+                // Add visual controllers
+                var paletteSwap = cloneGo.AddComponent<PaletteSwapController>();
+                paletteSwap.SetPlayer2(isPlayer2);
+
+                var dashTrail = cloneGo.AddComponent<DashTrailController>();
+                dashTrail.Initialize(isPlayer2);
+
+                // Add remote player controller to drive interpolated motion and animation
+                var controller = cloneGo.AddComponent<RemotePlayerController>();
+                controller.Initialize(peerId, isPlayer2);
+
+                if (animator.Library != null)
+                {
+                    controller.SetAnimationLibrary(animator.Library);
+                }
+
+                _activeClones[peerId] = controller;
             }
-
-            // Add visual controllers
-            var paletteSwap = cloneGo.AddComponent<PaletteSwapController>();
-            paletteSwap.SetPlayer2(isPlayer2);
-
-            var dashTrail = cloneGo.AddComponent<DashTrailController>();
-            dashTrail.Initialize(isPlayer2);
-
-            // Add remote player controller to drive interpolated motion and animation
-            var controller = cloneGo.AddComponent<RemotePlayerController>();
-            controller.Initialize(peerId, isPlayer2);
-
-            if (animator.Library != null)
+            catch (Exception ex)
             {
-                controller.SetAnimationLibrary(animator.Library);
+                SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] SpawnRemotePlayer error for peer {peerId}: {ex.Message}");
             }
-
-            _activeClones[peerId] = controller;
         }
 
         public void DespawnRemotePlayer(NetworkPeerId peerId)
         {
-            // Edge Case E02: Despawning non-existent peer is a safe no-op
-            if (_activeClones.TryGetValue(peerId, out var controller))
+            try
             {
-                if (controller != null && controller.gameObject != null)
+                // Edge Case E02: Despawning non-existent peer is a safe no-op
+                if (_activeClones.TryGetValue(peerId, out var controller))
                 {
-                    Destroy(controller.gameObject);
+                    if (controller != null && controller.gameObject != null)
+                    {
+                        Destroy(controller.gameObject);
+                    }
+                    _activeClones.Remove(peerId);
                 }
-                _activeClones.Remove(peerId);
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] DespawnRemotePlayer error: {ex.Message}");
             }
         }
 
@@ -119,73 +133,126 @@ namespace SilksongCoop.Mod.Clones
             ushort normalizedTime,
             uint timestampMs)
         {
-            if (_activeClones.TryGetValue(peerId, out var controller))
+            try
             {
-                controller.UpdateTransform(
-                    posX, posY,
-                    velX, velY,
-                    facingDirection,
-                    stateFlags,
-                    animClipHash,
-                    normalizedTime,
-                    timestampMs);
+                if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
+                {
+                    controller.UpdateTransform(
+                        posX, posY,
+                        velX, velY,
+                        facingDirection,
+                        stateFlags,
+                        animClipHash,
+                        normalizedTime,
+                        timestampMs);
+                }
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] UpdateRemoteTransform error: {ex.Message}");
             }
         }
 
         public void TriggerRemoteAction(NetworkPeerId peerId, ActionType action, byte variant)
         {
-            if (_activeClones.TryGetValue(peerId, out var controller))
+            try
             {
-                controller.TriggerAction(action, variant);
+                if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
+                {
+                    controller.TriggerAction(action, variant);
+                }
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] TriggerRemoteAction error: {ex.Message}");
             }
         }
 
         public void SyncAnimation(NetworkPeerId peerId, int clipHash, ushort normalizedTime)
         {
-            if (_activeClones.TryGetValue(peerId, out var controller))
+            try
             {
-                controller.SyncAnimation(clipHash, normalizedTime);
+                if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
+                {
+                    controller.SyncAnimation(clipHash, normalizedTime);
+                }
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] SyncAnimation error: {ex.Message}");
             }
         }
 
         public void SetFacingDirection(NetworkPeerId peerId, bool facingRight)
         {
-            if (_activeClones.TryGetValue(peerId, out var controller))
+            try
             {
-                controller.SetFacingDirection(facingRight);
+                if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
+                {
+                    controller.SetFacingDirection(facingRight);
+                }
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] SetFacingDirection error: {ex.Message}");
             }
         }
 
         public void TriggerDashEffect(NetworkPeerId peerId, bool isAirDash)
         {
-            if (_activeClones.TryGetValue(peerId, out var controller))
+            try
             {
-                controller.TriggerDashEffect(isAirDash);
+                if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
+                {
+                    controller.TriggerDashEffect(isAirDash);
+                }
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] TriggerDashEffect error: {ex.Message}");
             }
         }
 
         public bool TryGetRemotePosition(NetworkPeerId peerId, out float posX, out float posY)
         {
-            if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
-            {
-                var pos = controller.transform.position;
-                posX = pos.x;
-                posY = pos.y;
-                return true;
-            }
             posX = 0f;
             posY = 0f;
+            
+            try
+            {
+                if (_activeClones.TryGetValue(peerId, out var controller) && controller != null && controller.gameObject != null)
+                {
+                    var pos = controller.transform.position;
+                    posX = pos.x;
+                    posY = pos.y;
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] TryGetRemotePosition error: {ex.Message}");
+            }
+            
             return false;
         }
 
         public bool TryGetRemoteState(NetworkPeerId peerId, out RemoteCloneState state)
         {
-            if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
-            {
-                state = controller.GetState();
-                return true;
-            }
             state = default;
+            
+            try
+            {
+                if (_activeClones.TryGetValue(peerId, out var controller) && controller != null && controller.gameObject != null)
+                {
+                    state = controller.GetState();
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] TryGetRemoteState error: {ex.Message}");
+            }
+            
             return false;
         }
 

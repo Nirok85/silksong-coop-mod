@@ -70,61 +70,75 @@ namespace SilksongCoop.Core.State
 
         public void OnLocalItemDiscovered(string itemId, ItemCategory category, Guid? transactionId = null)
         {
-            if (string.IsNullOrWhiteSpace(itemId)) return;
-            if (itemId.Length > 256 || Encoding.UTF8.GetByteCount(itemId) > 400) return;
-
-            var tx = transactionId ?? Guid.NewGuid();
-            if (tx == Guid.Empty) return;
-
-            uint seq;
-            uint ts = (uint)Environment.TickCount;
-
-            lock (_syncLock)
+            try
             {
-                if (_processedTransactions.Contains(tx)) return;
-                if (!_unlockedItems.Add(itemId)) return;
+                if (string.IsNullOrWhiteSpace(itemId)) return;
+                if (itemId.Length > 256 || Encoding.UTF8.GetByteCount(itemId) > 400) return;
 
-                RecordTransaction(tx);
-                seq = ++_sequenceCounter;
+                var tx = transactionId ?? Guid.NewGuid();
+                if (tx == Guid.Empty) return;
+
+                uint seq;
+                uint ts = (uint)Environment.TickCount;
+
+                lock (_syncLock)
+                {
+                    if (_processedTransactions.Contains(tx)) return;
+                    if (!_unlockedItems.Add(itemId)) return;
+
+                    RecordTransaction(tx);
+                    seq = ++_sequenceCounter;
+                }
+
+                OnItemUnlocked?.Invoke(itemId, category);
+
+                var packet = new ItemUnlockPacket
+                {
+                    Header = new PacketHeader(PacketType.ItemUnlockSync, 3, seq, ts),
+                    ItemId = itemId,
+                    Category = category,
+                    TransactionId = tx,
+                    Timestamp = ts
+                };
+
+                OnOutgoingItemUnlockPacket?.Invoke(packet);
             }
-
-            OnItemUnlocked?.Invoke(itemId, category);
-
-            var packet = new ItemUnlockPacket
+            catch (Exception ex)
             {
-                Header = new PacketHeader(PacketType.ItemUnlockSync, 3, seq, ts),
-                ItemId = itemId,
-                Category = category,
-                TransactionId = tx,
-                Timestamp = ts
-            };
-
-            OnOutgoingItemUnlockPacket?.Invoke(packet);
+                System.Diagnostics.Debug.WriteLine($"[InventorySyncService] OnLocalItemDiscovered error: {ex.Message}");
+            }
         }
 
         public void HandleItemUnlockPacket(NetworkPeerId sender, ItemUnlockPacket packet)
         {
-            if (string.IsNullOrWhiteSpace(packet.ItemId)) return;
-            if (packet.ItemId.Length > 256 || Encoding.UTF8.GetByteCount(packet.ItemId) > 400) return;
-            if (packet.TransactionId == Guid.Empty) return;
-
-            bool isNewItem;
-            lock (_syncLock)
+            try
             {
-                if (!_processedTransactions.Add(packet.TransactionId))
+                if (string.IsNullOrWhiteSpace(packet.ItemId)) return;
+                if (packet.ItemId.Length > 256 || Encoding.UTF8.GetByteCount(packet.ItemId) > 400) return;
+                if (packet.TransactionId == Guid.Empty) return;
+
+                bool isNewItem;
+                lock (_syncLock)
                 {
-                    return; // Duplicate transaction (retransmit/echo drop)
+                    if (!_processedTransactions.Add(packet.TransactionId))
+                    {
+                        return; // Duplicate transaction (retransmit/echo drop)
+                    }
+
+                    RecordTransactionOrder(packet.TransactionId);
+                    isNewItem = _unlockedItems.Add(packet.ItemId);
                 }
 
-                RecordTransactionOrder(packet.TransactionId);
-                isNewItem = _unlockedItems.Add(packet.ItemId);
+                if (isNewItem)
+                {
+                    OnItemUnlocked?.Invoke(packet.ItemId, packet.Category);
+                }
+                // Note: Never raise OnOutgoingItemUnlockPacket here. Prevents echo loops.
             }
-
-            if (isNewItem)
+            catch (Exception ex)
             {
-                OnItemUnlocked?.Invoke(packet.ItemId, packet.Category);
+                System.Diagnostics.Debug.WriteLine($"[InventorySyncService] HandleItemUnlockPacket error: {ex.Message}");
             }
-            // Note: Never raise OnOutgoingItemUnlockPacket here. Prevents echo loops.
         }
 
         public void SetLocalEquippedCrest(string crestId)
@@ -173,11 +187,18 @@ namespace SilksongCoop.Core.State
 
         private void RecordTransactionOrder(Guid transactionId)
         {
-            _transactionOrder.Enqueue(transactionId);
-            if (_transactionOrder.Count > MaxTrackedTransactions)
+            try
             {
-                var oldest = _transactionOrder.Dequeue();
-                _processedTransactions.Remove(oldest);
+                _transactionOrder.Enqueue(transactionId);
+                if (_transactionOrder.Count > MaxTrackedTransactions)
+                {
+                    var oldest = _transactionOrder.Dequeue();
+                    _processedTransactions.Remove(oldest);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[InventorySyncService] RecordTransactionOrder error: {ex.Message}");
             }
         }
     }

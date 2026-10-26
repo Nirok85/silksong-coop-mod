@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using BepInEx;
 using HarmonyLib;
+using SilksongCoop.Core.Clones;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Revive;
 using SilksongCoop.Core.State;
@@ -52,6 +53,11 @@ namespace SilksongCoop.Mod
         private Harmony? _harmony;
         private bool _isTeamWipeInProgress;
         private ulong? _pendingSteamLobbyJoin;
+
+        // Outgoing transform replication. Start above one interval so the first
+        // packet after connecting is sent immediately instead of waiting a tick.
+        private float _transformSendAccumulator = 1f;
+        private uint _transformTick;
 
         private void Awake()
         {
@@ -306,19 +312,18 @@ namespace SilksongCoop.Mod
             try
             {
                 var hero = HeroController.instance;
-                if (hero != null && hero.gameObject != null)
-                {
-                    var palette = hero.gameObject.GetComponent<PaletteSwapController>() ?? hero.gameObject.AddComponent<PaletteSwapController>();
-                    float hueShift = Player2HueShiftConfig?.Value ?? PaletteSwapMath.Player2HueShift;
-                    palette.SetPlayer2(isPlayer2, hueShift);
+                if (hero == null || hero.gameObject == null) return;
 
-                    var dash = hero.gameObject.GetComponent<DashTrailController>() ?? hero.gameObject.AddComponent<DashTrailController>();
-                    dash.Initialize(isPlayer2);
-                }
+                var palette = hero.gameObject.GetComponent<PaletteSwapController>() ?? hero.gameObject.AddComponent<PaletteSwapController>();
+                float hueShift = Player2HueShiftConfig?.Value ?? PaletteSwapMath.Player2HueShift;
+                palette.SetPlayer2(isPlayer2, hueShift);
+
+                var dash = hero.gameObject.GetComponent<DashTrailController>() ?? hero.gameObject.AddComponent<DashTrailController>();
+                dash.Initialize(isPlayer2);
             }
             catch (Exception ex)
             {
-                Logger.LogWarning($"[Coop] Failed to refresh local visuals: {ex.Message}");
+                Logger.LogError($"[Coop] Failed to refresh local visuals: {ex.Message}\n{ex.StackTrace}");
             }
         }
 
@@ -327,13 +332,17 @@ namespace SilksongCoop.Mod
             try
             {
                 var hero = HeroController.instance;
-                if (hero != null)
+                if (hero != null && hero.gameObject != null)
                 {
                     hero.AffectedByGravity(false);
                     hero.RelinquishControl();
+                    
                     foreach (var ren in hero.gameObject.GetComponentsInChildren<Renderer>())
                     {
-                        ren.enabled = false;
+                        if (ren != null)
+                        {
+                            ren.enabled = false;
+                        }
                     }
                 }
 
@@ -341,11 +350,11 @@ namespace SilksongCoop.Mod
                 var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
                 camTarget?.StartFreeMode(false);
 
-                SessionState.SetSpectating();
+                SessionState?.SetSpectating();
             }
             catch (Exception ex)
             {
-                Logger.LogWarning($"[Coop] Failed entering spectator mode: {ex.Message}");
+                Logger.LogError($"[Coop] Failed entering spectator mode: {ex.Message}\n{ex.StackTrace}");
             }
         }
 
@@ -354,78 +363,84 @@ namespace SilksongCoop.Mod
             try
             {
                 var hero = HeroController.instance;
-                if (hero != null)
+                if (hero == null || hero.gameObject == null)
                 {
-                    // 1. Resolve safe ground position via GroundProber
-                    Vector2 spawnPos = new Vector2(x, y + 0.5f);
-                    if (GroundProber.TryFindSafeGround(x, y, out float safeX, out float safeY))
-                    {
-                        spawnPos = new Vector2(safeX, safeY);
-                    }
-                    else
-                    {
-                        var pdFallback = PlayerData.instance;
-                        if (pdFallback != null && pdFallback.hazardRespawnLocation != Vector3.zero)
-                        {
-                            spawnPos = pdFallback.hazardRespawnLocation;
-                        }
-                    }
+                    Logger.LogWarning("[Coop] Cannot revive: HeroController or gameObject is null");
+                    return;
+                }
 
-                    // 2. Position hero and reset linear velocity
-                    hero.transform.position = new Vector3(spawnPos.x, spawnPos.y, 0f);
-                    var rb = hero.GetComponent<Rigidbody2D>();
-                    if (rb != null)
+                // 1. Resolve safe ground position via GroundProber
+                Vector2 spawnPos = new Vector2(x, y + 0.5f);
+                if (GroundProber != null && GroundProber.TryFindSafeGround(x, y, out float safeX, out float safeY))
+                {
+                    spawnPos = new Vector2(safeX, safeY);
+                }
+                else
+                {
+                    var pdFallback = PlayerData.instance;
+                    if (pdFallback != null && pdFallback.hazardRespawnLocation != Vector3.zero)
                     {
-                        rb.linearVelocity = Vector2.zero;
+                        spawnPos = pdFallback.hazardRespawnLocation;
                     }
+                }
 
-                    // 3. Restore camera from spectator free mode back to hero following
-                    var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
-                    camTarget?.EndFreeMode();
+                // 2. Position hero and reset linear velocity
+                hero.transform.position = new Vector3(spawnPos.x, spawnPos.y, 0f);
+                var rb = hero.GetComponent<Rigidbody2D>();
+                if (rb != null)
+                {
+                    rb.linearVelocity = Vector2.zero;
+                }
 
-                    // 4. Calculate and apply 50% max HP
-                    var pd = PlayerData.instance;
-                    if (pd != null)
-                    {
-                        int reviveHp = GroundProber.CalculateReviveHealth(pd.maxHealth);
-                        pd.health = reviveHp;
-                        pd.prevHealth = pd.health;
-                        pd.healthBlue = 0;
-                        hero.MaxHealthKeepBlue();
-                        EventRegister.SendEvent(EventRegisterEvents.HeroHealed);
-                        EventRegister.SendEvent(EventRegisterEvents.HealthUpdate);
-                        VitalsSync.BroadcastCurrentVitals();
-                    }
+                // 3. Restore camera from spectator free mode back to hero following
+                var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
+                camTarget?.EndFreeMode();
 
-                    // 5. Re-enable renderers
-                    foreach (var ren in hero.gameObject.GetComponentsInChildren<Renderer>())
+                // 4. Calculate and apply 50% max HP
+                var pd = PlayerData.instance;
+                if (pd != null)
+                {
+                    int reviveHp = GroundProber?.CalculateReviveHealth(pd.maxHealth) ?? Math.Max(1, pd.maxHealth / 2);
+                    pd.health = reviveHp;
+                    pd.prevHealth = pd.health;
+                    pd.healthBlue = 0;
+                    hero.MaxHealthKeepBlue();
+                    EventRegister.SendEvent(EventRegisterEvents.HeroHealed);
+                    EventRegister.SendEvent(EventRegisterEvents.HealthUpdate);
+                    VitalsSync?.BroadcastCurrentVitals();
+                }
+
+                // 5. Re-enable renderers
+                foreach (var ren in hero.gameObject.GetComponentsInChildren<Renderer>())
+                {
+                    if (ren != null)
                     {
                         ren.enabled = true;
                     }
-
-                    // 6. Restore player state in exact engine sequence: clear dead before RegainControl!
-                    hero.cState.dead = false;
-                    hero.cState.hazardDeath = false;
-                    hero.cState.recoiling = false;
-                    hero.hero_state = GlobalEnums.ActorStates.idle;
-                    hero.heroBox?.HeroBoxNormal();
-                    hero.AffectedByGravity(true);
-                    hero.RegainControl(allowInput: true);
-                    hero.StartAnimationControlToIdle();
-
-                    // 7. Re-center camera
-                    GameManager.instance?.cameraCtrl?.PositionToHero(forceDirect: false);
-
-                    // 8. Apply 2.5s invulnerability routine
-                    StartCoroutine(ReviveInvulnerabilityRoutine(hero, SafeGroundSolver.InvulnerabilityDuration));
                 }
 
-                DeathCoordinator.CompleteRevival();
-                SessionState.ReturnToActive();
+                // 6. Restore player state in exact engine sequence: clear dead before RegainControl!
+                hero.cState.dead = false;
+                hero.cState.hazardDeath = false;
+                hero.cState.recoiling = false;
+                hero.hero_state = GlobalEnums.ActorStates.idle;
+                hero.heroBox?.HeroBoxNormal();
+                hero.AffectedByGravity(true);
+                hero.RegainControl(allowInput: true);
+                hero.StartAnimationControlToIdle();
+
+                // 7. Re-center camera
+                GameManager.instance?.cameraCtrl?.PositionToHero(forceDirect: false);
+
+                // 8. Apply 2.5s invulnerability routine
+                StartCoroutine(ReviveInvulnerabilityRoutine(hero, SafeGroundSolver.InvulnerabilityDuration));
+
+                DeathCoordinator?.CompleteRevival();
+                SessionState?.ReturnToActive();
             }
             catch (Exception ex)
             {
-                Logger.LogWarning($"[Coop] Failed reviving at partner: {ex.Message}");
+                Logger.LogError($"[Coop] Failed reviving at partner: {ex.Message}\n{ex.StackTrace}");
             }
         }
 
@@ -469,102 +484,155 @@ namespace SilksongCoop.Mod
         public void TriggerTeamWipe()
         {
             if (_isTeamWipeInProgress) return;
-            _isTeamWipeInProgress = true;
-
+            
             try
             {
-                SessionState.SetTeamWipe();
-                if (GameManager.instance != null)
+                _isTeamWipeInProgress = true;
+                SessionState?.SetTeamWipe();
+                
+                var gm = GameManager.instance;
+                if (gm != null)
                 {
-                    GameManager.instance.StartCoroutine(GameManager.instance.PlayerDead(1.5f));
+                    gm.StartCoroutine(gm.PlayerDead(1.5f));
+                }
+                else
+                {
+                    Logger.LogWarning("[Coop] GameManager.instance is null during team wipe");
                 }
             }
             catch (Exception ex)
             {
-                Logger.LogWarning($"[Coop] Failed triggering team wipe: {ex.Message}");
+                _isTeamWipeInProgress = false;
+                Logger.LogError($"[Coop] Failed triggering team wipe: {ex.Message}\n{ex.StackTrace}");
             }
         }
 
         public void OnBenchRespawnCompleted()
         {
-            _isTeamWipeInProgress = false;
-
-            var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
-            camTarget?.EndFreeMode();
-
-            DeathCoordinator.ResetAfterBenchRespawn();
-            SessionState.ReturnToActive();
-
-            var hero = HeroController.instance;
-            if (hero != null)
+            try
             {
-                hero.cState.dead = false;
-                hero.cState.hazardDeath = false;
-                foreach (var ren in hero.gameObject.GetComponentsInChildren<Renderer>())
+                _isTeamWipeInProgress = false;
+
+                var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
+                camTarget?.EndFreeMode();
+
+                DeathCoordinator?.ResetAfterBenchRespawn();
+                SessionState?.ReturnToActive();
+
+                var hero = HeroController.instance;
+                if (hero != null && hero.gameObject != null)
                 {
-                    ren.enabled = true;
+                    hero.cState.dead = false;
+                    hero.cState.hazardDeath = false;
+                    
+                    foreach (var ren in hero.gameObject.GetComponentsInChildren<Renderer>())
+                    {
+                        if (ren != null)
+                        {
+                            ren.enabled = true;
+                        }
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"[Coop] Failed on bench respawn completed: {ex.Message}\n{ex.StackTrace}");
             }
         }
 
         public void ApplyRemoteItemUnlock(string itemId, ItemCategory category)
         {
+            if (string.IsNullOrEmpty(itemId))
+            {
+                Logger.LogWarning("[Coop] ApplyRemoteItemUnlock called with null or empty itemId");
+                return;
+            }
+
             try
             {
                 InventoryHooks.RemoteUnlockDepth++;
 
+                var playerData = PlayerData.instance;
+                if (playerData == null)
+                {
+                    Logger.LogWarning("[Coop] Cannot apply remote item unlock: PlayerData.instance is null");
+                    return;
+                }
+
                 switch (category)
                 {
                     case ItemCategory.Crest:
-                        var localCrest = PlayerData.instance?.CurrentCrestID;
-                        var crest = ToolItemManager.GetCrestByName(itemId);
-                        if (crest != null)
+                        try
                         {
-                            crest.Unlock();
-                            if (PlayerData.instance != null && PlayerData.instance.CurrentCrestID != localCrest)
+                            var localCrest = playerData.CurrentCrestID;
+                            var crest = ToolItemManager.GetCrestByName(itemId);
+                            
+                            if (crest != null)
                             {
-                                ToolItemManager.SetEquippedCrest(localCrest);
+                                crest.Unlock();
+                                if (playerData.CurrentCrestID != localCrest)
+                                {
+                                    ToolItemManager.SetEquippedCrest(localCrest);
+                                }
+                            }
+                            else if (playerData.ToolEquips != null)
+                            {
+                                var data = playerData.ToolEquips.GetData(itemId);
+                                data.IsUnlocked = true;
+                                playerData.ToolEquips.SetData(itemId, data);
                             }
                         }
-                        else if (PlayerData.instance?.ToolEquips != null)
+                        catch (Exception ex)
                         {
-                            var data = PlayerData.instance.ToolEquips.GetData(itemId);
-                            data.IsUnlocked = true;
-                            PlayerData.instance.ToolEquips.SetData(itemId, data);
+                            Logger.LogError($"[Coop] Failed to apply crest unlock '{itemId}': {ex.Message}");
                         }
                         break;
 
                     case ItemCategory.Tool:
-                        var tool = ToolItemManager.GetToolByName(itemId);
-                        if (tool != null)
+                        try
                         {
-                            tool.Unlock(null, ToolItem.PopupFlags.None);
+                            var tool = ToolItemManager.GetToolByName(itemId);
+                            if (tool != null)
+                            {
+                                tool.Unlock(null, ToolItem.PopupFlags.None);
+                            }
+                            else
+                            {
+                                var data = playerData.GetToolData(itemId);
+                                data.IsUnlocked = true;
+                                playerData.SetToolData(itemId, data);
+                            }
                         }
-                        else if (PlayerData.instance != null)
+                        catch (Exception ex)
                         {
-                            var data = PlayerData.instance.GetToolData(itemId);
-                            data.IsUnlocked = true;
-                            PlayerData.instance.SetToolData(itemId, data);
+                            Logger.LogError($"[Coop] Failed to apply tool unlock '{itemId}': {ex.Message}");
                         }
                         break;
 
                     case ItemCategory.Ability:
                     case ItemCategory.KeyItem:
-                        var toolSkill = ToolItemManager.GetToolByName(itemId);
-                        if (toolSkill != null)
+                        try
                         {
-                            toolSkill.Unlock(null, ToolItem.PopupFlags.None);
+                            var toolSkill = ToolItemManager.GetToolByName(itemId);
+                            if (toolSkill != null)
+                            {
+                                toolSkill.Unlock(null, ToolItem.PopupFlags.None);
+                            }
+                            else
+                            {
+                                playerData.SetBool(itemId, true);
+                            }
                         }
-                        else if (PlayerData.instance != null)
+                        catch (Exception ex)
                         {
-                            PlayerData.instance.SetBool(itemId, true);
+                            Logger.LogError($"[Coop] Failed to apply ability unlock '{itemId}': {ex.Message}");
                         }
                         break;
                 }
             }
             catch (Exception ex)
             {
-                Logger.LogWarning($"[Coop] Failed applying remote item unlock for {itemId} ({category}): {ex.Message}");
+                Logger.LogError($"[Coop] Failed applying remote item unlock for {itemId} ({category}): {ex.Message}");
             }
             finally
             {
@@ -578,166 +646,317 @@ namespace SilksongCoop.Mod
 
             transport.OnPeerConnected += peer =>
             {
-                Logger.LogInfo($"[Coop] Peer connected: {peer}");
-                SessionState.SetConnected(peer);
-                MenuUI.SetStatusMessage($"Connected to {peer.DisplayName}! You are {(transport.IsHost ? "Host (Player 1)" : "Client (Player 2 - Blue)")}");
-
-                bool remoteIsPlayer2 = transport.IsHost;
-                CloneSpawner.SpawnRemotePlayer(peer, remoteIsPlayer2);
-
-                RefreshLocalVisuals(!transport.IsHost);
-
-                if (transport.IsHost)
+                try
                 {
-                    var pd = PlayerData.instance;
-                    if (pd != null)
+                    Logger.LogInfo($"[Coop] Peer connected: {peer}");
+                    SessionState?.SetConnected(peer);
+                    MenuUI?.SetStatusMessage($"Connected to {peer.DisplayName}! You are {(transport.IsHost ? "Host (Player 1)" : "Client (Player 2 - Blue)")}");
+
+                    if (CloneSpawner == null)
                     {
-                        VitalsSync.InitializeState(
-                            pd.health,
-                            pd.maxHealthBase,
-                            pd.silk,
-                            Math.Max(1, pd.silkMax / 9),
-                            pd.nailUpgrades,
-                            pd.geo,
-                            pd.ShellShards
-                        );
+                        Logger.LogWarning("[Coop] CloneSpawner is null, cannot spawn remote player");
+                        return;
                     }
-                    VitalsSync.BroadcastCurrentVitals();
-                    VitalsSync.BroadcastCurrentCurrency();
+
+                    bool remoteIsPlayer2 = transport.IsHost;
+                    CloneSpawner.SpawnRemotePlayer(peer, remoteIsPlayer2);
+
+                    RefreshLocalVisuals(!transport.IsHost);
+
+                    if (transport.IsHost && VitalsSync != null)
+                    {
+                        var pd = PlayerData.instance;
+                        if (pd != null)
+                        {
+                            VitalsSync.InitializeState(
+                                pd.health,
+                                pd.maxHealthBase,
+                                pd.silk,
+                                Math.Max(1, pd.silkMax / 9),
+                                pd.nailUpgrades,
+                                pd.geo,
+                                pd.ShellShards
+                            );
+                        }
+                        VitalsSync.BroadcastCurrentVitals();
+                        VitalsSync.BroadcastCurrentCurrency();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError($"[Coop] Exception in OnPeerConnected handler: {ex.Message}\n{ex.StackTrace}");
                 }
             };
 
             transport.OnPeerDisconnected += (peer, reason) =>
             {
-                Logger.LogInfo($"[Coop] Peer disconnected: {peer}, reason: {reason}");
-                SessionState.SetDisconnected(reason);
-                CloneSpawner.DespawnRemotePlayer(peer);
-                RefreshLocalVisuals(false);
+                try
+                {
+                    Logger.LogInfo($"[Coop] Peer disconnected: {peer}, reason: {reason}");
+                    SessionState?.SetDisconnected(reason);
+                    CloneSpawner?.DespawnRemotePlayer(peer);
+                    RefreshLocalVisuals(false);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError($"[Coop] Exception in OnPeerDisconnected handler: {ex.Message}\n{ex.StackTrace}");
+                }
             };
 
             transport.OnDataReceived += (peer, data, offset, length) =>
             {
-                SessionState.RecordReceived(length);
-
-                if (length >= PacketHeader.HeaderSize)
+                try
                 {
-                    try
+                    SessionState?.RecordReceived(length);
+
+                    if (length < PacketHeader.HeaderSize) return;
+
+                    var span = new ReadOnlySpan<byte>(data, offset, length);
+                    if (!PacketHeader.TryReadFrom(span, out var header)) return;
+
+                    var reader = new PacketReader(span);
+                    switch (header.PacketId)
                     {
-                        var span = new ReadOnlySpan<byte>(data, offset, length);
-                        if (PacketHeader.TryReadFrom(span, out var header))
-                        {
-                            var reader = new PacketReader(span);
-                            switch (header.PacketId)
-                            {
-                                case PacketType.TransformSync:
-                                    var trans = TransformSyncPacket.Deserialize(ref reader);
-                                    CloneSpawner.UpdateRemoteTransform(
-                                        peer,
-                                        trans.PositionX, trans.PositionY,
-                                        trans.VelocityX, trans.VelocityY,
-                                        trans.FacingDirection,
-                                        trans.StateFlags,
-                                        trans.AnimationClipHash,
-                                        trans.NormalizedTime,
-                                        header.Timestamp);
-                                    break;
+                        case PacketType.TransformSync:
+                            var trans = TransformSyncPacket.Deserialize(ref reader);
+                            CloneSpawner?.UpdateRemoteTransform(
+                                peer,
+                                trans.PositionX, trans.PositionY,
+                                trans.VelocityX, trans.VelocityY,
+                                trans.FacingDirection,
+                                trans.StateFlags,
+                                trans.AnimationClipHash,
+                                trans.NormalizedTime,
+                                header.Timestamp);
+                            break;
 
-                                case PacketType.ActionTrigger:
-                                    var action = ActionTriggerPacket.Deserialize(ref reader);
-                                    CloneSpawner.TriggerRemoteAction(peer, action.Action, (byte)action.Parameter);
-                                    break;
+                        case PacketType.ActionTrigger:
+                            var action = ActionTriggerPacket.Deserialize(ref reader);
+                            CloneSpawner?.TriggerRemoteAction(peer, action.Action, (byte)action.Parameter);
+                            break;
 
-                                case PacketType.VitalsSync:
-                                    var vitals = VitalsSyncPacket.Deserialize(ref reader);
-                                    VitalsSync.HandleVitalsPacket(peer, vitals);
-                                    break;
+                        case PacketType.VitalsSync:
+                            var vitals = VitalsSyncPacket.Deserialize(ref reader);
+                            VitalsSync?.HandleVitalsPacket(peer, vitals);
+                            break;
 
-                                case PacketType.CurrencySync:
-                                    var currency = CurrencySyncPacket.Deserialize(ref reader);
-                                    VitalsSync.HandleCurrencyPacket(peer, currency);
-                                    break;
+                        case PacketType.CurrencySync:
+                            var currency = CurrencySyncPacket.Deserialize(ref reader);
+                            VitalsSync?.HandleCurrencyPacket(peer, currency);
+                            break;
 
-                                case PacketType.PlayerDeath:
-                                    var death = DeathLifecyclePacket.Deserialize(ref reader);
-                                    DeathCoordinator.HandleDeathPacket(peer, death);
-                                    break;
+                        case PacketType.PlayerDeath:
+                            var death = DeathLifecyclePacket.Deserialize(ref reader);
+                            DeathCoordinator?.HandleDeathPacket(peer, death);
+                            break;
 
-                                case PacketType.ItemUnlockSync:
-                                    var item = ItemUnlockPacket.Deserialize(ref reader);
-                                    InventorySync.HandleItemUnlockPacket(peer, item);
-                                    break;
-                            }
-                        }
+                        case PacketType.ItemUnlockSync:
+                            var item = ItemUnlockPacket.Deserialize(ref reader);
+                            InventorySync?.HandleItemUnlockPacket(peer, item);
+                            break;
                     }
-                    catch (Exception ex)
-                    {
-                        Logger.LogWarning($"[Coop] Error processing packet from {peer}: {ex.Message}");
-                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning($"[Coop] Error processing packet from {peer}: {ex.Message}");
                 }
             };
         }
 
+        /// <summary>
+        /// Broadcasts the local hero's authoritative position, velocity, state flags and
+        /// animation state to the remote peer at the configured tick rate.
+        /// Without this the remote clone would spawn but never move, which is the
+        /// root cause of the "connected but partner is frozen/invisible" reports.
+        /// </summary>
+        private void BroadcastLocalTransform(float deltaTime)
+        {
+            if (ActiveTransport == null) return;
+            if (SessionState?.IsConnected != true) return;
+            if (!SessionState.RemotePeerId.HasValue) return;
+
+            // Do not stream transforms while we are spectating or during a team wipe;
+            // the local hero is hidden/disabled and its position is meaningless.
+            if (SessionState.Status == SessionStatus.Spectating || SessionState.Status == SessionStatus.TeamWipe)
+            {
+                return;
+            }
+
+            var hero = HeroController.instance;
+            if (hero == null || hero.gameObject == null) return;
+
+            var state = hero.cState;
+            if (state == null || state.dead || state.hazardDeath || state.hazardRespawning) return;
+
+            int tickHz = Math.Clamp(TickRateHzConfig?.Value ?? 30, 20, 60);
+            float interval = 1f / tickHz;
+            _transformSendAccumulator += deltaTime;
+            if (_transformSendAccumulator < interval) return;
+
+            // Cap catch-up so a long frame cannot produce a burst of packets.
+            _transformSendAccumulator = Math.Min(_transformSendAccumulator - interval, interval);
+
+            try
+            {
+                var position = hero.transform.position;
+
+                float velocityX = 0f;
+                float velocityY = 0f;
+                var body = hero.GetComponent<Rigidbody2D>();
+                if (body != null)
+                {
+                    Vector2 velocity = body.linearVelocity;
+                    velocityX = velocity.x;
+                    velocityY = velocity.y;
+                }
+
+                ushort flags = 0;
+                if (state.onGround) flags |= TransformSyncPacket.FlagGrounded;
+                if (state.dashing || state.airDashing || state.shadowDashing || state.superDashing)
+                    flags |= TransformSyncPacket.FlagDashing;
+                if (state.wallSliding) flags |= TransformSyncPacket.FlagWallSliding;
+                if (state.jumping || state.doubleJumping || state.wallJumping)
+                    flags |= TransformSyncPacket.FlagJumping;
+                if (state.falling) flags |= TransformSyncPacket.FlagFalling;
+                if (state.attacking) flags |= TransformSyncPacket.FlagAttacking;
+                if (state.invulnerable) flags |= TransformSyncPacket.FlagInvulnerable;
+                if (state.swimming) flags |= TransformSyncPacket.FlagSwimming;
+
+                int clipHash = 0;
+                ushort normalizedTime = 0;
+                var animator = hero.AnimCtrl?.animator;
+                var clip = animator?.CurrentClip;
+                if (clip != null)
+                {
+                    clipHash = AnimationClipHasher.ComputeHash(clip.name);
+                    float duration = clip.Duration;
+                    if (duration > 0f)
+                    {
+                        normalizedTime = AnimationClipHasher.EncodeNormalizedTime(animator!.ClipTimeSeconds / duration);
+                    }
+                }
+
+                _transformTick++;
+                var packet = new TransformSyncPacket
+                {
+                    // Session-relative milliseconds; the receiver remaps this to its own
+                    // local clock so interpolation is not tied to machine uptime.
+                    Header = new PacketHeader(PacketType.TransformSync, 0, _transformTick, (uint)(Time.timeAsDouble * 1000.0)),
+                    PositionX = position.x,
+                    PositionY = position.y,
+                    VelocityX = velocityX,
+                    VelocityY = velocityY,
+                    FacingDirection = (byte)(state.facingRight ? 1 : 0),
+                    StateFlags = flags,
+                    AnimationClipHash = clipHash,
+                    NormalizedTime = normalizedTime
+                };
+
+                Span<byte> buffer = stackalloc byte[64];
+                var writer = new PacketWriter(buffer);
+                packet.Serialize(ref writer);
+                ActiveTransport.Send(
+                    SessionState.RemotePeerId.Value,
+                    buffer.ToArray(),
+                    0,
+                    writer.Position,
+                    DeliveryMethod.Unreliable,
+                    0);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed broadcasting local transform: {ex.Message}");
+            }
+        }
+
         private void Update()
         {
-            // Always poll Steam transport for callbacks (lobby invites, session requests, etc.)
-            // even when UDP is the active data transport.
-            if (SteamTransport != null && ActiveTransport != SteamTransport)
+            try
             {
-                SteamTransport.PollEvents();
-            }
-            ActiveTransport?.PollEvents();
-
-            // Process pending Steam lobby join from command line
-            if (_pendingSteamLobbyJoin.HasValue && SteamTransport != null)
-            {
-                try
+                // Always poll Steam transport for callbacks (lobby invites, session requests, etc.)
+                // even when UDP is the active data transport.
+                if (SteamTransport != null && ActiveTransport != SteamTransport)
                 {
-                    SteamTransport.Connect(_pendingSteamLobbyJoin.Value.ToString());
-                    SetActiveTransport(SteamTransport);
-                    SessionState.SetConnecting(SteamTransport.LocalPeerId, _pendingSteamLobbyJoin.Value.ToString());
-                    MenuUI.SetStatusMessage($"Joining Steam Lobby {_pendingSteamLobbyJoin.Value}...");
-                    _pendingSteamLobbyJoin = null;
+                    SteamTransport.PollEvents();
                 }
-                catch (Exception ex)
+                ActiveTransport?.PollEvents();
+
+                // Process pending Steam lobby join from command line
+                if (_pendingSteamLobbyJoin.HasValue && SteamTransport != null)
                 {
-                    Logger.LogWarning($"[Coop] Failed to join pending Steam lobby: {ex.Message}");
-                    _pendingSteamLobbyJoin = null;
-                }
-            }
-
-            SessionState.AdvanceTick();
-
-            if (SessionState.IsConnected && SessionState.RemotePeerId.HasValue)
-            {
-                if (CloneSpawner.TryGetRemotePosition(SessionState.RemotePeerId.Value, out float posX, out float posY))
-                {
-                    DeathCoordinator.LastPartnerPosition = (posX, posY);
-
-                    // If spectating, tether camera target to remote partner position
-                    if (DeathCoordinator.CurrentState == DeathState.Spectating)
+                    try
                     {
-                        var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
-                        if (camTarget != null)
+                        SteamTransport.Connect(_pendingSteamLobbyJoin.Value.ToString());
+                        SetActiveTransport(SteamTransport);
+                        SessionState?.SetConnecting(SteamTransport.LocalPeerId, _pendingSteamLobbyJoin.Value.ToString());
+                        MenuUI?.SetStatusMessage($"Joining Steam Lobby {_pendingSteamLobbyJoin.Value}...");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogError($"[Coop] Failed to join pending Steam lobby: {ex.Message}");
+                    }
+                    finally
+                    {
+                        _pendingSteamLobbyJoin = null;
+                    }
+                }
+
+                SessionState?.AdvanceTick();
+
+                // Stream our own transform to the partner (this was missing entirely).
+                BroadcastLocalTransform(Time.deltaTime);
+
+                if (SessionState?.IsConnected == true && SessionState.RemotePeerId.HasValue)
+                {
+                    if (CloneSpawner != null && CloneSpawner.TryGetRemotePosition(SessionState.RemotePeerId.Value, out float posX, out float posY))
+                    {
+                        if (DeathCoordinator != null)
                         {
-                            var curPos = camTarget.transform.position;
-                            camTarget.transform.position = new Vector3(posX, posY, curPos.z);
+                            DeathCoordinator.LastPartnerPosition = (posX, posY);
+
+                            // If spectating, tether camera target to remote partner position
+                            if (DeathCoordinator.CurrentState == DeathState.Spectating)
+                            {
+                                var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
+                                if (camTarget != null)
+                                {
+                                    var curPos = camTarget.transform.position;
+                                    camTarget.transform.position = new Vector3(posX, posY, curPos.z);
+                                }
+                            }
                         }
                     }
                 }
-            }
 
-            DeathCoordinator.UpdateTick(Time.deltaTime);
+                DeathCoordinator?.UpdateTick(Time.deltaTime);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"[Coop] Exception in Update: {ex.Message}\n{ex.StackTrace}");
+            }
         }
 
         private void OnDestroy()
         {
-            // Disconnect both transports
-            ActiveTransport?.Disconnect();
-            if (SteamTransport != null && ActiveTransport != SteamTransport)
+            try
             {
-                SteamTransport.Disconnect();
+                // Disconnect both transports
+                ActiveTransport?.Disconnect();
+                if (SteamTransport != null && ActiveTransport != SteamTransport)
+                {
+                    SteamTransport.Disconnect();
+                }
+                
+                _harmony?.UnpatchSelf();
             }
-            _harmony?.UnpatchSelf();
+            catch (Exception ex)
+            {
+                Logger.LogError($"[Coop] Exception in OnDestroy: {ex.Message}");
+            }
+            finally
+            {
+                Instance = null;
+            }
         }
     }
 }

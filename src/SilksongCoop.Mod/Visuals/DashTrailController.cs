@@ -91,64 +91,82 @@ namespace SilksongCoop.Mod.Visuals
 
         private void EmitGhostAfterImage()
         {
-            if (_sourceSprite == null || _sourceSprite.Collection == null) return;
-
-            // Try to reuse a pooled ghost instance
-            DashGhostInstance ghost;
-            GameObject ghostGo;
-
-            if (_ghostPool.Count > 0)
+            try
             {
-                ghost = _ghostPool.Dequeue();
-                ghostGo = ghost.gameObject;
-                ghostGo.SetActive(true);
-            }
-            else
-            {
-                ghostGo = new GameObject($"DashGhost_{_isPlayer2}_{Time.frameCount}");
-                ghost = ghostGo.AddComponent<DashGhostInstance>();
-            }
+                if (_sourceSprite == null || _sourceSprite.Collection == null) return;
 
-            ghostGo.transform.position = transform.position;
-            ghostGo.transform.rotation = transform.rotation;
-            ghostGo.transform.localScale = transform.localScale;
+                // Try to reuse a pooled ghost instance
+                DashGhostInstance ghost;
+                GameObject ghostGo;
 
-            _lifecycle.GetTrailColor(_isPlayer2, out float r, out float g, out float b, out float a);
-            var trailColor = new Color(r, g, b, a);
-
-            var ghostSprite = ghostGo.GetComponent<tk2dSprite>();
-            if (ghostSprite == null)
-            {
-                ghostSprite = tk2dSprite.AddComponent(ghostGo, _sourceSprite.Collection, _sourceSprite.spriteId);
-            }
-            else
-            {
-                ghostSprite.SetSprite(_sourceSprite.Collection, _sourceSprite.spriteId);
-            }
-
-            if (ghostSprite != null)
-            {
-                ghostSprite.color = trailColor;
-                ghostSprite.FlipX = _sourceSprite.FlipX;
-                ghostSprite.FlipY = _sourceSprite.FlipY;
-
-                if (_isPlayer2)
+                if (_ghostPool.Count > 0)
                 {
-                    ghostSprite.EnableKeyword(PaletteSwapMath.KeywordHueShift);
-                    ghostSprite.SetFloat(PaletteSwapController.GetHueShiftPropertyId(), PaletteSwapMath.Player2HueShift);
+                    ghost = _ghostPool.Dequeue();
+                    ghostGo = ghost.gameObject;
+                    if (ghostGo == null) return;
+                    ghostGo.SetActive(true);
+                }
+                else
+                {
+                    ghostGo = new GameObject($"DashGhost_{_isPlayer2}_{Time.frameCount}");
+                    ghost = ghostGo.AddComponent<DashGhostInstance>();
+                }
+
+                ghostGo.transform.position = transform.position;
+                ghostGo.transform.rotation = transform.rotation;
+                ghostGo.transform.localScale = transform.localScale;
+
+                _lifecycle.GetTrailColor(_isPlayer2, out float r, out float g, out float b, out float a);
+                var trailColor = new Color(r, g, b, a);
+
+                var ghostSprite = ghostGo.GetComponent<tk2dSprite>();
+                if (ghostSprite == null)
+                {
+                    ghostSprite = tk2dSprite.AddComponent(ghostGo, _sourceSprite.Collection, _sourceSprite.spriteId);
+                }
+                else
+                {
+                    ghostSprite.SetSprite(_sourceSprite.Collection, _sourceSprite.spriteId);
+                }
+
+                if (ghostSprite != null)
+                {
+                    ghostSprite.color = trailColor;
+                    ghostSprite.FlipX = _sourceSprite.FlipX;
+                    ghostSprite.FlipY = _sourceSprite.FlipY;
+
+                    if (_isPlayer2)
+                    {
+                        ghostSprite.EnableKeyword(PaletteSwapMath.KeywordHueShift);
+                        ghostSprite.SetFloat(PaletteSwapController.GetHueShiftPropertyId(), PaletteSwapMath.Player2HueShift);
+                    }
+                }
+
+                ghost.Reset(ghostSprite, trailColor, GhostFadeDuration);
+
+                // Start coroutine to return ghost to pool after fade completes
+                if (this != null && gameObject != null)
+                {
+                    StartCoroutine(ReturnGhostToPool(ghost, GhostFadeDuration + 0.1f));
                 }
             }
-
-            ghost.Reset(ghostSprite, trailColor, GhostFadeDuration);
-
-            // Start coroutine to return ghost to pool after fade completes
-            StartCoroutine(ReturnGhostToPool(ghost, GhostFadeDuration + 0.1f));
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[DashTrailController] EmitGhostAfterImage error: {ex.Message}");
+            }
         }
 
         private IEnumerator ReturnGhostToPool(DashGhostInstance ghost, float delay)
         {
+            // Note: yield cannot be used in try-catch blocks, so we use null checks instead
             yield return new WaitForSeconds(delay);
-            if (_ghostPool.Count < MaxPoolSize)
+            
+            if (ghost == null || ghost.gameObject == null)
+            {
+                yield break;
+            }
+            
+            if (_ghostPool != null && _ghostPool.Count < MaxPoolSize)
             {
                 ghost.gameObject.SetActive(false);
                 _ghostPool.Enqueue(ghost);

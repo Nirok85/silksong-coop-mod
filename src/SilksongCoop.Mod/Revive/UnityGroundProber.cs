@@ -40,76 +40,86 @@ namespace SilksongCoop.Mod.Revive
 
         public bool TryFindSafeGround(float partnerX, float partnerY, out float safeX, out float safeY)
         {
-            // Determine hero collider extents
-            float extentsY = 0.8f;
-            float offsetY = 0f;
-            var hero = HeroController.instance;
-            if (hero != null)
+            try
             {
-                var col = hero.GetComponent<Collider2D>();
-                if (col != null)
+                // Determine hero collider extents
+                float extentsY = 0.8f;
+                float offsetY = 0f;
+                var hero = HeroController.instance;
+                if (hero != null)
                 {
-                    extentsY = col.bounds.extents.y;
-                    offsetY = col.offset.y;
-                }
-            }
-
-            // Probe candidate offsets in priority sequence
-            foreach (float lateralOffset in SafeGroundSolver.CandidateOffsets)
-            {
-                Vector2 rayOrigin = new Vector2(partnerX + lateralOffset, partnerY + SafeGroundSolver.ProbeRayOriginYOffset);
-                int hitCount = Physics2D.RaycastNonAlloc(rayOrigin, Vector2.down, _hitBuffer, SafeGroundSolver.ProbeDistance, GroundLayerMask);
-
-                RaycastHit2D closestHit = default;
-                float closestDist = float.MaxValue;
-                bool foundHit = false;
-
-                for (int i = 0; i < hitCount; i++)
-                {
-                    var hit = _hitBuffer[i];
-                    if (hit.collider == null) continue;
-
-                    // Ensure surface slope is climbable (<= 45 degrees)
-                    if (hit.normal.y < SafeGroundSolver.MinGroundNormalY) continue;
-
-                    // Screen against environmental hazards
-                    if (IsHazardCollider(hit.collider)) continue;
-
-                    if (hit.distance < closestDist)
+                    var col = hero.GetComponent<Collider2D>();
+                    if (col != null)
                     {
-                        closestDist = hit.distance;
-                        closestHit = hit;
-                        foundHit = true;
+                        extentsY = col.bounds.extents.y;
+                        offsetY = col.offset.y;
                     }
                 }
 
-                if (foundHit)
+                // Probe candidate offsets in priority sequence
+                foreach (float lateralOffset in SafeGroundSolver.CandidateOffsets)
                 {
-                    float candidateX = closestHit.point.x;
-                    float candidateY = closestHit.point.y + extentsY - offsetY + 0.01f;
+                    Vector2 rayOrigin = new Vector2(partnerX + lateralOffset, partnerY + SafeGroundSolver.ProbeRayOriginYOffset);
+                    int hitCount = Physics2D.RaycastNonAlloc(rayOrigin, Vector2.down, _hitBuffer, SafeGroundSolver.ProbeDistance, GroundLayerMask);
 
-                    // Clearance validation: verify candidate point doesn't intersect lethal hazard triggers
-                    if (IsAreaFreeOfHazards(candidateX, candidateY, extentsY))
+                    RaycastHit2D closestHit = default;
+                    float closestDist = float.MaxValue;
+                    bool foundHit = false;
+
+                    for (int i = 0; i < hitCount; i++)
                     {
-                        safeX = candidateX;
-                        safeY = candidateY;
-                        return true;
+                        var hit = _hitBuffer[i];
+                        if (hit.collider == null) continue;
+
+                        // Ensure surface slope is climbable (<= 45 degrees)
+                        if (hit.normal.y < SafeGroundSolver.MinGroundNormalY) continue;
+
+                        // Screen against environmental hazards
+                        if (IsHazardCollider(hit.collider)) continue;
+
+                        if (hit.distance < closestDist)
+                        {
+                            closestDist = hit.distance;
+                            closestHit = hit;
+                            foundHit = true;
+                        }
+                    }
+
+                    if (foundHit)
+                    {
+                        float candidateX = closestHit.point.x;
+                        float candidateY = closestHit.point.y + extentsY - offsetY + 0.01f;
+
+                        // Clearance validation: verify candidate point doesn't intersect lethal hazard triggers
+                        if (IsAreaFreeOfHazards(candidateX, candidateY, extentsY))
+                        {
+                            safeX = candidateX;
+                            safeY = candidateY;
+                            return true;
+                        }
                     }
                 }
-            }
 
-            // Fallback: PlayerData hazardRespawnLocation
-            var pd = PlayerData.instance;
-            if (pd != null && pd.hazardRespawnLocation != Vector3.zero)
+                // Fallback: PlayerData hazardRespawnLocation
+                var pd = PlayerData.instance;
+                if (pd != null && pd.hazardRespawnLocation != Vector3.zero)
+                {
+                    safeX = pd.hazardRespawnLocation.x;
+                    safeY = pd.hazardRespawnLocation.y;
+                    return true;
+                }
+
+                safeX = partnerX;
+                safeY = partnerY + 0.5f;
+                return false;
+            }
+            catch (Exception ex)
             {
-                safeX = pd.hazardRespawnLocation.x;
-                safeY = pd.hazardRespawnLocation.y;
-                return true;
+                SilksongCoopPlugin.LogWarn($"[UnityGroundProber] TryFindSafeGround error: {ex.Message}");
+                safeX = partnerX;
+                safeY = partnerY + 0.5f;
+                return false;
             }
-
-            safeX = partnerX;
-            safeY = partnerY + 0.5f;
-            return false;
         }
 
         public int CalculateReviveHealth(int maxHealth)

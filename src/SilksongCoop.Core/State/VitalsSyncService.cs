@@ -188,149 +188,177 @@ namespace SilksongCoop.Core.State
 
         public void HandleVitalsPacket(NetworkPeerId sender, VitalsSyncPacket packet)
         {
-            // Update remote player observation (for HUD display)
-            OnRemoteVitalsObserved?.Invoke(packet.CurrentHealth, packet.CurrentSilk);
-
-            // Synchronize progression upgrades if remote has acquired a higher tier
-            bool hpChanged, silkChanged, needleChanged;
-            int newMaxHp, newMaxSilk, newNeedleLevel;
-            lock (_stateLock)
+            try
             {
-                hpChanged = packet.MaxHealth > SharedMaxHealth;
-                silkChanged = packet.MaxSilkSpools > SharedMaxSilkSpools;
-                needleChanged = packet.NeedleUpgradeLevel > SharedNeedleUpgradeLevel;
-                if (hpChanged) SharedMaxHealth = packet.MaxHealth;
-                if (silkChanged) SharedMaxSilkSpools = packet.MaxSilkSpools;
-                if (needleChanged) SharedNeedleUpgradeLevel = packet.NeedleUpgradeLevel;
-                newMaxHp = SharedMaxHealth;
-                newMaxSilk = SharedMaxSilkSpools;
-                newNeedleLevel = SharedNeedleUpgradeLevel;
+                // Update remote player observation (for HUD display)
+                OnRemoteVitalsObserved?.Invoke(packet.CurrentHealth, packet.CurrentSilk);
+
+                // Synchronize progression upgrades if remote has acquired a higher tier
+                bool hpChanged, silkChanged, needleChanged;
+                int newMaxHp, newMaxSilk, newNeedleLevel;
+                lock (_stateLock)
+                {
+                    hpChanged = packet.MaxHealth > SharedMaxHealth;
+                    silkChanged = packet.MaxSilkSpools > SharedMaxSilkSpools;
+                    needleChanged = packet.NeedleUpgradeLevel > SharedNeedleUpgradeLevel;
+                    if (hpChanged) SharedMaxHealth = packet.MaxHealth;
+                    if (silkChanged) SharedMaxSilkSpools = packet.MaxSilkSpools;
+                    if (needleChanged) SharedNeedleUpgradeLevel = packet.NeedleUpgradeLevel;
+                    newMaxHp = SharedMaxHealth;
+                    newMaxSilk = SharedMaxSilkSpools;
+                    newNeedleLevel = SharedNeedleUpgradeLevel;
+                }
+                if (hpChanged) OnSharedMaxHealthChanged?.Invoke(newMaxHp);
+                if (silkChanged) OnSharedMaxSilkChanged?.Invoke(newMaxSilk);
+                if (needleChanged) OnSharedNeedleUpgradeChanged?.Invoke(newNeedleLevel);
             }
-            if (hpChanged) OnSharedMaxHealthChanged?.Invoke(newMaxHp);
-            if (silkChanged) OnSharedMaxSilkChanged?.Invoke(newMaxSilk);
-            if (needleChanged) OnSharedNeedleUpgradeChanged?.Invoke(newNeedleLevel);
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[VitalsSyncService] HandleVitalsPacket error: {ex.Message}");
+            }
         }
 
         public void HandleCurrencyPacket(NetworkPeerId sender, CurrencySyncPacket packet)
         {
-            if (packet.TransactionId == Guid.Empty) return;
-
-            int delta = packet.DeltaAmount;
-            int updatedWallet;
-            lock (_transactionLock)
+            try
             {
-                if (!_processedTransactions.Add(packet.TransactionId))
-                {
-                    return; // Duplicate transaction, ignore
-                }
+                if (packet.TransactionId == Guid.Empty) return;
 
-                RecordTransactionOrder(packet.TransactionId);
-
-                if (packet.Currency == CurrencyType.Rosaries)
+                int delta = packet.DeltaAmount;
+                int updatedWallet;
+                lock (_transactionLock)
                 {
-                    if (delta == 0)
+                    if (!_processedTransactions.Add(packet.TransactionId))
                     {
-                        // Initial sync: set absolute value
-                        SharedRosaries = Math.Max(0, packet.TotalWalletAmount);
+                        return; // Duplicate transaction, ignore
+                    }
+
+                    RecordTransactionOrder(packet.TransactionId);
+
+                    if (packet.Currency == CurrencyType.Rosaries)
+                    {
+                        if (delta == 0)
+                        {
+                            // Initial sync: set absolute value
+                            SharedRosaries = Math.Max(0, packet.TotalWalletAmount);
+                        }
+                        else
+                        {
+                            SharedRosaries = Math.Max(0, SharedRosaries + delta);
+                        }
+                        updatedWallet = SharedRosaries;
                     }
                     else
                     {
-                        SharedRosaries = Math.Max(0, SharedRosaries + delta);
+                        if (delta == 0)
+                        {
+                            // Initial sync: set absolute value
+                            SharedShellShards = Math.Max(0, packet.TotalWalletAmount);
+                        }
+                        else
+                        {
+                            SharedShellShards = Math.Max(0, SharedShellShards + delta);
+                        }
+                        updatedWallet = SharedShellShards;
                     }
-                    updatedWallet = SharedRosaries;
                 }
-                else
-                {
-                    if (delta == 0)
-                    {
-                        // Initial sync: set absolute value
-                        SharedShellShards = Math.Max(0, packet.TotalWalletAmount);
-                    }
-                    else
-                    {
-                        SharedShellShards = Math.Max(0, SharedShellShards + delta);
-                    }
-                    updatedWallet = SharedShellShards;
-                }
+
+                OnSharedCurrencyChanged?.Invoke(packet.Currency, delta, updatedWallet);
             }
-
-            OnSharedCurrencyChanged?.Invoke(packet.Currency, delta, updatedWallet);
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[VitalsSyncService] HandleCurrencyPacket error: {ex.Message}");
+            }
         }
 
         public void BroadcastCurrentVitals()
         {
-            int health, silk, maxHp, maxSilk, needleLevel;
-            lock (_stateLock)
+            try
             {
-                health = LocalHealth;
-                silk = LocalSilk;
-                maxHp = SharedMaxHealth;
-                maxSilk = SharedMaxSilkSpools;
-                needleLevel = SharedNeedleUpgradeLevel;
-            }
-            var packet = new VitalsSyncPacket
-            {
-                Header = new PacketHeader(PacketType.VitalsSync, 2, 0, (uint)Environment.TickCount),
-                CurrentHealth = (byte)Math.Clamp(health, 0, 255),
-                CurrentSilk = (byte)Math.Clamp(silk, 0, 255),
-                MaxHealth = (byte)Math.Clamp(maxHp, 0, 255),
-                MaxSilkSpools = (byte)Math.Clamp(maxSilk, 0, 255),
-                NeedleUpgradeLevel = (byte)Math.Clamp(needleLevel, 0, 255)
-            };
+                int health, silk, maxHp, maxSilk, needleLevel;
+                lock (_stateLock)
+                {
+                    health = LocalHealth;
+                    silk = LocalSilk;
+                    maxHp = SharedMaxHealth;
+                    maxSilk = SharedMaxSilkSpools;
+                    needleLevel = SharedNeedleUpgradeLevel;
+                }
+                var packet = new VitalsSyncPacket
+                {
+                    Header = new PacketHeader(PacketType.VitalsSync, 2, 0, (uint)Environment.TickCount),
+                    CurrentHealth = (byte)Math.Clamp(health, 0, 255),
+                    CurrentSilk = (byte)Math.Clamp(silk, 0, 255),
+                    MaxHealth = (byte)Math.Clamp(maxHp, 0, 255),
+                    MaxSilkSpools = (byte)Math.Clamp(maxSilk, 0, 255),
+                    NeedleUpgradeLevel = (byte)Math.Clamp(needleLevel, 0, 255)
+                };
 
-            OnOutgoingVitalsBroadcast?.Invoke(packet);
+                OnOutgoingVitalsBroadcast?.Invoke(packet);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[VitalsSyncService] BroadcastCurrentVitals error: {ex.Message}");
+            }
         }
 
         public void BroadcastCurrentCurrency()
         {
-            int currentRosaries;
-            int currentShards;
-            lock (_transactionLock)
+            try
             {
-                currentRosaries = SharedRosaries;
-                currentShards = SharedShellShards;
-            }
-
-            if (currentRosaries > 0)
-            {
-                var tx = Guid.NewGuid();
+                int currentRosaries;
+                int currentShards;
                 lock (_transactionLock)
                 {
-                    _processedTransactions.Add(tx);
-                    RecordTransactionOrder(tx);
+                    currentRosaries = SharedRosaries;
+                    currentShards = SharedShellShards;
                 }
 
-                var packet = new CurrencySyncPacket
+                if (currentRosaries > 0)
                 {
-                    Header = new PacketHeader(PacketType.CurrencySync, 3, 0, (uint)Environment.TickCount),
-                    Currency = CurrencyType.Rosaries,
-                    TotalWalletAmount = currentRosaries,
-                    DeltaAmount = 0, // Initial sync: delta 0 to avoid double-counting on receiver
-                    TransactionId = tx,
-                    PickupUniqueId = 0 // Fix: Initialize field to prevent undefined behavior
-                };
-                OnOutgoingCurrencyBroadcast?.Invoke(packet);
+                    var tx = Guid.NewGuid();
+                    lock (_transactionLock)
+                    {
+                        _processedTransactions.Add(tx);
+                        RecordTransactionOrder(tx);
+                    }
+
+                    var packet = new CurrencySyncPacket
+                    {
+                        Header = new PacketHeader(PacketType.CurrencySync, 3, 0, (uint)Environment.TickCount),
+                        Currency = CurrencyType.Rosaries,
+                        TotalWalletAmount = currentRosaries,
+                        DeltaAmount = 0, // Initial sync: delta 0 to avoid double-counting on receiver
+                        TransactionId = tx,
+                        PickupUniqueId = 0 // Fix: Initialize field to prevent undefined behavior
+                    };
+                    OnOutgoingCurrencyBroadcast?.Invoke(packet);
+                }
+
+                if (currentShards > 0)
+                {
+                    var tx = Guid.NewGuid();
+                    lock (_transactionLock)
+                    {
+                        _processedTransactions.Add(tx);
+                        RecordTransactionOrder(tx);
+                    }
+
+                    var packet = new CurrencySyncPacket
+                    {
+                        Header = new PacketHeader(PacketType.CurrencySync, 3, 0, (uint)Environment.TickCount),
+                        Currency = CurrencyType.ShellShards,
+                        TotalWalletAmount = currentShards,
+                        DeltaAmount = 0, // Initial sync: delta 0 to avoid double-counting on receiver
+                        TransactionId = tx,
+                        PickupUniqueId = 0 // Fix: Initialize field to prevent undefined behavior
+                    };
+                    OnOutgoingCurrencyBroadcast?.Invoke(packet);
+                }
             }
-
-            if (currentShards > 0)
+            catch (Exception ex)
             {
-                var tx = Guid.NewGuid();
-                lock (_transactionLock)
-                {
-                    _processedTransactions.Add(tx);
-                    RecordTransactionOrder(tx);
-                }
-
-                var packet = new CurrencySyncPacket
-                {
-                    Header = new PacketHeader(PacketType.CurrencySync, 3, 0, (uint)Environment.TickCount),
-                    Currency = CurrencyType.ShellShards,
-                    TotalWalletAmount = currentShards,
-                    DeltaAmount = 0, // Initial sync: delta 0 to avoid double-counting on receiver
-                    TransactionId = tx,
-                    PickupUniqueId = 0 // Fix: Initialize field to prevent undefined behavior
-                };
-                OnOutgoingCurrencyBroadcast?.Invoke(packet);
+                System.Diagnostics.Debug.WriteLine($"[VitalsSyncService] BroadcastCurrentCurrency error: {ex.Message}");
             }
         }
 

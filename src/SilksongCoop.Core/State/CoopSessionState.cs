@@ -92,12 +92,10 @@ namespace SilksongCoop.Core.State
 
         public void SetSpectating()
         {
-            SessionStatus old;
-            bool connected;
+            SessionStatus old = Status;
             lock (_lock)
             {
-                connected = IsConnected;
-                if (!connected) return;
+                if (!IsConnected) return;
                 old = Status;
                 Status = SessionStatus.Spectating;
             }
@@ -106,12 +104,10 @@ namespace SilksongCoop.Core.State
 
         public void SetTeamWipe()
         {
-            SessionStatus old;
-            bool connected;
+            SessionStatus old = Status;
             lock (_lock)
             {
-                connected = IsConnected;
-                if (!connected) return;
+                if (!IsConnected) return;
                 old = Status;
                 Status = SessionStatus.TeamWipe;
             }
@@ -120,12 +116,10 @@ namespace SilksongCoop.Core.State
 
         public void ReturnToActive()
         {
-            SessionStatus old;
-            bool connected;
+            SessionStatus old = Status;
             lock (_lock)
             {
-                connected = IsConnected;
-                if (!connected) return;
+                if (!IsConnected) return;
                 old = Status;
                 Status = SessionStatus.Connected;
             }
