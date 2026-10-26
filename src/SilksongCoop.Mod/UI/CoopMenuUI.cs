@@ -22,6 +22,7 @@ namespace SilksongCoop.Mod.UI
         private Rect _windowRect = new Rect(40, 40, 420, 480);
         private string _inputAddressOrCode = "";
         private string _lastConnectionTarget = "";
+        private string _currentHostAddress = ""; // IP:port for current hosting session
         private string _statusMessage = "Ready. Press F10 to toggle this menu.";
         private int _windowId; // Fix: Use unique window ID per instance
 
@@ -83,10 +84,9 @@ namespace SilksongCoop.Mod.UI
             }
             else if (_sessionState != null && _sessionState.Status == SessionStatus.Hosting)
             {
-                string? code = _sessionState.CurrentRoomCode;
-                if (!string.IsNullOrEmpty(code) && code != "Steam-Lobby")
+                if (!string.IsNullOrEmpty(_currentHostAddress))
                 {
-                    watermark = $"[F10] Co-op: Hosting — Code: {code}";
+                    watermark = $"[F10] Co-op: Hosting — Address: {_currentHostAddress}";
                 }
                 else
                 {
@@ -216,24 +216,26 @@ namespace SilksongCoop.Mod.UI
 
             if (_sessionState == null || !_sessionState.IsConnected)
             {
-                // Show room code if currently hosting
-                if (_sessionState != null && _sessionState.Status == SessionStatus.Hosting && !string.IsNullOrEmpty(_sessionState.CurrentRoomCode) && _sessionState.CurrentRoomCode != "Steam-Lobby")
+                // Show IP:port if currently hosting UDP
+                if (_sessionState != null && _sessionState.Status == SessionStatus.Hosting && !string.IsNullOrEmpty(_currentHostAddress))
                 {
                     GUILayout.BeginHorizontal();
-                    GUILayout.Label($"<b>Room Code:</b> {_sessionState.CurrentRoomCode}");
+                    GUILayout.Label($"<b>Your Address:</b> {_currentHostAddress}");
                     if (GUILayout.Button("Copy", GUILayout.Width(60)))
                     {
-                        GUIUtility.systemCopyBuffer = _sessionState.CurrentRoomCode;
-                        _statusMessage = "Room code copied to clipboard!";
+                        GUIUtility.systemCopyBuffer = _currentHostAddress;
+                        _statusMessage = "Address copied to clipboard!";
                     }
                     GUILayout.EndHorizontal();
+                    GUILayout.Space(5);
+                    GUILayout.Label("<color=#AAAAAA><i>Share this address with your partner</i></color>");
                     GUILayout.Space(10);
                 }
 
                 // HOST SECTION
                 GUILayout.Label("<b>HOST A SESSION</b>");
                 GUILayout.BeginHorizontal();
-                if (GUILayout.Button("Host Direct UDP (Room Code)", GUILayout.Height(30)))
+                if (GUILayout.Button("Host UDP (Direct IP)", GUILayout.Height(30)))
                 {
                     HostUdpSession();
                 }
@@ -248,12 +250,12 @@ namespace SilksongCoop.Mod.UI
                 // JOIN SECTION
                 GUILayout.Label("<b>JOIN A SESSION</b>");
                 GUILayout.BeginHorizontal();
-                GUILayout.Label("Code / IP:", GUILayout.Width(70));
+                GUILayout.Label("IP:port or Room Code:", GUILayout.Width(140));
                 _inputAddressOrCode = GUILayout.TextField(_inputAddressOrCode);
                 GUILayout.EndHorizontal();
 
                 GUILayout.BeginHorizontal();
-                if (GUILayout.Button("Join via Room Code / UDP", GUILayout.Height(30)))
+                if (GUILayout.Button("Join via IP / Room Code", GUILayout.Height(30)))
                 {
                     JoinUdpSession(_inputAddressOrCode);
                 }
@@ -266,14 +268,14 @@ namespace SilksongCoop.Mod.UI
             else
             {
                 // CONNECTED SESSION CONTROLS
-                if (!string.IsNullOrEmpty(_sessionState.CurrentRoomCode) && _sessionState.CurrentRoomCode != "Steam-Lobby")
+                if (!string.IsNullOrEmpty(_currentHostAddress))
                 {
                     GUILayout.BeginHorizontal();
-                    GUILayout.Label($"<b>Room Code:</b> {_sessionState.CurrentRoomCode}");
+                    GUILayout.Label($"<b>Your Address:</b> {_currentHostAddress}");
                     if (GUILayout.Button("Copy", GUILayout.Width(60)))
                     {
-                        GUIUtility.systemCopyBuffer = _sessionState.CurrentRoomCode;
-                        _statusMessage = "Room code copied to clipboard!";
+                        GUIUtility.systemCopyBuffer = _currentHostAddress;
+                        _statusMessage = "Address copied to clipboard!";
                     }
                     GUILayout.EndHorizontal();
                 }
@@ -367,6 +369,7 @@ namespace SilksongCoop.Mod.UI
 
                 // Fix: Detect actual local IP address instead of hardcoding localhost
                 string localIp = GetLocalIpAddress();
+                _currentHostAddress = $"{localIp}:{udpPort}"; // IP:port for easy copy
                 string code = RoomCodeCodec.Encode(localIp, udpPort);
 
                 _sessionState?.SetHosting(_udpTransport.LocalPeerId, code);
@@ -375,9 +378,9 @@ namespace SilksongCoop.Mod.UI
                 plugin.SetActiveTransport(_udpTransport);
                 SilksongCoopPlugin.LogWarn($"[Coop] Active transport set to UDP for hosting on port {udpPort}");
 
-                // Automatically copy the room code to the clipboard so the host can share it
-                GUIUtility.systemCopyBuffer = code;
-                _statusMessage = $"Hosting UDP on port {udpPort}. Room code copied to clipboard: {code}";
+                // Automatically copy IP:port to clipboard for easy sharing (Radmin VPN, LAN, etc.)
+                GUIUtility.systemCopyBuffer = _currentHostAddress;
+                _statusMessage = $"Hosting UDP. Address copied to clipboard: {_currentHostAddress}";
             }
             catch (Exception ex)
             {
@@ -479,7 +482,7 @@ namespace SilksongCoop.Mod.UI
             {
                 if (string.IsNullOrWhiteSpace(addressOrCode))
                 {
-                    _statusMessage = "Please enter a valid room code (SK-XXXX-XXXX) or IP:Port.";
+                    _statusMessage = "Please enter IP:port (e.g., 192.168.1.5:7777) or Room Code";
                     return;
                 }
 
@@ -499,15 +502,24 @@ namespace SilksongCoop.Mod.UI
                 }
 
                 _currentTransport = _udpTransport;
-                _udpTransport.Connect(addressOrCode.Trim());
-                _lastConnectionTarget = addressOrCode.Trim();
+                
+                // Auto-append default port if only IP is provided
+                string connectAddress = addressOrCode.Trim();
+                if (!connectAddress.Contains(":") && !connectAddress.StartsWith("SK-"))
+                {
+                    int defaultPort = plugin.DefaultUdpPortConfig?.Value ?? 7777;
+                    connectAddress = $"{connectAddress}:{defaultPort}";
+                }
+                
+                _udpTransport.Connect(connectAddress);
+                _lastConnectionTarget = connectAddress;
 
                 // CRITICAL FIX: Set active transport so plugin polls this transport
                 plugin.SetActiveTransport(_udpTransport);
-                SilksongCoopPlugin.LogWarn($"[Coop] Active transport set to UDP for joining {addressOrCode}");
+                SilksongCoopPlugin.LogWarn($"[Coop] Active transport set to UDP for joining {connectAddress}");
 
-                _sessionState?.SetConnecting(_udpTransport.LocalPeerId, addressOrCode);
-                _statusMessage = $"Connecting to {addressOrCode}...";
+                _sessionState?.SetConnecting(_udpTransport.LocalPeerId, connectAddress);
+                _statusMessage = $"Connecting to {connectAddress}...";
             }
             catch (Exception ex)
             {
