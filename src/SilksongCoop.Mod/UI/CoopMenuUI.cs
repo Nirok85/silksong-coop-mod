@@ -2,6 +2,7 @@ using System;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.State;
 using SilksongCoop.Mod.Networking;
+using SilksongCoop.Mod.Settings;
 using UnityEngine;
 
 namespace SilksongCoop.Mod.UI
@@ -20,6 +21,8 @@ namespace SilksongCoop.Mod.UI
         private CoopSessionState? _sessionState;
         private SteamP2PTransport? _steamTransport;
         private LiteNetLibTransport? _udpTransport;
+        private KeybindManager? _keybinds;
+        private QualityPresetManager? _qualityPresets;
         private GUISkin? _skin;
 
         private GUISkin Skin => _skin ?? throw new InvalidOperationException("Skin not initialized");
@@ -67,11 +70,13 @@ namespace SilksongCoop.Mod.UI
             _windowId = 9842 + UnityEngine.Random.Range(0, 1000);
         }
 
-        public void Initialize(CoopSessionState sessionState, SteamP2PTransport? steamTransport, LiteNetLibTransport? udpTransport)
+        public void Initialize(CoopSessionState sessionState, SteamP2PTransport? steamTransport, LiteNetLibTransport? udpTransport, KeybindManager? keybinds = null, QualityPresetManager? qualityPresets = null)
         {
             _sessionState = sessionState;
             _steamTransport = steamTransport;
             _udpTransport = udpTransport;
+            _keybinds = keybinds;
+            _qualityPresets = qualityPresets;
         }
 
         public void SetStatusMessage(string message)
@@ -81,7 +86,13 @@ namespace SilksongCoop.Mod.UI
 
         private void Update()
         {
-            if (Input.GetKeyDown(KeyCode.F10))
+            // Toggle menu using configurable keybind
+            if (_keybinds != null && _keybinds.IsKeyDown(KeybindManager.ToggleMenu))
+            {
+                IsVisible = !IsVisible;
+            }
+            // Fallback to F10 if keybinds not initialized
+            else if (_keybinds == null && Input.GetKeyDown(KeyCode.F10))
             {
                 IsVisible = !IsVisible;
             }

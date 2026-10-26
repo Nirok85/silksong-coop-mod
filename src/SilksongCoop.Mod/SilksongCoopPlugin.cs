@@ -13,6 +13,7 @@ using SilksongCoop.Mod.Clones;
 using SilksongCoop.Mod.Hooks;
 using SilksongCoop.Mod.Networking;
 using SilksongCoop.Mod.Revive;
+using SilksongCoop.Mod.Settings;
 using SilksongCoop.Mod.State;
 using SilksongCoop.Mod.UI;
 using SilksongCoop.Mod.Visuals;
@@ -35,6 +36,8 @@ namespace SilksongCoop.Mod
         public DeathLifecycleCoordinator DeathCoordinator { get; private set; } = null!;
         public InventorySyncService InventorySync { get; private set; } = null!;
         public IGroundProber GroundProber { get; set; } = new UnityGroundProber();
+        public KeybindManager Keybinds { get; private set; } = null!;
+        public QualityPresetManager QualityPresets { get; private set; } = null!;
 
         // BepInEx Config entries
         public BepInEx.Configuration.ConfigEntry<float>? ReviveCooldownConfig;
@@ -101,6 +104,11 @@ namespace SilksongCoop.Mod
             {
                 Logger.LogWarning($"[Coop] Failed to load config: {ex.Message}");
             }
+
+            // Initialize settings managers (Step 13)
+            Keybinds = new KeybindManager(this);
+            QualityPresets = new QualityPresetManager(this);
+            Logger.LogInfo($"[Coop] Settings managers initialized: Quality={QualityPresets.CurrentLevel}");
 
             // Setup outgoing network callbacks - use stackalloc to avoid heap allocation pressure
             VitalsSync.OnOutgoingVitalsBroadcast += packet =>
@@ -293,7 +301,7 @@ namespace SilksongCoop.Mod
             var uiGo = new GameObject("SilksongCoop_MenuUI");
             DontDestroyOnLoad(uiGo);
             MenuUI = uiGo.AddComponent<CoopMenuUI>();
-            MenuUI.Initialize(SessionState, SteamTransport, UdpTransport);
+            MenuUI.Initialize(SessionState, SteamTransport, UdpTransport, Keybinds, QualityPresets);
 
             Logger.LogInfo("Silksong Co-op initialization complete. Press F10 in game for Co-op menu.");
         }
