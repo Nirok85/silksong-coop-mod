@@ -43,6 +43,8 @@ namespace SilksongCoop.Mod
         public BepInEx.Configuration.ConfigEntry<float>? Player2HueShiftConfig;
         public BepInEx.Configuration.ConfigEntry<int>? DefaultUdpPortConfig;
         public BepInEx.Configuration.ConfigEntry<int>? TickRateHzConfig;
+        public BepInEx.Configuration.ConfigEntry<bool>? AutoReconnectConfig;
+        public BepInEx.Configuration.ConfigEntry<int>? MaxReconnectAttemptsConfig;
 
         public INetworkTransport? ActiveTransport { get; private set; }
         public SteamP2PTransport? SteamTransport { get; private set; }
@@ -51,13 +53,20 @@ namespace SilksongCoop.Mod
         public RemoteHornetSpawner CloneSpawner { get; private set; } = null!;
 
         private Harmony? _harmony;
-        private bool _isTeamWipeInProgress;
+        private volatile bool _isTeamWipeInProgress;
         private ulong? _pendingSteamLobbyJoin;
 
         // Outgoing transform replication. Start above one interval so the first
         // packet after connecting is sent immediately instead of waiting a tick.
         private float _transformSendAccumulator = 1f;
         private uint _transformTick;
+
+        // Auto-reconnect state
+        private bool _reconnectPending;
+        private float _nextReconnectTime;
+        private int _reconnectAttempts;
+        private bool _reconnectIsSteam;
+        private string? _reconnectAddress;
 
         private void Awake()
         {
@@ -80,6 +89,9 @@ namespace SilksongCoop.Mod
                 Player2HueShiftConfig = Config.Bind("Visuals", "Player2HueShift", 0.58f, "Hue shift for Player 2 cloak (0.58 = azure blue)");
                 DefaultUdpPortConfig = Config.Bind("Network", "DefaultUdpPort", 7777, "Default UDP port for direct connections");
                 TickRateHzConfig = Config.Bind("Network", "TickRateHz", 30, "Network replication tick rate (20-60 Hz)");
+                AutoReconnectConfig = Config.Bind("Network", "AutoReconnect", true, "Automatically attempt to reconnect after an unexpected disconnect");
+                MaxReconnectAttemptsConfig = Config.Bind("Network", "MaxReconnectAttempts", 5, "Maximum number of automatic reconnection attempts (1-10)");
+                MaxReconnectAttemptsConfig = Config.Bind("Network", "MaxReconnectAttempts", 5, "Maximum number of automatic reconnection attempts (1-10)");
 
                 // Apply config values
                 DeathCoordinator.ReviveCooldownDuration = Math.Clamp(ReviveCooldownConfig.Value, 15f, 30f);
@@ -304,6 +316,13 @@ namespace SilksongCoop.Mod
             MenuUI.Initialize(SessionState, SteamTransport, UdpTransport);
 
             Logger.LogInfo("Silksong Co-op initialization complete. Press F10 in game for Co-op menu.");
+        }
+
+        public void CancelReconnect()
+        {
+            _reconnectPending = false;
+            _reconnectAttempts = 0;
+            _reconnectAddress = null;
         }
 
         public void SetActiveTransport(INetworkTransport transport)
@@ -662,6 +681,10 @@ namespace SilksongCoop.Mod
             {
                 try
                 {
+                    // Reset auto-reconnect state on successful connection
+                    _reconnectPending = false;
+                    _reconnectAttempts = 0;
+                    _reconnectAddress = null;
                     Logger.LogInfo($"[Coop] Peer connected: {peer}");
                     SessionState?.SetConnected(peer);
                     MenuUI?.Diagnostics?.OnSessionStarted();
@@ -712,6 +735,40 @@ namespace SilksongCoop.Mod
                     MenuUI?.Diagnostics?.OnSessionEnded();
                     CloneSpawner?.DespawnRemotePlayer(peer);
                     RefreshLocalVisuals(false);
+
+                    // Schedule auto-reconnect on unexpected disconnect
+                    bool autoReconnect = AutoReconnectConfig?.Value ?? true;
+                    int maxAttempts = Math.Clamp(MaxReconnectAttemptsConfig?.Value ?? 5, 1, 10);
+                    if (autoReconnect && reason != DisconnectReason.GracefulDisconnect && reason != DisconnectReason.None)
+                    {
+                        if (_reconnectAttempts < maxAttempts)
+                        {
+                            _reconnectIsSteam = (transport == SteamTransport);
+                            if (_reconnectIsSteam)
+                            {
+                                _reconnectAddress = SessionState?.SteamLobbyId?.ToString();
+                            }
+                            else
+                            {
+                                _reconnectAddress = SessionState?.CurrentRoomCode;
+                            }
+
+                            if (!string.IsNullOrEmpty(_reconnectAddress))
+                            {
+                                _reconnectAttempts++;
+                                float backoff = Math.Min((float)Math.Pow(2, _reconnectAttempts - 1), 16f);
+                                _nextReconnectTime = Time.unscaledTime + backoff;
+                                _reconnectPending = true;
+                                Logger.LogInfo($"[Coop] Auto-reconnect scheduled in {backoff}s (attempt {_reconnectAttempts}/{maxAttempts})");
+                                MenuUI?.SetStatusMessage($"Disconnected. Reconnecting in {backoff}s...");
+                            }
+                        }
+                        else
+                        {
+                            Logger.LogWarning($"[Coop] Max reconnect attempts ({maxAttempts}) reached. Giving up.");
+                            MenuUI?.SetStatusMessage("Connection lost. Max reconnect attempts reached.");
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -730,6 +787,8 @@ namespace SilksongCoop.Mod
 
                     var span = new ReadOnlySpan<byte>(data, offset, length);
                     if (!PacketHeader.TryReadFrom(span, out var header)) return;
+
+                    if (!header.IsValidPacketType) return; // Drop packets with unknown packet type
 
                     var reader = new PacketReader(span);
                     switch (header.PacketId)
@@ -899,6 +958,38 @@ namespace SilksongCoop.Mod
                 }
                 ActiveTransport?.PollEvents();
 
+                // Auto-reconnect attempt
+                if (_reconnectPending && Time.unscaledTime >= _nextReconnectTime)
+                {
+                    _reconnectPending = false;
+                    string? addr = _reconnectAddress;
+                    bool isSteam = _reconnectIsSteam;
+                    if (!string.IsNullOrEmpty(addr))
+                    {
+                        try
+                        {
+                            INetworkTransport? transport = isSteam ? (INetworkTransport?)SteamTransport : UdpTransport;
+                            if (transport != null)
+                            {
+                                SetActiveTransport(transport);
+                                transport.Connect(addr);
+                                if (isSteam && SteamTransport != null)
+                                    SessionState?.SetConnecting(transport.LocalPeerId, addr);
+                                else
+                                    SessionState?.SetConnecting(transport.LocalPeerId, addr);
+                                MenuUI?.SetStatusMessage($"Reconnecting (attempt {_reconnectAttempts})...");
+                                Logger.LogInfo($"[Coop] Auto-reconnect attempt {_reconnectAttempts} to {addr}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogError($"[Coop] Auto-reconnect failed: {ex.Message}");
+                            _reconnectPending = true;
+                            _nextReconnectTime = Time.unscaledTime + 4f;
+                        }
+                    }
+                }
+
                 // Process pending Steam lobby join from command line
                 if (_pendingSteamLobbyJoin.HasValue && SteamTransport != null)
                 {
@@ -960,6 +1051,7 @@ namespace SilksongCoop.Mod
             {
                 // Disconnect both transports
                 ActiveTransport?.Disconnect();
+                CancelReconnect();
                 if (SteamTransport != null && ActiveTransport != SteamTransport)
                 {
                     SteamTransport.Disconnect();

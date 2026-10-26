@@ -22,11 +22,40 @@ namespace SilksongCoop.Core.State
         public int SharedShellShards { get; private set; } = 0;
 
         // Remote (partner) vitals for HUD display. Updated from incoming VitalsSync packets.
-        public int RemoteHealth { get; private set; } = 0;
-        public int RemoteSilk { get; private set; } = 0;
-        public int RemoteMaxHealth { get; private set; } = 0;
-        public int RemoteMaxSilk { get; private set; } = 0;
-        public bool HasRemoteData { get; private set; } = false;
+        private int _remoteHealth;
+        public int RemoteHealth
+        {
+            get { lock (_stateLock) { return _remoteHealth; } }
+            private set { lock (_stateLock) { _remoteHealth = value; } }
+        }
+
+        private int _remoteSilk;
+        public int RemoteSilk
+        {
+            get { lock (_stateLock) { return _remoteSilk; } }
+            private set { lock (_stateLock) { _remoteSilk = value; } }
+        }
+
+        private int _remoteMaxHealth;
+        public int RemoteMaxHealth
+        {
+            get { lock (_stateLock) { return _remoteMaxHealth; } }
+            private set { lock (_stateLock) { _remoteMaxHealth = value; } }
+        }
+
+        private int _remoteMaxSilk;
+        public int RemoteMaxSilk
+        {
+            get { lock (_stateLock) { return _remoteMaxSilk; } }
+            private set { lock (_stateLock) { _remoteMaxSilk = value; } }
+        }
+
+        private bool _hasRemoteData;
+        public bool HasRemoteData
+        {
+            get { lock (_stateLock) { return _hasRemoteData; } }
+            private set { lock (_stateLock) { _hasRemoteData = value; } }
+        }
 
         private readonly object _stateLock = new object();
 

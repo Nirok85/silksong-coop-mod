@@ -40,6 +40,8 @@ namespace SilksongCoop.Core.Protocol
 
         public bool IsValidMagic => Magic == ExpectedMagic;
 
+        public bool IsValidPacketType => Enum.IsDefined(typeof(PacketType), PacketId);
+
         public void WriteTo(Span<byte> destination)
         {
             if (destination.Length < HeaderSize)

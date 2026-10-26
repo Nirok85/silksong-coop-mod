@@ -1116,6 +1116,7 @@ namespace SilksongCoop.Mod.UI
                 _sessionState?.SetDisconnected(DisconnectReason.GracefulDisconnect);
 
                 var plugin = SilksongCoopPlugin.Instance;
+                plugin?.CancelReconnect();
                 if (plugin != null && plugin.UdpTransport != null)
                 {
                     plugin.SetActiveTransport(plugin.UdpTransport);

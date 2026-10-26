@@ -7,12 +7,44 @@ namespace SilksongCoop.Core.State
 {
     public class DeathLifecycleCoordinator : IDeathLifecycleCoordinator
     {
-        public DeathState CurrentState { get; private set; } = DeathState.Alive;
-        public bool IsPartnerAlive { get; set; } = true;
-        public float RemainingSpectatorTime { get; private set; } = 0f;
+        private readonly object _lock = new object();
+
+        private DeathState _currentState = DeathState.Alive;
+        public DeathState CurrentState
+        {
+            get { lock (_lock) { return _currentState; } }
+            private set { lock (_lock) { _currentState = value; } }
+        }
+
+        private bool _isPartnerAlive = true;
+        public bool IsPartnerAlive
+        {
+            get { lock (_lock) { return _isPartnerAlive; } }
+            set { lock (_lock) { _isPartnerAlive = value; } }
+        }
+
+        private float _remainingSpectatorTime;
+        public float RemainingSpectatorTime
+        {
+            get { lock (_lock) { return _remainingSpectatorTime; } }
+            private set { lock (_lock) { _remainingSpectatorTime = value; } }
+        }
+
         public float ReviveCooldownDuration { get; set; } = 20.0f; // Configurable between 15-30s
-        public (float X, float Y) LastPartnerPosition { get; set; } = (0f, 0f);
-        public uint CurrentEpoch { get; private set; } = 1;
+
+        private (float X, float Y) _lastPartnerPosition = (0f, 0f);
+        public (float X, float Y) LastPartnerPosition
+        {
+            get { lock (_lock) { return _lastPartnerPosition; } }
+            set { lock (_lock) { _lastPartnerPosition = value; } }
+        }
+
+        private uint _currentEpoch = 1;
+        public uint CurrentEpoch
+        {
+            get { lock (_lock) { return _currentEpoch; } }
+            private set { lock (_lock) { _currentEpoch = value; } }
+        }
 
         private bool _isPostBenchRespawn = false;
         private float _postBenchRespawnTimer = 0f;

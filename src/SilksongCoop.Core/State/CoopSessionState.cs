@@ -27,12 +27,47 @@ namespace SilksongCoop.Core.State
     {
         private readonly object _lock = new object();
 
-        public SessionStatus Status { get; private set; } = SessionStatus.Disconnected;
-        public SessionRole Role { get; private set; } = SessionRole.None;
-        public NetworkPeerId? LocalPeerId { get; set; }
-        public NetworkPeerId? RemotePeerId { get; set; }
-        public string? CurrentRoomCode { get; set; }
-        public ulong? SteamLobbyId { get; set; }
+        private SessionStatus _status = SessionStatus.Disconnected;
+        public SessionStatus Status
+        {
+            get { lock (_lock) { return _status; } }
+            private set { lock (_lock) { _status = value; } }
+        }
+
+        private SessionRole _role = SessionRole.None;
+        public SessionRole Role
+        {
+            get { lock (_lock) { return _role; } }
+            private set { lock (_lock) { _role = value; } }
+        }
+
+        private NetworkPeerId? _localPeerId;
+        public NetworkPeerId? LocalPeerId
+        {
+            get { lock (_lock) { return _localPeerId; } }
+            set { lock (_lock) { _localPeerId = value; } }
+        }
+
+        private NetworkPeerId? _remotePeerId;
+        public NetworkPeerId? RemotePeerId
+        {
+            get { lock (_lock) { return _remotePeerId; } }
+            set { lock (_lock) { _remotePeerId = value; } }
+        }
+
+        private string? _currentRoomCode;
+        public string? CurrentRoomCode
+        {
+            get { lock (_lock) { return _currentRoomCode; } }
+            set { lock (_lock) { _currentRoomCode = value; } }
+        }
+
+        private ulong? _steamLobbyId;
+        public ulong? SteamLobbyId
+        {
+            get { lock (_lock) { return _steamLobbyId; } }
+            set { lock (_lock) { _steamLobbyId = value; } }
+        }
 
         public event Action<SessionStatus, SessionStatus>? OnStatusChanged;
         public event Action<NetworkPeerId>? OnPeerJoined;
