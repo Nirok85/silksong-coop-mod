@@ -91,7 +91,6 @@ namespace SilksongCoop.Mod
                 TickRateHzConfig = Config.Bind("Network", "TickRateHz", 30, "Network replication tick rate (20-60 Hz)");
                 AutoReconnectConfig = Config.Bind("Network", "AutoReconnect", true, "Automatically attempt to reconnect after an unexpected disconnect");
                 MaxReconnectAttemptsConfig = Config.Bind("Network", "MaxReconnectAttempts", 5, "Maximum number of automatic reconnection attempts (1-10)");
-                MaxReconnectAttemptsConfig = Config.Bind("Network", "MaxReconnectAttempts", 5, "Maximum number of automatic reconnection attempts (1-10)");
 
                 // Apply config values
                 DeathCoordinator.ReviveCooldownDuration = Math.Clamp(ReviveCooldownConfig.Value, 15f, 30f);
@@ -323,6 +322,32 @@ namespace SilksongCoop.Mod
             _reconnectPending = false;
             _reconnectAttempts = 0;
             _reconnectAddress = null;
+        }
+
+        /// <summary>
+        /// Schedules another automatic reconnect attempt after a failed one.
+        /// Backoff doubles per attempt (1s, 2s, 4s, ... capped at 16s).
+        /// </summary>
+        private void ScheduleReconnectRetry(string reason)
+        {
+            int maxAttempts = Math.Clamp(MaxReconnectAttemptsConfig?.Value ?? 5, 1, 10);
+            _reconnectAttempts++;
+
+            if (_reconnectAttempts < maxAttempts && !string.IsNullOrEmpty(_reconnectAddress))
+            {
+                float backoff = Math.Min((float)Math.Pow(2, _reconnectAttempts - 1), 16f);
+                _nextReconnectTime = Time.unscaledTime + backoff;
+                _reconnectPending = true;
+                Logger.LogWarning($"[Coop] {reason}; retrying in {backoff}s (attempt {_reconnectAttempts}/{maxAttempts})");
+                MenuUI?.SetStatusMessage($"Reconnect failed. Retrying in {backoff}s...");
+            }
+            else
+            {
+                _reconnectPending = false;
+                _reconnectAddress = null;
+                Logger.LogWarning($"[Coop] {reason}; max reconnect attempts ({maxAttempts}) reached.");
+                MenuUI?.SetStatusMessage("Connection lost. Max reconnect attempts reached.");
+            }
         }
 
         public void SetActiveTransport(INetworkTransport transport)
@@ -731,6 +756,17 @@ namespace SilksongCoop.Mod
                 try
                 {
                     Logger.LogInfo($"[Coop] Peer disconnected: {peer}, reason: {reason}");
+
+                    // SetDisconnected() clears CurrentRoomCode and SteamLobbyId, so the
+                    // reconnect target must be captured before it runs. A host has
+                    // nobody to dial back, so it just keeps listening.
+                    bool wasHost = SessionState?.Role == SessionRole.Host;
+                    string? reconnectTarget = wasHost
+                        ? null
+                        : (transport == SteamTransport
+                            ? SessionState?.SteamLobbyId?.ToString()
+                            : SessionState?.CurrentRoomCode);
+
                     SessionState?.SetDisconnected(reason);
                     MenuUI?.Diagnostics?.OnSessionEnded();
                     CloneSpawner?.DespawnRemotePlayer(peer);
@@ -739,19 +775,12 @@ namespace SilksongCoop.Mod
                     // Schedule auto-reconnect on unexpected disconnect
                     bool autoReconnect = AutoReconnectConfig?.Value ?? true;
                     int maxAttempts = Math.Clamp(MaxReconnectAttemptsConfig?.Value ?? 5, 1, 10);
-                    if (autoReconnect && reason != DisconnectReason.GracefulDisconnect && reason != DisconnectReason.None)
+                    if (autoReconnect && !wasHost && reason != DisconnectReason.GracefulDisconnect && reason != DisconnectReason.None)
                     {
                         if (_reconnectAttempts < maxAttempts)
                         {
                             _reconnectIsSteam = (transport == SteamTransport);
-                            if (_reconnectIsSteam)
-                            {
-                                _reconnectAddress = SessionState?.SteamLobbyId?.ToString();
-                            }
-                            else
-                            {
-                                _reconnectAddress = SessionState?.CurrentRoomCode;
-                            }
+                            _reconnectAddress = reconnectTarget;
 
                             if (!string.IsNullOrEmpty(_reconnectAddress))
                             {
@@ -973,12 +1002,15 @@ namespace SilksongCoop.Mod
                             {
                                 SetActiveTransport(transport);
                                 transport.Connect(addr);
-                                if (isSteam && SteamTransport != null)
-                                    SessionState?.SetConnecting(transport.LocalPeerId, addr);
-                                else
-                                    SessionState?.SetConnecting(transport.LocalPeerId, addr);
+                                SessionState?.SetConnecting(transport.LocalPeerId, addr);
                                 MenuUI?.SetStatusMessage($"Reconnecting (attempt {_reconnectAttempts})...");
                                 Logger.LogInfo($"[Coop] Auto-reconnect attempt {_reconnectAttempts} to {addr}");
+                            }
+                            else
+                            {
+                                _reconnectPending = true;
+                                _nextReconnectTime = Time.unscaledTime + 4f;
+                                Logger.LogWarning($"[Coop] Auto-reconnect deferred: transport for {addr} is unavailable");
                             }
                         }
                         catch (Exception ex)

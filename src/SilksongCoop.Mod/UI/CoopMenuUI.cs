@@ -927,6 +927,7 @@ namespace SilksongCoop.Mod.UI
                     return;
                 }
 
+                plugin.CancelReconnect();
                 _udpTransport = plugin.UdpTransport;
                 if (_udpTransport == null)
                 {
@@ -1009,6 +1010,7 @@ namespace SilksongCoop.Mod.UI
                 var plugin = SilksongCoopPlugin.Instance;
                 if (plugin == null) { _toasts.ShowError("Plugin not initialized"); return; }
 
+                plugin.CancelReconnect();
                 _steamTransport = plugin.SteamTransport;
                 if (_steamTransport == null)
                 {
@@ -1044,6 +1046,7 @@ namespace SilksongCoop.Mod.UI
                 var plugin = SilksongCoopPlugin.Instance;
                 if (plugin == null) { _toasts.ShowError("Plugin not initialized"); return; }
 
+                plugin.CancelReconnect();
                 _udpTransport = plugin.UdpTransport;
                 if (_udpTransport == null) { _toasts.ShowError("UDP transport not available"); return; }
 
@@ -1083,6 +1086,7 @@ namespace SilksongCoop.Mod.UI
                 var plugin = SilksongCoopPlugin.Instance;
                 if (plugin == null) { _toasts.ShowError("Plugin not initialized"); return; }
 
+                plugin.CancelReconnect();
                 _steamTransport = plugin.SteamTransport;
                 if (_steamTransport == null) { _toasts.ShowError("Steam transport not available"); return; }
 
