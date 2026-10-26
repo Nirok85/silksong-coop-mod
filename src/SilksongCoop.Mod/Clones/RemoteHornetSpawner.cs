@@ -48,14 +48,33 @@ namespace SilksongCoop.Mod.Clones
                     _activeClones.Remove(peerId);
                 }
 
-                // Create clean GameObject hierarchy (Layer 0 avoids camera targets and damage triggers)
+                // Create clean GameObject hierarchy with matching layer and position from local hero
+                var hero = HeroController.instance;
                 var cloneGo = new GameObject($"RemoteHornet_{peerId.Value}");
-                cloneGo.layer = 0;
+                if (hero != null)
+                {
+                    cloneGo.layer = hero.gameObject.layer;
+                    cloneGo.transform.position = hero.transform.position;
+                }
+                else
+                {
+                    cloneGo.layer = 0;
+                }
                 DontDestroyOnLoad(cloneGo);
 
                 // Add mesh filter and renderer
                 cloneGo.AddComponent<MeshFilter>();
                 var meshRenderer = cloneGo.AddComponent<MeshRenderer>();
+                if (hero != null)
+                {
+                    var heroRenderer = hero.GetComponent<Renderer>() ?? hero.GetComponentInChildren<Renderer>();
+                    if (heroRenderer != null)
+                    {
+                        meshRenderer.sortingLayerID = heroRenderer.sortingLayerID;
+                        meshRenderer.sortingLayerName = heroRenderer.sortingLayerName;
+                        meshRenderer.sortingOrder = heroRenderer.sortingOrder;
+                    }
+                }
 
                 // Setup tk2dSprite
                 tk2dSprite sprite = cloneGo.AddComponent<tk2dSprite>();
@@ -64,7 +83,6 @@ namespace SilksongCoop.Mod.Clones
                 tk2dSpriteAnimator animator = cloneGo.AddComponent<tk2dSpriteAnimator>();
 
                 // Borrow Hornet sprite collection and animation library from local HeroController if available
-                var hero = HeroController.instance;
                 if (hero != null && hero.AnimCtrl != null && hero.AnimCtrl.animator != null)
                 {
                     var heroAnimator = hero.AnimCtrl.animator;
@@ -82,6 +100,7 @@ namespace SilksongCoop.Mod.Clones
                 // Add visual controllers
                 var paletteSwap = cloneGo.AddComponent<PaletteSwapController>();
                 paletteSwap.SetPlayer2(isPlayer2);
+                paletteSwap.ApplyPaletteSwap();
 
                 var dashTrail = cloneGo.AddComponent<DashTrailController>();
                 dashTrail.Initialize(isPlayer2);

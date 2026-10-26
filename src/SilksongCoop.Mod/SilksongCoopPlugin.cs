@@ -364,6 +364,7 @@ namespace SilksongCoop.Mod
                 var palette = hero.gameObject.GetComponent<PaletteSwapController>() ?? hero.gameObject.AddComponent<PaletteSwapController>();
                 float hueShift = Player2HueShiftConfig?.Value ?? PaletteSwapMath.Player2HueShift;
                 palette.SetPlayer2(isPlayer2, hueShift);
+                palette.ApplyPaletteSwap();
 
                 var dash = hero.gameObject.GetComponent<DashTrailController>() ?? hero.gameObject.AddComponent<DashTrailController>();
                 dash.Initialize(isPlayer2);
@@ -956,6 +957,7 @@ namespace SilksongCoop.Mod
                     writer.Position,
                     DeliveryMethod.Unreliable,
                     0);
+                SessionState?.RecordSent(writer.Position);
                 MenuUI?.Diagnostics?.RecordSent(writer.Position);
             }
             catch (Exception ex)

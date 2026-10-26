@@ -104,6 +104,9 @@ namespace SilksongCoop.Mod.Networking
                 throw new InvalidOperationException("Steam is not initialized or offline.");
             }
 
+            IsHost = false;
+            SilksongCoopPlugin.Instance?.SetActiveTransport(this);
+
             if (ulong.TryParse(addressOrCode, out ulong lobbyIdVal))
             {
                 CSteamID lobbySteamId = new CSteamID(lobbyIdVal);
@@ -340,6 +343,7 @@ namespace SilksongCoop.Mod.Networking
             _lobbyId = new CSteamID(callback.m_ulSteamIDLobby);
             if (!IsHost)
             {
+                SilksongCoopPlugin.Instance?.SetActiveTransport(this);
                 CSteamID hostId = SteamMatchmaking.GetLobbyOwner(_lobbyId);
                 if (hostId == CSteamID.Nil)
                 {
@@ -393,6 +397,10 @@ namespace SilksongCoop.Mod.Networking
         private void OnGameLobbyJoinRequested(GameLobbyJoinRequested_t callback)
         {
             Logger?.LogInfo($"[Steam] OnGameLobbyJoinRequested: lobby={callback.m_steamIDLobby.m_SteamID}");
+            IsHost = false;
+            SilksongCoopPlugin.Instance?.SetActiveTransport(this);
+            SilksongCoopPlugin.Instance?.SessionState?.SetConnecting(LocalPeerId, callback.m_steamIDLobby.m_SteamID.ToString());
+            _connectionAttemptStartMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             SteamMatchmaking.JoinLobby(callback.m_steamIDLobby);
         }
 

@@ -5,16 +5,15 @@ using UnityEngine;
 namespace SilksongCoop.Mod.Visuals
 {
     /// <summary>
-    /// Controls runtime GPU palette swapping on tk2dSprite using Hollow Knight: Silksong's
+    /// Controls runtime GPU palette swapping on tk2dSprite and MeshRenderer using Hollow Knight: Silksong's
     /// native CAN_HUESHIFT shader keyword and _HueShift float property.
     /// Preserves white mask, obsidian horns, and steel needle while shifting Hornet's cloak
     /// to radiant azure blue for Player 2.
     /// </summary>
-    [RequireComponent(typeof(tk2dSprite))]
     public class PaletteSwapController : MonoBehaviour
     {
-        private tk2dSprite? _sprite;
-        private Renderer? _renderer;
+        private tk2dSprite[]? _sprites;
+        private Renderer[]? _renderers;
         private MaterialPropertyBlock? _propertyBlock;
         private bool _isPlayer2;
         private float _hueShift = PaletteSwapMath.Player2HueShift;
@@ -27,32 +26,32 @@ namespace SilksongCoop.Mod.Visuals
 
         private void Awake()
         {
-            _sprite = GetComponent<tk2dSprite>();
-            _renderer = GetComponent<Renderer>();
             _propertyBlock = new MaterialPropertyBlock();
             _huePropId = GetHueShiftPropertyId();
+            CacheComponents();
+        }
+
+        private void CacheComponents()
+        {
+            _sprites = GetComponentsInChildren<tk2dSprite>(true);
+            _renderers = GetComponentsInChildren<Renderer>(true);
         }
 
         private void Start()
         {
-            // Apply palette swap after all components are fully initialized
-            // (HeroController may still be setting up tk2dSprite during OnPeerConnected)
+            CacheComponents();
             if (_isPlayer2)
             {
+                ApplyPaletteSwap();
                 StartCoroutine(DelayedApplyPaletteSwap());
             }
         }
 
         private System.Collections.IEnumerator DelayedApplyPaletteSwap()
         {
-            // Wait 2 frames to ensure HeroController and tk2dSprite are fully initialized
             yield return null;
             yield return null;
-            
-            // Ensure components are bound (they might be null if added before tk2dSprite was ready)
-            if (_sprite == null) _sprite = GetComponent<tk2dSprite>();
-            if (_renderer == null) _renderer = GetComponent<Renderer>();
-            
+            CacheComponents();
             _needsUpdate = true;
             ApplyPaletteSwap();
         }
@@ -63,9 +62,8 @@ namespace SilksongCoop.Mod.Visuals
             {
                 _isPlayer2 = isPlayer2;
                 _hueShift = customHueShift;
-                
-                // Don't apply immediately — let LateUpdate handle it once components are ready
                 _needsUpdate = true;
+                ApplyPaletteSwap();
             }
             catch (Exception ex)
             {
@@ -77,7 +75,6 @@ namespace SilksongCoop.Mod.Visuals
         {
             try
             {
-                // Check if GameObject is active and enabled before applying
                 if (gameObject == null || !gameObject.activeInHierarchy || !enabled)
                 {
                     return;
@@ -88,48 +85,98 @@ namespace SilksongCoop.Mod.Visuals
                     _huePropId = GetHueShiftPropertyId();
                 }
 
-                if (_sprite != null)
+                if (_sprites == null || _sprites.Length == 0 || _renderers == null || _renderers.Length == 0)
                 {
-                    try
+                    CacheComponents();
+                }
+
+                float targetHue = _isPlayer2 ? _hueShift : PaletteSwapMath.Player1HueShift;
+
+                // 1. Apply to all tk2dSprites
+                if (_sprites != null)
+                {
+                    for (int i = 0; i < _sprites.Length; i++)
                     {
-                        if (_isPlayer2)
+                        var sprite = _sprites[i];
+                        if (sprite == null) continue;
+
+                        try
                         {
-                            _sprite.EnableKeyword(PaletteSwapMath.KeywordHueShift);
-                            _sprite.DisableKeyword(PaletteSwapMath.KeywordRecolour);
-                            _sprite.SetFloat(_huePropId, _hueShift);
+                            if (_isPlayer2)
+                            {
+                                sprite.EnableKeyword(PaletteSwapMath.KeywordHueShift);
+                                sprite.DisableKeyword(PaletteSwapMath.KeywordRecolour);
+                                sprite.SetFloat(_huePropId, targetHue);
+                                sprite.color = Color.white;
+                            }
+                            else
+                            {
+                                sprite.DisableKeyword(PaletteSwapMath.KeywordHueShift);
+                                sprite.DisableKeyword(PaletteSwapMath.KeywordRecolour);
+                                sprite.SetFloat(_huePropId, PaletteSwapMath.Player1HueShift);
+                            }
                         }
-                        else
+                        catch (Exception spriteEx)
                         {
-                            _sprite.DisableKeyword(PaletteSwapMath.KeywordHueShift);
-                            _sprite.DisableKeyword(PaletteSwapMath.KeywordRecolour);
-                            _sprite.SetFloat(_huePropId, PaletteSwapMath.Player1HueShift);
+                            SilksongCoopPlugin.LogWarn($"[PaletteSwapController] Sprite operation failed: {spriteEx.Message}");
                         }
-                    }
-                    catch (Exception spriteEx)
-                    {
-                        SilksongCoopPlugin.LogWarn($"[PaletteSwapController] Sprite operation failed: {spriteEx.Message}");
                     }
                 }
 
-                if (_renderer != null)
+                // 2. Apply to all Renderers (both direct material keywords and MaterialPropertyBlock)
+                if (_renderers != null)
                 {
-                    try
+                    if (_propertyBlock == null)
                     {
-                        if (_propertyBlock == null)
-                        {
-                            _propertyBlock = new MaterialPropertyBlock();
-                        }
-
-                        _renderer.GetPropertyBlock(_propertyBlock);
-                        _propertyBlock.SetFloat(_huePropId, _isPlayer2 ? _hueShift : PaletteSwapMath.Player1HueShift);
-                        _renderer.SetPropertyBlock(_propertyBlock);
-                        _lastAppliedHueShift = _isPlayer2 ? _hueShift : PaletteSwapMath.Player1HueShift;
+                        _propertyBlock = new MaterialPropertyBlock();
                     }
-                    catch (Exception rendererEx)
+
+                    for (int i = 0; i < _renderers.Length; i++)
                     {
-                        SilksongCoopPlugin.LogWarn($"[PaletteSwapController] Renderer operation failed: {rendererEx.Message}");
+                        var ren = _renderers[i];
+                        if (ren == null) continue;
+
+                        try
+                        {
+                            // A. Material Property Block
+                            ren.GetPropertyBlock(_propertyBlock);
+                            _propertyBlock.SetFloat(_huePropId, targetHue);
+                            _propertyBlock.SetFloat(PaletteSwapMath.ShaderPropertyHueShift, targetHue);
+                            ren.SetPropertyBlock(_propertyBlock);
+
+                            // B. Direct materials on the renderer (required for GPU keyword activation)
+                            var materials = ren.materials;
+                            if (materials != null)
+                            {
+                                for (int m = 0; m < materials.Length; m++)
+                                {
+                                    var mat = materials[m];
+                                    if (mat == null) continue;
+
+                                    if (_isPlayer2)
+                                    {
+                                        mat.EnableKeyword(PaletteSwapMath.KeywordHueShift);
+                                        mat.DisableKeyword(PaletteSwapMath.KeywordRecolour);
+                                        mat.SetFloat(_huePropId, targetHue);
+                                        mat.SetFloat(PaletteSwapMath.ShaderPropertyHueShift, targetHue);
+                                    }
+                                    else
+                                    {
+                                        mat.DisableKeyword(PaletteSwapMath.KeywordHueShift);
+                                        mat.SetFloat(_huePropId, PaletteSwapMath.Player1HueShift);
+                                        mat.SetFloat(PaletteSwapMath.ShaderPropertyHueShift, PaletteSwapMath.Player1HueShift);
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception rendererEx)
+                        {
+                            SilksongCoopPlugin.LogWarn($"[PaletteSwapController] Renderer operation failed: {rendererEx.Message}");
+                        }
                     }
                 }
+
+                _lastAppliedHueShift = targetHue;
                 _needsUpdate = false;
             }
             catch (Exception ex)
@@ -142,25 +189,19 @@ namespace SilksongCoop.Mod.Visuals
         {
             try
             {
-                // Apply palette swap if needed and components are ready
-                if (_needsUpdate && _isPlayer2 && _renderer != null && _propertyBlock != null && _huePropId != 0)
+                // Enforce palette swap in LateUpdate after all animations and state changes
+                if (_isPlayer2)
                 {
-                    // Check if animation system reset the property block
-                    _renderer.GetPropertyBlock(_propertyBlock);
-                    float currentHue = _propertyBlock.GetFloat(_huePropId);
-                    if (Mathf.Abs(currentHue - _hueShift) > 0.001f)
-                    {
-                        _propertyBlock.SetFloat(_huePropId, _hueShift);
-                        _renderer.SetPropertyBlock(_propertyBlock);
-                        _lastAppliedHueShift = _hueShift;
-                    }
-                    _needsUpdate = false;
+                    ApplyPaletteSwap();
+                }
+                else if (_needsUpdate)
+                {
+                    ApplyPaletteSwap();
                 }
             }
             catch (Exception ex)
             {
                 SilksongCoopPlugin.LogWarn($"[PaletteSwapController] LateUpdate error: {ex.Message}");
-                // Keep _needsUpdate = true to retry next frame
             }
         }
 

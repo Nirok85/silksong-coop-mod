@@ -121,6 +121,8 @@ namespace SilksongCoop.Mod.Clones
                 {
                     _clockOffsetMs = localNowMs - timestampMs;
                     _hasClockOffset = true;
+                    // Immediately snap position on first received packet to prevent staying at spawn/default coordinates
+                    transform.position = new Vector3(posX, posY, transform.position.z);
                 }
                 double mappedTimestampMs = timestampMs + _clockOffsetMs;
 
@@ -303,10 +305,12 @@ namespace SilksongCoop.Mod.Clones
 
         private void EnsureAnimationLibraryBound()
         {
+            var hero = HeroController.instance;
+            if (hero == null) return;
+
             if (_animator != null && _animator.Library == null)
             {
-                var hero = HeroController.instance;
-                if (hero != null && hero.AnimCtrl != null && hero.AnimCtrl.animator != null)
+                if (hero.AnimCtrl != null && hero.AnimCtrl.animator != null)
                 {
                     var heroAnimator = hero.AnimCtrl.animator;
                     if (heroAnimator.Library != null)
@@ -320,6 +324,19 @@ namespace SilksongCoop.Mod.Clones
                         _sprite.SetSprite(heroAnimator.Sprite.Collection, heroAnimator.Sprite.spriteId);
                         _paletteSwap?.ApplyPaletteSwap();
                     }
+                }
+            }
+
+            // Keep sorting layer synchronized with local hero
+            var meshRenderer = GetComponent<MeshRenderer>();
+            if (meshRenderer != null)
+            {
+                var heroRenderer = hero.GetComponent<Renderer>() ?? hero.GetComponentInChildren<Renderer>();
+                if (heroRenderer != null && (meshRenderer.sortingLayerID != heroRenderer.sortingLayerID || meshRenderer.sortingOrder != heroRenderer.sortingOrder))
+                {
+                    meshRenderer.sortingLayerID = heroRenderer.sortingLayerID;
+                    meshRenderer.sortingLayerName = heroRenderer.sortingLayerName;
+                    meshRenderer.sortingOrder = heroRenderer.sortingOrder;
                 }
             }
         }
