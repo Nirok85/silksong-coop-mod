@@ -1,0 +1,7 @@
+{
+  "tag_name": "v2.0.1",
+  "name": "v2.0.1 - Hotfix: DiagnosticsOverlay Rendering Fix",
+  "body": "## Hotfix v2.0.1 - DiagnosticsOverlay Rendering Fix\n\n**Released:** 2026-10-26\n\n### Fixed\n- **DiagnosticsOverlay (F11)**: Completely rewrote the overlay rendering component\n  - Eliminated memory leak: Texture2D no longer created every frame (now cached statically)\n  - Fixed invisible overlay: dark semi-transparent background now renders correctly via GUI.DrawTexture\n  - Removed GUIUtility.RotateAroundPivot which corrupted subsequent GUI rendering\n  - Added proper save/restore of GUI.matrix and GUI.color in try/finally block\n  - Added visible borders, grid lines, and colored axis labels\n  - Added session statistics line (duration, packets in/out)\n\n### Known Issues\n- NetworkDiagnostics.RecordPing() is not called from transport - ping graph remains empty. Will be fixed in v2.1.0.\n\n### Installation\n1. Download SilksongCoop_v2.0.1.zip\n2. Extract to your Silksong installation folder (overwrite existing files)\n3. Launch the game\n4. Press F11 to toggle the diagnostics overlay\n\n**Full changelog:** See CHANGELOG.md in the repository.",
+  "draft": false,
+  "prerelease": false
+}
