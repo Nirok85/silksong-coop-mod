@@ -35,10 +35,26 @@ namespace SilksongCoop.Mod.Visuals
 
         private void Start()
         {
+            // Apply palette swap after all components are fully initialized
+            // (HeroController may still be setting up tk2dSprite during OnPeerConnected)
             if (_isPlayer2)
             {
-                ApplyPaletteSwap();
+                StartCoroutine(DelayedApplyPaletteSwap());
             }
+        }
+
+        private System.Collections.IEnumerator DelayedApplyPaletteSwap()
+        {
+            // Wait 2 frames to ensure HeroController and tk2dSprite are fully initialized
+            yield return null;
+            yield return null;
+            
+            // Ensure components are bound (they might be null if added before tk2dSprite was ready)
+            if (_sprite == null) _sprite = GetComponent<tk2dSprite>();
+            if (_renderer == null) _renderer = GetComponent<Renderer>();
+            
+            _needsUpdate = true;
+            ApplyPaletteSwap();
         }
 
         public void SetPlayer2(bool isPlayer2, float customHueShift = PaletteSwapMath.Player2HueShift)
@@ -47,8 +63,9 @@ namespace SilksongCoop.Mod.Visuals
             {
                 _isPlayer2 = isPlayer2;
                 _hueShift = customHueShift;
+                
+                // Don't apply immediately — let LateUpdate handle it once components are ready
                 _needsUpdate = true;
-                ApplyPaletteSwap();
             }
             catch (Exception ex)
             {
@@ -60,6 +77,12 @@ namespace SilksongCoop.Mod.Visuals
         {
             try
             {
+                // Check if GameObject is active and enabled before applying
+                if (gameObject == null || !gameObject.activeInHierarchy || !enabled)
+                {
+                    return;
+                }
+
                 if (_huePropId == 0)
                 {
                     _huePropId = GetHueShiftPropertyId();
@@ -67,31 +90,45 @@ namespace SilksongCoop.Mod.Visuals
 
                 if (_sprite != null)
                 {
-                    if (_isPlayer2)
+                    try
                     {
-                        _sprite.EnableKeyword(PaletteSwapMath.KeywordHueShift);
-                        _sprite.DisableKeyword(PaletteSwapMath.KeywordRecolour);
-                        _sprite.SetFloat(_huePropId, _hueShift);
+                        if (_isPlayer2)
+                        {
+                            _sprite.EnableKeyword(PaletteSwapMath.KeywordHueShift);
+                            _sprite.DisableKeyword(PaletteSwapMath.KeywordRecolour);
+                            _sprite.SetFloat(_huePropId, _hueShift);
+                        }
+                        else
+                        {
+                            _sprite.DisableKeyword(PaletteSwapMath.KeywordHueShift);
+                            _sprite.DisableKeyword(PaletteSwapMath.KeywordRecolour);
+                            _sprite.SetFloat(_huePropId, PaletteSwapMath.Player1HueShift);
+                        }
                     }
-                    else
+                    catch (Exception spriteEx)
                     {
-                        _sprite.DisableKeyword(PaletteSwapMath.KeywordHueShift);
-                        _sprite.DisableKeyword(PaletteSwapMath.KeywordRecolour);
-                        _sprite.SetFloat(_huePropId, PaletteSwapMath.Player1HueShift);
+                        SilksongCoopPlugin.LogWarn($"[PaletteSwapController] Sprite operation failed: {spriteEx.Message}");
                     }
                 }
 
                 if (_renderer != null)
                 {
-                    if (_propertyBlock == null)
+                    try
                     {
-                        _propertyBlock = new MaterialPropertyBlock();
-                    }
+                        if (_propertyBlock == null)
+                        {
+                            _propertyBlock = new MaterialPropertyBlock();
+                        }
 
-                    _renderer.GetPropertyBlock(_propertyBlock);
-                    _propertyBlock.SetFloat(_huePropId, _isPlayer2 ? _hueShift : PaletteSwapMath.Player1HueShift);
-                    _renderer.SetPropertyBlock(_propertyBlock);
-                    _lastAppliedHueShift = _isPlayer2 ? _hueShift : PaletteSwapMath.Player1HueShift;
+                        _renderer.GetPropertyBlock(_propertyBlock);
+                        _propertyBlock.SetFloat(_huePropId, _isPlayer2 ? _hueShift : PaletteSwapMath.Player1HueShift);
+                        _renderer.SetPropertyBlock(_propertyBlock);
+                        _lastAppliedHueShift = _isPlayer2 ? _hueShift : PaletteSwapMath.Player1HueShift;
+                    }
+                    catch (Exception rendererEx)
+                    {
+                        SilksongCoopPlugin.LogWarn($"[PaletteSwapController] Renderer operation failed: {rendererEx.Message}");
+                    }
                 }
                 _needsUpdate = false;
             }
@@ -105,9 +142,8 @@ namespace SilksongCoop.Mod.Visuals
         {
             try
             {
-                // Optimization: Only re-apply when necessary to avoid redundant GPU updates
-                // This prevents per-frame overhead while still handling animation rebuilds
-                if (!_needsUpdate && _isPlayer2 && _renderer != null && _propertyBlock != null)
+                // Apply palette swap if needed and components are ready
+                if (_needsUpdate && _isPlayer2 && _renderer != null && _propertyBlock != null && _huePropId != 0)
                 {
                     // Check if animation system reset the property block
                     _renderer.GetPropertyBlock(_propertyBlock);
@@ -118,11 +154,13 @@ namespace SilksongCoop.Mod.Visuals
                         _renderer.SetPropertyBlock(_propertyBlock);
                         _lastAppliedHueShift = _hueShift;
                     }
+                    _needsUpdate = false;
                 }
             }
             catch (Exception ex)
             {
                 SilksongCoopPlugin.LogWarn($"[PaletteSwapController] LateUpdate error: {ex.Message}");
+                // Keep _needsUpdate = true to retry next frame
             }
         }
 
