@@ -199,15 +199,24 @@ namespace SilksongCoop.Core.Networking
         {
             lock (_lock)
             {
-                // Fix: Use || instead of && to properly check for disconnected state
-                if (_socket == null || !IsConnected)
+                // If socket is null, we're already fully disconnected
+                if (_socket == null)
                 {
                     return;
                 }
 
+                // Send disconnect packet if we have a remote endpoint
                 if (_remoteEndPoint != null)
                 {
-                    SendEnvelope(UdpFrameType.Disconnect, 0, 0, DeliveryMethod.Unreliable, ReadOnlySpan<byte>.Empty);
+                    try
+                    {
+                        SendEnvelope(UdpFrameType.Disconnect, 0, 0, DeliveryMethod.Unreliable, ReadOnlySpan<byte>.Empty);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Log but don't fail - we're disconnecting anyway
+                        System.Diagnostics.Debug.WriteLine($"[LiteNetLibTransport] Failed to send disconnect packet: {ex.Message}");
+                    }
                 }
 
                 bool wasConnected = IsConnected;
