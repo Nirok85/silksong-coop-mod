@@ -82,6 +82,18 @@ namespace SilksongCoop.Core.Networking
         private readonly RateLimiter _rateLimiter = new RateLimiter(maxTokens: 1000, refillRatePerSecond: 100);
         private readonly ConnectionAuthenticator _authenticator = new ConnectionAuthenticator();
         private string? _roomCode;
+        private bool _requireRoomCode;
+
+        /// <summary>
+        /// When true (and a room code is set), the host rejects handshakes from clients
+        /// that did not announce a room code (direct-IP joins). Default false preserves
+        /// the documented "direct IP:Port" join path.
+        /// </summary>
+        public bool RequireRoomCode
+        {
+            get => _requireRoomCode;
+            set => _requireRoomCode = value;
+        }
 
         // BUG-N1: sequence spaces are per (channel, delivery method). Unreliable and
         // ReliableOrdered traffic share a channel in this protocol (channel 0 carries the
@@ -825,6 +837,13 @@ namespace SilksongCoop.Core.Networking
                                     byte[] nonce = _authenticator.GenerateNonce();
                                     SendEnvelope(UdpFrameType.Challenge, 0, 0, DeliveryMethod.Unreliable, nonce);
                                 }
+                            }
+                            else if (_roomCode != null && _requireRoomCode && !clientHasCode)
+                            {
+                                // BUG-N9 (item 9): host requires a room code but the client
+                                // did not announce one — reject the direct-IP join.
+                                _remoteEndPoint = null;
+                                _remotePeerId = null;
                             }
                             else
                             {

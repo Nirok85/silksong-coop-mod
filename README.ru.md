@@ -3,8 +3,8 @@
 ![Platform](https://img.shields.io/badge/Platform-PC%20%7C%20Steam-blue)
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
 ![Loader](https://img.shields.io/badge/ModLoader-BepInEx%205.4.x-purple)
-![Tests](https://img.shields.io/badge/Tests-645%20%2F%20645%20Passing%20(100%25)-brightgreen)
-![Version](https://img.shields.io/badge/Version-2.0.14-success)
+![Tests](https://img.shields.io/badge/Tests-651%20%2F%20651%20Passing%20(100%25)-brightgreen)
+![Version](https://img.shields.io/badge/Version-2.0.15-success)
 
 **[🇬🇧 English version](README.md)**
 
@@ -79,7 +79,7 @@
 
 ### Способ A — Релизный пакет (Рекомендуется)
 
-Архив `SilksongCoop_v2.0.14.zip` со страницы [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) включает всё: BepInEx 5.4.21, HarmonyX и DLL мода.
+Архив `SilksongCoop_v2.0.15.zip` со страницы [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) включает всё: BepInEx 5.4.21, HarmonyX и DLL мода.
 
 1. Закройте игру, если она запущена.
 2. Откройте папку установки Silksong в Steam (Управление → Просмотреть локальные файлы). Типичный путь:
@@ -240,7 +240,7 @@ silksong_coop_mod/
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # Набор тестов xUnit (net8.0) — 645 тестов
+    └── SilksongCoop.Tests/           # Набор тестов xUnit (net8.0) — 651 тестов
         ├── TestHarness/              # DualClientTestHarness (симуляция 2 клиентов без Unity)
         ├── Tier1_FeatureTests/       # Покрытие требований (F01–F28)
         ├── Tier2_BoundaryTests/      # Граничные значения
@@ -262,8 +262,8 @@ dotnet test SilksongCoop.sln -c Release
 Текущий результат:
 
 ```text
-Всего тестов:   645
-Пройдено:       645 (100.0%)
+Всего тестов:   651
+Пройдено:       651 (100.0%)
 Провалено:      0
 Пропущено:      0
 Время:          ~3 с
@@ -296,7 +296,7 @@ dotnet test SilksongCoop.sln -c Release
 * **F11** — оверлей сетевой диагностики (графики пинга/потерь/трафика, правый верхний угол).
 * Клавиши настраиваются в `BepInEx\config\com.silksong.coop.cfg`, секция `[Keybinds]`.
 
-Если клавиши не отвечают: проверьте, что в `BepInEx\LogOutput.log` загружается плагин (строка `Initializing Silksong Co-op Multiplayer v2.0.14...`). Убедитесь, что ни другой мод, ни системная утилита (рекордеры, медиаплееры) не перехватывают F10/F11 глобально.
+Если клавиши не отвечают: проверьте, что в `BepInEx\LogOutput.log` загружается плагин (строка `Initializing Silksong Co-op Multiplayer v2.0.15...`). Убедитесь, что ни другой мод, ни системная утилита (рекордеры, медиаплееры) не перехватывают F10/F11 глобально.
 </details>
 
 <details>

@@ -16,6 +16,7 @@ namespace SilksongCoop.Mod.Visuals
 
         private tk2dSprite[]? _sprites;
         private Renderer[]? _renderers;
+        private Material[][]? _cachedMaterials;
         private MaterialPropertyBlock? _propertyBlock;
         private bool _isPlayer2;
         private float _hueShift = PaletteSwapMath.Player2HueShift;
@@ -45,6 +46,18 @@ namespace SilksongCoop.Mod.Visuals
         {
             _sprites = GetComponentsInChildren<tk2dSprite>(true);
             _renderers = GetComponentsInChildren<Renderer>(true);
+            if (_renderers != null)
+            {
+                _cachedMaterials = new Material[_renderers.Length][];
+                for (int i = 0; i < _renderers.Length; i++)
+                {
+                    _cachedMaterials[i] = _renderers[i] != null ? _renderers[i].materials : Array.Empty<Material>();
+                }
+            }
+            else
+            {
+                _cachedMaterials = null;
+            }
         }
 
         private void Start()
@@ -187,7 +200,19 @@ namespace SilksongCoop.Mod.Visuals
                             ren.SetPropertyBlock(_propertyBlock);
 
                             // B. Direct materials on the renderer (required for GPU keyword activation)
-                            var materials = ren.materials;
+                            // BUG-P14: use the cached materials array instead of the allocating
+                            // ren.materials getter (which allocates a new array every call).
+                            Material[]? materials = null;
+                            if (_cachedMaterials != null && i < _cachedMaterials.Length)
+                            {
+                                materials = _cachedMaterials[i];
+                            }
+                            if (materials == null)
+                            {
+                                materials = ren.materials;
+                                if (_cachedMaterials != null && i < _cachedMaterials.Length)
+                                    _cachedMaterials[i] = materials;
+                            }
                             if (materials != null)
                             {
                                 for (int m = 0; m < materials.Length; m++)

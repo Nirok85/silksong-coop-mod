@@ -5,7 +5,17 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/),
 и этот проект придерживается [Semantic Versioning](https://semver.org/).
 
+## [2.0.15] - 2026-10-27
+
+### Улучшения
+- **PacketValidator** расширен: валидация `DeathLifecycle`, `ItemUnlock`, `SceneTransition`, `ActionTrigger`, `BenchCheckpointSync`.
+- **RateLimiter.RemovePeer** вызывается при отключении пира.
+- **ArrayPool<byte>** в Mod broadcast hot-paths.
+- **Max-stats и clone-scene** тесты (6 новых).
+- Итого тестов: 651/651.
+
 ## [2.0.14] - 2026-10-27
+
 
 ### Безопасность и валидация
 - **PacketValidator** расширен: валидация `DeathLifecycle`, `ItemUnlock`, `SceneTransition`, `ActionTrigger`, `BenchCheckpointSync` (enum-ы, NaN/Infinity, bounds). Все пакеты в plugin data-handler теперь проверяются перед применением.
