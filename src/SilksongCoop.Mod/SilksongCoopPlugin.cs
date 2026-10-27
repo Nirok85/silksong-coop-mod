@@ -6,6 +6,7 @@
 
 using System;
 using System.Collections;
+using System.Threading;
 using BepInEx;
 using HarmonyLib;
 using SilksongCoop.Core.Clones;
@@ -37,7 +38,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "2.0.6";
+        public const string PluginVersion = "2.0.7";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -87,7 +88,16 @@ namespace SilksongCoop.Mod
 
         #region Private Fields
         private Harmony? _harmony;
-        private volatile bool _isTeamWipeInProgress;
+
+        // BUG-04: atomic flag (0 = not in progress, 1 = in progress). A volatile bool used
+        // as check-then-set had a TOCTOU race window; Interlocked CAS makes it atomic.
+        private int _teamWipeInProgress;
+
+        // BUG-15: set while DeathHooks.PrefixPlayerDead runs its death branch. TriggerTeamWipe
+        // skips its explicit PlayerDead coroutine in that case — the game's own invocation
+        // already runs the original method, so starting it again would reload the bench twice.
+        private bool _insidePlayerDeadHook;
+
         private ulong? _pendingSteamLobbyJoin;
 
         // Outgoing transform replication. Start above one interval so the first
@@ -527,18 +537,14 @@ namespace SilksongCoop.Mod
                 }
 
                 // 1. Resolve safe ground position via GroundProber
+                // BUG-17: if prober fails, fall back to the partner's own position —
+                // the partner is standing alive there, so it is ground-truth safe.
+                // (hazardRespawnLocation may point to a stale hazard marker in another
+                // room/session and would spawn the player out of bounds.)
                 Vector2 spawnPos = new Vector2(x, y + 0.5f);
                 if (GroundProber != null && GroundProber.TryFindSafeGround(x, y, out float safeX, out float safeY))
                 {
                     spawnPos = new Vector2(safeX, safeY);
-                }
-                else
-                {
-                    var pdFallback = PlayerData.instance;
-                    if (pdFallback != null && pdFallback.hazardRespawnLocation != Vector3.zero)
-                    {
-                        spawnPos = pdFallback.hazardRespawnLocation;
-                    }
                 }
 
                 // 2. Position hero and reset linear velocity
@@ -628,7 +634,9 @@ namespace SilksongCoop.Mod
                 if (hero == null || hero.gameObject == null)
                     yield break; // Hero destroyed (scene transition) — abort coroutine
                 yield return null;
-                elapsed += Time.deltaTime;
+                // BUG-01: unscaled time — Time.deltaTime is 0 while the game is paused,
+                // which would freeze the routine and leave the hero invulnerable forever.
+                elapsed += Time.unscaledDeltaTime;
             }
 
             try
@@ -646,21 +654,39 @@ namespace SilksongCoop.Mod
         }
 
         /// <summary>
+        /// Marks that the current call stack is inside the Harmony prefix for
+        /// <see cref="GameManager.PlayerDead"/> (see BUG-15). Internal use by DeathHooks.
+        /// </summary>
+        internal void BeginPlayerDeadHook() => _insidePlayerDeadHook = true;
+
+        /// <summary>
+        /// Clears the in-hook marker set by <see cref="BeginPlayerDeadHook"/>.
+        /// </summary>
+        internal void EndPlayerDeadHook() => _insidePlayerDeadHook = false;
+
+        /// <summary>
         /// Triggers a team wipe, forcing both players to respawn at a bench.
         /// </summary>
         public void TriggerTeamWipe()
         {
-            if (_isTeamWipeInProgress) return;
-            
+            // BUG-04: atomic check-and-set — two concurrent callers cannot both pass.
+            if (Interlocked.CompareExchange(ref _teamWipeInProgress, 1, 0) != 0) return;
+
             try
             {
-                _isTeamWipeInProgress = true;
                 SessionState?.SetTeamWipe();
-                
+
                 var gm = GameManager.instance;
                 if (gm != null)
                 {
-                    gm.StartCoroutine(gm.PlayerDead(1.5f));
+                    // BUG-15: when triggered from DeathHooks.PrefixPlayerDead, the game is
+                    // already running the PlayerDead coroutine (the prefix allows the original
+                    // through for TeamWipe). Starting it here as well would reload the bench
+                    // twice; remote-triggered wipes still need the explicit start.
+                    if (!_insidePlayerDeadHook)
+                    {
+                        gm.StartCoroutine(gm.PlayerDead(1.5f));
+                    }
                 }
                 else
                 {
@@ -669,7 +695,7 @@ namespace SilksongCoop.Mod
             }
             catch (Exception ex)
             {
-                _isTeamWipeInProgress = false;
+                Interlocked.Exchange(ref _teamWipeInProgress, 0);
                 Logger.LogError($"[Coop] Failed triggering team wipe: {ex.Message}\n{ex.StackTrace}");
             }
         }
@@ -681,7 +707,7 @@ namespace SilksongCoop.Mod
         {
             try
             {
-                _isTeamWipeInProgress = false;
+                Interlocked.Exchange(ref _teamWipeInProgress, 0);
 
                 var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
                 camTarget?.EndFreeMode();
@@ -859,10 +885,11 @@ namespace SilksongCoop.Mod
         }
 
         /// <summary>
-        /// Broadcasts the local player's initial inventory state to a newly connected peer.
+        /// Broadcasts the local player's initial inventory state to the connected peer.
+        /// The current session's remote peer is the recipient; in a 2-player session there
+        /// is exactly one (see BUG-12 — the peer parameter was never used).
         /// </summary>
-        /// <param name="peer">The peer identifier to send inventory to.</param>
-        public void BroadcastInitialInventory(NetworkPeerId peer)
+        public void BroadcastInitialInventory()
         {
             try
             {
@@ -1068,6 +1095,11 @@ namespace SilksongCoop.Mod
             {
                 try
                 {
+                    // BUG-07: only the active transport may drive session state — the other
+                    // transport is still polled for callbacks and can emit stale events
+                    // (e.g. a leftover UDP peer or an old Steam lobby).
+                    if (!ReferenceEquals(transport, ActiveTransport)) return;
+
                     // Reset auto-reconnect state on successful connection
                     _reconnectPending = false;
                     _reconnectAttempts = 0;
@@ -1107,7 +1139,7 @@ namespace SilksongCoop.Mod
                         VitalsSync.BroadcastCurrentCurrency();
 
                         // HIGH-02: Broadcast initial inventory dump (abilities, tools, crests) to client
-                        BroadcastInitialInventory(peer);
+                        BroadcastInitialInventory();
                     }
                 }
                 catch (Exception ex)
@@ -1120,6 +1152,10 @@ namespace SilksongCoop.Mod
             {
                 try
                 {
+                    // BUG-07: ignore disconnect events from a transport that is not active —
+                    // otherwise a stale UDP/Steam event would tear down a live session.
+                    if (!ReferenceEquals(transport, ActiveTransport)) return;
+
                     Logger.LogInfo($"[Coop] Peer disconnected: {peer}, reason: {reason}");
 
                     // SetDisconnected() clears CurrentRoomCode and SteamLobbyId, so the
@@ -1184,6 +1220,10 @@ namespace SilksongCoop.Mod
             {
                 try
                 {
+                    // BUG-07: ignore data from a transport that is not active — a stale peer
+                    // on the other transport must not inject packets into the live session.
+                    if (!ReferenceEquals(transport, ActiveTransport)) return;
+
                     SessionState?.RecordReceived(length);
                     MenuUI?.Diagnostics?.RecordReceived(length);
 
@@ -1239,6 +1279,21 @@ namespace SilksongCoop.Mod
                         case PacketType.PlayerDeath:
                             var death = DeathLifecyclePacket.Deserialize(ref reader);
                             DeathCoordinator?.HandleDeathPacket(peer, death);
+                            break;
+
+                        case PacketType.SceneTransition:
+                            // BUG-20: explicit "partner left the scene" signal — hide the clone
+                            // immediately and drop buffered snapshots so it never lingers at
+                            // its last position during the remote's scene load.
+                            var scene = SceneTransitionPacket.Deserialize(ref reader);
+                            if (scene.TransitionPhase == 0)
+                            {
+                                CloneSpawner?.SetRemoteScenePresence(peer, false);
+                            }
+                            else
+                            {
+                                CloneSpawner?.SetRemoteScenePresence(peer, true);
+                            }
                             break;
 
                         case PacketType.ItemUnlockSync:
@@ -1363,6 +1418,48 @@ namespace SilksongCoop.Mod
             catch (Exception ex)
             {
                 Logger.LogWarning($"[Coop] Failed broadcasting local transform: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// BUG-20: sends an explicit "scene transition started" signal so the remote peer
+        /// hides our clone immediately, instead of waiting for the next transform tick
+        /// (up to ~50 ms) or for transforms to stop during the scene load. The remote clone
+        /// reappears automatically when the arriving peer's transform packets carry a
+        /// matching scene hash again.
+        /// </summary>
+        public void BroadcastSceneTransitionDeparture()
+        {
+            try
+            {
+                if (ActiveTransport == null || SessionState?.IsConnected != true || !SessionState.RemotePeerId.HasValue) return;
+
+                int sceneHash = GameManager.instance != null ? GameManager.instance.sceneNameHash : 0;
+                var packet = new SceneTransitionPacket
+                {
+                    Header = new PacketHeader(PacketType.SceneTransition, 0, 0, (uint)(Time.timeAsDouble * 1000.0)),
+                    TargetScene = string.Empty,
+                    EntryGate = string.Empty,
+                    SceneNameHash = sceneHash,
+                    TransitionPhase = 0 // 0 = departure (scene left), 1 = arrival
+                };
+
+                Span<byte> buffer = stackalloc byte[128];
+                var writer = new PacketWriter(buffer);
+                packet.Serialize(ref writer);
+                ActiveTransport.Send(
+                    SessionState.RemotePeerId.Value,
+                    buffer.ToArray(),
+                    0,
+                    writer.Position,
+                    DeliveryMethod.ReliableOrdered,
+                    1);
+                SessionState?.RecordSent(writer.Position);
+                MenuUI?.Diagnostics?.RecordSent(writer.Position);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed broadcasting scene transition: {ex.Message}");
             }
         }
 

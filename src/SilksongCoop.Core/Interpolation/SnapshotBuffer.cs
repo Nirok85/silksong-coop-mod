@@ -6,6 +6,12 @@ namespace SilksongCoop.Core.Interpolation
     /// Fixed-capacity circular snapshot buffer (64 snapshots) for interpolation.
     /// Manages timeline alignment, bracket finding, and adaptive delay estimation.
     /// </summary>
+    /// <remarks>
+    /// BUG-19 (thread affinity): this buffer is intentionally NOT thread-safe — it is
+    /// written from transport data events and read from Unity's Update loop, both of which
+    /// run on the main thread via transport.PollEvents(). If PollEvents is ever moved to a
+    /// background thread, add synchronization here first.
+    /// </remarks>
     public class SnapshotBuffer
     {
         public const int DefaultCapacity = 64;

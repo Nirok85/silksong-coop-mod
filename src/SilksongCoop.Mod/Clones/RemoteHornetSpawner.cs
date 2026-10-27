@@ -175,6 +175,28 @@ namespace SilksongCoop.Mod.Clones
             }
         }
 
+        /// <summary>
+        /// BUG-20: marks whether the remote peer is present in the local scene. Called on an
+        /// explicit SceneTransitionPacket so the clone is hidden the instant the partner
+        /// leaves the scene, instead of lingering until the next transform tick.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
+        /// <param name="present">True if the partner is present in this scene.</param>
+        public void SetRemoteScenePresence(NetworkPeerId peerId, bool present)
+        {
+            try
+            {
+                if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
+                {
+                    controller.SetScenePresence(present);
+                }
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] SetRemoteScenePresence error: {ex.Message}");
+            }
+        }
+
         #endregion
 
         #region Remote Control

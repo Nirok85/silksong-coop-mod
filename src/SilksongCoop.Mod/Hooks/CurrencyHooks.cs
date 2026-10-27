@@ -11,10 +11,9 @@ namespace SilksongCoop.Mod.Hooks
     [HarmonyPatch]
     public static class CurrencyHooks
     {
-        /// <summary>
-        /// Flag indicating whether a remote currency change is being applied locally.
-        /// </summary>
-        public static bool IsApplyingRemoteCurrency = false;
+        // BUG-08: the old `IsApplyingRemoteCurrency` static field was dead code — the
+        // re-entrancy guard was replaced by RemoteApplyScope.IsActive, but the field was
+        // never removed and always read as false. Removed to avoid misleading consumers.
 
         /// <summary>
         /// Hook that fires after currency changes to broadcast the update to the remote player.

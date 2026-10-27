@@ -24,9 +24,14 @@ namespace SilksongCoop.Mod.Hooks
         [HarmonyPatch(typeof(GameManager), nameof(GameManager.PlayerDead))]
         public static bool PrefixPlayerDead(GameManager __instance, float waitTime, ref IEnumerator __result)
         {
+            // BUG-15: mark that we are inside the game's own PlayerDead call so
+            // TriggerTeamWipe (invoked synchronously by OnLocalPlayerDied → OnTeamWipeTriggered)
+            // does not start the PlayerDead coroutine a second time.
+            var plugin = SilksongCoopPlugin.Instance;
+            plugin?.BeginPlayerDeadHook();
             try
             {
-                if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true)
+                if (plugin?.SessionState?.IsConnected != true)
                 {
                     return true; // Not connected, normal bench respawn
                 }
@@ -34,7 +39,7 @@ namespace SilksongCoop.Mod.Hooks
                 // Guard against scene transitions
                 if (GameManager.instance == null) return true;
 
-                var coordinator = SilksongCoopPlugin.Instance.DeathCoordinator;
+                var coordinator = plugin.DeathCoordinator;
                 if (coordinator == null) return true;
 
                 // Guard against TeamWipe re-entrancy: allow standard bench reload coroutine to execute
@@ -51,7 +56,7 @@ namespace SilksongCoop.Mod.Hooks
                 {
                     // Solo death while partner alive: suppress original bench reload coroutine and enter spectator
                     __result = EmptyRoutine();
-                    SilksongCoopPlugin.Instance.EnterSpectatorMode();
+                    plugin.EnterSpectatorMode();
                     return false;
                 }
 
@@ -62,6 +67,10 @@ namespace SilksongCoop.Mod.Hooks
             {
                 SilksongCoopPlugin.LogWarn($"[DeathHooks] PrefixPlayerDead error: {ex.Message}");
                 return true; // Allow normal flow on error
+            }
+            finally
+            {
+                plugin?.EndPlayerDeadHook();
             }
         }
 

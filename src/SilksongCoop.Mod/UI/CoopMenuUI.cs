@@ -58,6 +58,16 @@ namespace SilksongCoop.Mod.UI
         private GUIStyle? _styleWarn;
         private GUIStyle? _styleBad;
 
+        // BUG-10: dedicated derived styles for the HUD and overlays. Drawing code used to
+        // mutate the shared cached styles (_styleTitle / Skin.label) in place, permanently
+        // changing font sizes and alignment for every other element using them.
+        private GUIStyle? _hudNameStyle;
+        private GUIStyle? _barLabelStyle;
+        private GUIStyle? _spectTitleStyle;
+        private GUIStyle? _spectSubStyle;
+        private GUIStyle? _wipeTitleStyle;
+        private GUIStyle? _wipeSubStyle;
+
         public ToastNotifier Toasts => _toasts;
         public NetworkDiagnostics Diagnostics => _diagnostics;
         public ConnectionHistory History => _history;
@@ -104,62 +114,24 @@ namespace SilksongCoop.Mod.UI
             _toasts.ShowInfo(message);
         }
 
-        private bool _diagnosticLogged = false;
-        
         private void Update()
         {
-            // ONE-TIME diagnostic log to verify Update() runs and which input path works
-            if (!_diagnosticLogged && Time.frameCount > 10)
-            {
-                _diagnosticLogged = true;
-                Debug.Log($"[Coop] Update() is running. _keybinds={_keybinds != null}");
-                
-                // Test which input work
-                bool legacyWorks = false;
-                try
-                {
-                    var test = Input.GetKeyDown(KeyCode.F10);
-                    legacyWorks = true;
-                    Debug.Log($"[Coop] Legacy Input.GetKeyDown() works: {legacyWorks}");
-                }
-                catch (System.Exception ex)
-                {
-                    Debug.Log($"[Coop] Legacy Input.GetKeyDown() throws: {ex.GetType().Name}: {ex.Message}");
-                }
-                
-                bool newInputWorks = KeybindManager.IsKeyTriggered(KeyCode.F12); // Test with F12
-                Debug.Log($"[Coop] New Input System fallback works: {newInputWorks}");
-            }
-            
             // Toggle menu using configurable keybind
             if (_keybinds != null && _keybinds.IsKeyDown(KeybindManager.ToggleMenu))
             {
                 IsVisible = !IsVisible;
             }
-            // Fallback to F10 if keybinds not initialized
-            else if (_keybinds == null && Input.GetKeyDown(KeyCode.F10))
-            {
-                IsVisible = !IsVisible;
-            }
 
-            // Toggle diagnostics overlay with F11
+            // Toggle diagnostics overlay with F11 (BUG-09: single keybinds-driven path —
+            // the former `_keybinds == null` fallback branch was dead code, since Keybinds
+            // is always initialized in Awake before CoopMenuUI ever updates)
             if (_keybinds != null && _keybinds.IsKeyDown(KeybindManager.ToggleDiagnostics))
             {
                 if (_diagnosticsOverlay != null)
                 {
                     _diagnosticsOverlay.IsVisible = !_diagnosticsOverlay.IsVisible;
-                    _toasts.ShowInfo(_diagnosticsOverlay.IsVisible 
-                        ? "Диагностика сети: ВКЛ (F10 - главное меню коопа)" 
-                        : "Диагностика сети: ВЫКЛ");
-                }
-            }
-            else if (_keybinds == null && Input.GetKeyDown(KeyCode.F11))
-            {
-                if (_diagnosticsOverlay != null)
-                {
-                    _diagnosticsOverlay.IsVisible = !_diagnosticsOverlay.IsVisible;
-                    _toasts.ShowInfo(_diagnosticsOverlay.IsVisible 
-                        ? "Диагностика сети: ВКЛ (F10 - главное меню коопа)" 
+                    _toasts.ShowInfo(_diagnosticsOverlay.IsVisible
+                        ? "Диагностика сети: ВКЛ (F10 - главное меню коопа)"
                         : "Диагностика сети: ВЫКЛ");
                 }
             }
@@ -201,6 +173,7 @@ namespace SilksongCoop.Mod.UI
             }
 
             GUI.skin = _skin;
+            EnsureHudStyles();
 
             // ── Watermark ──────────────────────────────────────────────────────
             DrawWatermark();
@@ -306,9 +279,7 @@ namespace SilksongCoop.Mod.UI
 
             // Partner name
             GUI.color = SilksongSkin.TextTitle;
-            var nameStyle = _styleTitle ?? Skin.label;
-            nameStyle.fontSize = 11;
-            GUI.Label(new Rect(x + 8f, y + 2f, hudW - 12f, 16f), peerName, nameStyle);
+            GUI.Label(new Rect(x + 8f, y + 2f, hudW - 12f, 16f), peerName, _hudNameStyle ?? Skin.label);
 
             // HP bar
             float barX = x + 8f;
@@ -351,14 +322,27 @@ namespace SilksongCoop.Mod.UI
 
             // Label
             GUI.color = SilksongSkin.TextCream;
-            var style = Skin.label;
-            style.fontSize = 9;
-            style.alignment = TextAnchor.MiddleCenter;
-            GUI.Label(new Rect(x, y, w, h), label, style);
-            style.alignment = TextAnchor.MiddleLeft; // restore
+            GUI.Label(new Rect(x, y, w, h), label, _barLabelStyle ?? Skin.label);
         }
 
         // ─── Spectator overlay (death state) ──────────────────────────────────
+        /// <summary>
+        /// BUG-10: creates the HUD-derived styles exactly once, copying the base styles so
+        /// the shared cached styles are never mutated in place.
+        /// </summary>
+        private void EnsureHudStyles()
+        {
+            if (_hudNameStyle != null && _barLabelStyle != null) return;
+            var title = _styleTitle ?? Skin.label;
+            var label = Skin.label;
+            _hudNameStyle = new GUIStyle(title) { fontSize = 11 };
+            _barLabelStyle = new GUIStyle(label) { fontSize = 9, alignment = TextAnchor.MiddleCenter };
+            _spectTitleStyle = new GUIStyle(title) { fontSize = 16, alignment = TextAnchor.MiddleCenter };
+            _spectSubStyle = new GUIStyle(label) { fontSize = 13, alignment = TextAnchor.MiddleCenter };
+            _wipeTitleStyle = new GUIStyle(title) { fontSize = 15, alignment = TextAnchor.MiddleCenter };
+            _wipeSubStyle = new GUIStyle(label) { fontSize = 12, alignment = TextAnchor.MiddleCenter };
+        }
+
         private void DrawSpectatorOverlay()
         {
             var coordinator = SilksongCoopPlugin.Instance?.DeathCoordinator;
@@ -382,17 +366,11 @@ namespace SilksongCoop.Mod.UI
                     : "Partner";
 
                 GUI.color = SilksongSkin.GoldBright;
-                var titleStyle = _styleTitle ?? Skin.label;
-                titleStyle.fontSize = 16;
-                titleStyle.alignment = TextAnchor.MiddleCenter;
-                GUI.Label(new Rect(x, y + 8, bannerWidth, 24), $"SPECTATING {partnerName.ToUpperInvariant()}", titleStyle);
+                GUI.Label(new Rect(x, y + 8, bannerWidth, 24), $"SPECTATING {partnerName.ToUpperInvariant()}", _spectTitleStyle ?? Skin.label);
 
                 int secondsLeft = Mathf.CeilToInt(coordinator.RemainingSpectatorTime);
                 GUI.color = SilksongSkin.TextCream;
-                var subStyle = Skin.label;
-                subStyle.fontSize = 13;
-                subStyle.alignment = TextAnchor.MiddleCenter;
-                GUI.Label(new Rect(x, y + 32, bannerWidth, 22), $"Reviving beside partner in <color=#D4A843><b>{secondsLeft}s</b></color>", subStyle);
+                GUI.Label(new Rect(x, y + 32, bannerWidth, 22), $"Reviving beside partner in <color=#D4A843><b>{secondsLeft}s</b></color>", _spectSubStyle ?? Skin.label);
 
                 // Progress bar
                 float total = Math.Max(15f, coordinator.ReviveCooldownDuration);
@@ -400,9 +378,6 @@ namespace SilksongCoop.Mod.UI
                 float barWidth = bannerWidth - 40f;
                 float barY = y + 58f;
                 DrawStatusBar(x + 20f, barY, barWidth, 8f, progress, SilksongSkin.Gold, "");
-
-                titleStyle.alignment = TextAnchor.MiddleLeft; // restore
-                subStyle.alignment = TextAnchor.MiddleLeft;
             }
             else if (coordinator.CurrentState == DeathState.TeamWipe)
             {
@@ -417,19 +392,10 @@ namespace SilksongCoop.Mod.UI
                 GUI.DrawTexture(new Rect(x, y, bannerWidth, 2), SilksongSkin.WhitePixel);
 
                 GUI.color = SilksongSkin.RedError;
-                var titleStyle = _styleTitle ?? Skin.label;
-                titleStyle.fontSize = 15;
-                titleStyle.alignment = TextAnchor.MiddleCenter;
-                GUI.Label(new Rect(x, y + 6, bannerWidth, 22), "TEAM WIPE", titleStyle);
+                GUI.Label(new Rect(x, y + 6, bannerWidth, 22), "TEAM WIPE", _wipeTitleStyle ?? Skin.label);
 
                 GUI.color = SilksongSkin.TextCream;
-                var subStyle = Skin.label;
-                subStyle.fontSize = 12;
-                subStyle.alignment = TextAnchor.MiddleCenter;
-                GUI.Label(new Rect(x, y + 28, bannerWidth, 18), "Both heroes have fallen — Reloading at last bench...", subStyle);
-
-                titleStyle.alignment = TextAnchor.MiddleLeft;
-                subStyle.alignment = TextAnchor.MiddleLeft;
+                GUI.Label(new Rect(x, y + 28, bannerWidth, 18), "Both heroes have fallen — Reloading at last bench...", _wipeSubStyle ?? Skin.label);
             }
 
             GUI.color = Color.white;
@@ -596,7 +562,11 @@ namespace SilksongCoop.Mod.UI
             {
                 // Draw placeholder overlay
                 var fieldRect = GUILayoutUtility.GetRect(0f, 10000f, 24f, 24f);
-                int controlId = GUIUtility.GetControlID(FocusType.Keyboard);
+
+                // BUG-18: the control must be named BEFORE it is created, otherwise
+                // GetNameOfFocusedControl() can never return "CoopAddrField" and the
+                // placeholder logic never fires.
+                GUI.SetNextControlName("CoopAddrField");
                 _inputAddressOrCode = GUI.TextField(fieldRect, _inputAddressOrCode, Skin.textField);
 
                 if (GUI.GetNameOfFocusedControl() != "CoopAddrField")
@@ -607,7 +577,6 @@ namespace SilksongCoop.Mod.UI
                     GUI.Label(fieldRect, "192.168.1.5:7777 or SK-...", phStyle);
                     GUI.color = Color.white;
                 }
-                GUI.SetNextControlName("CoopAddrField");
             }
             else
             {

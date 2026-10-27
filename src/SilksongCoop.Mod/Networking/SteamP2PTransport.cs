@@ -74,7 +74,11 @@ namespace SilksongCoop.Mod.Networking
         /// </summary>
         public SteamP2PTransport()
         {
-            ulong localId = 0;
+            // BUG-14: never fall back to peer id 0 — the clone dictionaries key on
+            // NetworkPeerId and a zero id could collide with the transport-default
+            // sentinel. The Steam transport cannot connect without Steam anyway, but the
+            // identity should stay well-formed.
+            ulong localId = 1;
             string localName = "SteamPlayer";
 
             try
@@ -84,6 +88,10 @@ namespace SilksongCoop.Mod.Networking
                     localId = SteamUser.GetSteamID().m_SteamID;
                     localName = SteamFriends.GetPersonaName();
                     SteamNetworking.AllowP2PPacketRelay(true);
+                }
+                else
+                {
+                    Logger?.LogWarning("Steam is not running; transport created with fallback peer identity (connection will not succeed until Steam is available)");
                 }
             }
             catch (Exception ex)

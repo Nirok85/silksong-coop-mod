@@ -86,13 +86,18 @@ namespace SilksongCoop.Core.State
         {
             try
             {
-                _isPostBenchRespawn = false;
-                _postBenchRespawnTimer = 0f;
-
+                // BUG-05: the post-bench stale-packet guard must not be cleared before we
+                // know the death is legitimate. A stale SoloDeathOccurred / TeamWipeOccurred
+                // packet that arrives within the 5-second window must still be filterable
+                // while the local player is Alive; clearing the guard on entry would let
+                // later stale packets slip through for the rest of the window.
                 if (CurrentState == DeathState.TeamWipe)
                 {
                     return false;
                 }
+
+                _isPostBenchRespawn = false;
+                _postBenchRespawnTimer = 0f;
 
                 if (IsPartnerAlive)
                 {

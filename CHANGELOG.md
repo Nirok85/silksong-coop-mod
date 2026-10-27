@@ -5,6 +5,78 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/),
 и этот проект придерживается [Semantic Versioning](https://semver.org/).
 
+## [2.0.7] - 2026-10-27
+
+### Исправлено — Critical
+- **BUG-01**: `ReviveInvulnerabilityRoutine` использовала `Time.deltaTime` — при паузе игры
+  корутина замирала навсегда и герой оставался неуязвимым. Заменено на `Time.unscaledDeltaTime`
+  (как уже было сделано в `BroadcastLocalTransform`).
+- **BUG-02 / BUG-03**: `OnPeerConnected` и `OnPeerDisconnected` в `LiteNetLibTransport`
+  вызывались прямо под `_lock`. Хендлеры реентерабельно заходят в транспорт
+  (Send / Disconnect / TriggerTeamWipe → ExitSpectatorMode → Disconnect). Теперь все события
+  транспорта ставятся в очередь под локом и доставляются после его освобождения
+  (`DrainPendingEvents`), что также снимает реентрантную вложенность для `OnDataReceived`.
+- **BUG-15**: двойной вызов `PlayerDead` при team wipe — `TriggerTeamWipe` запускал корутину
+  `gm.PlayerDead(1.5f)` даже когда вызов шёл из Harmony-префикса `GameManager.PlayerDead`
+  (оригинал уже выполнялся). Добавлен флаг `_insidePlayerDeadHook`; префикс помечает вход
+  через `BeginPlayerDeadHook()/EndPlayerDeadHook()`.
+
+### Исправлено — High
+- **BUG-04**: `_isTeamWipeInProgress` (volatile bool) использовался как check-then-set —
+  окно TOCTOU-гонки. Заменено на атомарный `Interlocked.CompareExchange` по int-флагу.
+- **BUG-05**: `DeathLifecycleCoordinator.OnLocalPlayerDied` сбрасывал пост-скамеечный
+  страж (5 с) безусловно, до проверки легитимности смерти — устаревшие пакеты могли
+  проскочить фильтр. Сброс перенесён после проверки `TeamWipe`.
+- **BUG-06**: урон слэша удалённого клона считался по `PlayerData.instance.nailUpgrades`
+  локального игрока. Теперь используется `RemoteNeedleUpgradeLevel` из VitalsSync
+  (авторитетный уровень улучшения иглы удалённого игрока), локальные данные — только
+  fallback до первого пакета vitals.
+- **BUG-07**: хендлеры `OnPeerConnected` / `OnPeerDisconnected` / `OnDataReceived` срабатывали
+  и от неактивного транспорта (оба транспорта привязаны на старте). Добавлена проверка
+  `transport == ActiveTransport` — устаревшие события UDP/Steam больше не разрушают живую сессию.
+- **BUG-08**: удалён мёртвый флаг `CurrencyHooks.IsApplyingRemoteCurrency` (никогда не
+  читался, всегда false — misleading dead code).
+
+### Исправлено — Medium
+- **BUG-09**: в `CoopMenuUI` удалены мёртвые fallback-ветки `else if (_keybinds == null)`
+  для F10/F11 — `_keybinds` всегда инициализирован в Awake, ветки были недостижимы.
+  Единый путь через `KeybindManager.IsKeyDown`.
+- **BUG-10**: мутация общих закэшированных `GUIStyle` (fontSize/alignment) прямо в отрисовке
+  портила стили всех последующих элементов. Введены отдельные кэшированные производные стили
+  (`EnsureHudStyles`), общие стили больше не изменяются.
+- **BUG-11**: `VitalsSyncService.InitializeState` не сбрасывал `_remoteHealth/_remoteSilk/
+  _remoteMaxHealth/_remoteMaxSilk/HasRemoteData` — HUD показывал устаревшие значения прошлого
+  партнёра после переподключения. Теперь сбрасываются.
+- **BUG-12**: параметр `peer` в `BroadcastInitialInventory(NetworkPeerId peer)` никогда не
+  использовался — сигнатура упрощена до `BroadcastInitialInventory()`.
+- **BUG-13**: упрощена выборка старейшего ключа при дренировании переполненного
+  надёжного pending-буфера (энумератор вместо foreach+break).
+- **BUG-14**: `SteamP2PTransport` при недоступном Steam создавал `LocalPeerId` со значением 0 —
+  потенциальная коллизия ключей словаря клонов. Fallback теперь 1 + warning в лог.
+- **BUG-15** (см. Critical).
+
+### Исправлено — Low
+- **BUG-16**: удалён отладочный диагностический блок из `CoopMenuUI.Update()` (Debug.Log
+  при старте, проверка F12) — попал в продакшн при диагностике F11.
+- **BUG-17**: fallback `hazardRespawnLocation` при провале `GroundProber.TryFindSafeGround`
+  мог возродить игрока у устаревшей метки опасности в другой комнате. Теперь fallback —
+  позиция напарника (он стоит там живым — это заведомо безопасная точка).
+- **BUG-18**: `GUI.SetNextControlName("CoopAddrField")` вызывался ПОСЛЕ `GUI.TextField` —
+  контроль никогда не получал имя, placeholder не показывался. Перенесён до создания поля.
+- **BUG-19**: задокументирована привязка `SnapshotBuffer` к главному потоку (сегодня гонки
+  нет: и запись, и чтение идут через PollEvents из Unity Update; при переносе PollEvents в
+  фоновый поток потребуется блокировка).
+- **BUG-20**: `SceneTransitionPacket` теперь реально отправляется: новый Harmony-постфикс
+  `SceneTransitionHooks` на `GameManager.BeginSceneTransition` рассылает сигнал «ушёл со
+  сцены», приёмник мгновенно скрывает клон напарника и сбрасывает буфер снапшотов (раньше
+  клон оставался висеть на последней позиции на время загрузки сцены). Клон возвращается
+  автоматически по первому transform-пакету с совпавшим хэшем сцены.
+
+### Технические детали
+- Сборка: 0 ошибок, 0 предупреждений (Debug + Release)
+- Тесты: 614/614 пройдено без изменений тестов
+- Новый файл: `src/SilksongCoop.Mod/Hooks/SceneTransitionHooks.cs`
+
 ## [2.0.6] - 2026-10-27
 
 ### Изменено

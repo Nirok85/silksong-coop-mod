@@ -16,6 +16,13 @@ namespace SilksongCoop.Mod.Clones
     /// and tk2d animation playback via deterministic FNV-1a clip name hashes for remote player clones.
     /// Completely isolated from HeroController singleton logic.
     /// </summary>
+    /// <remarks>
+    /// BUG-19 (thread affinity): <see cref="SilksongCoop.Core.Interpolation.SnapshotBuffer"/> is NOT
+    /// thread-safe by design — <see cref="UpdateTransform"/> (invoked from transport data events)
+    /// and <see cref="Update"/> both run on the Unity main thread via PollEvents(), so no
+    /// synchronization is required today. If PollEvents is ever moved to a background thread,
+    /// SnapshotBuffer needs locking first.
+    /// </remarks>
     public class RemotePlayerController : MonoBehaviour
     {
         #region Fields and Properties
@@ -93,6 +100,27 @@ namespace SilksongCoop.Mod.Clones
             for (int i = 0; i < renderers.Length; i++)
             {
                 if (renderers[i] != null) renderers[i].enabled = visible;
+            }
+        }
+
+        /// <summary>
+        /// BUG-20: reacts to an explicit SceneTransitionPacket from the remote peer.
+        /// Departure hides the clone and drops buffered snapshots immediately; arrival
+        /// re-shows it (the next transform packet re-positions and re-syncs the clock).
+        /// </summary>
+        /// <param name="present">True if the remote peer is present in this scene.</param>
+        public void SetScenePresence(bool present)
+        {
+            if (present && !_isInSameScene)
+            {
+                _isInSameScene = true;
+                SetVisibility(true);
+            }
+            else if (!present && _isInSameScene)
+            {
+                _isInSameScene = false;
+                SetVisibility(false);
+                _buffer.Clear();
             }
         }
 
@@ -281,11 +309,24 @@ namespace SilksongCoop.Mod.Clones
                 var colliders = Physics2D.OverlapBoxAll(hitCenter, size, 0f);
                 if (colliders != null && colliders.Length > 0)
                 {
+                    // BUG-06: damage must reflect the REMOTE player's needle upgrade level,
+                    // not the local PlayerData (which is this machine's upgrade state). The
+                    // remote player broadcasts its own vitals (VitalsSyncPacket.NeedleUpgradeLevel),
+                    // so use the observed value; fall back to local data only before any
+                    // vitals packet has arrived.
                     int damage = 5;
-                    var pd = PlayerData.instance;
-                    if (pd != null)
+                    var vitals = SilksongCoopPlugin.Instance?.VitalsSync;
+                    if (vitals != null && vitals.HasRemoteData)
                     {
-                        damage += pd.nailUpgrades * 3;
+                        damage += vitals.RemoteNeedleUpgradeLevel * 3;
+                    }
+                    else
+                    {
+                        var pd = PlayerData.instance;
+                        if (pd != null)
+                        {
+                            damage += pd.nailUpgrades * 3;
+                        }
                     }
 
                     for (int i = 0; i < colliders.Length; i++)

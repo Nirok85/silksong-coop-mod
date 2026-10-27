@@ -57,6 +57,18 @@ namespace SilksongCoop.Core.State
             private set { lock (_stateLock) { _remoteMaxSilk = value; } }
         }
 
+        private int _remoteNeedleUpgradeLevel;
+        /// <summary>
+        /// The remote player's needle upgrade level as observed from their last
+        /// <see cref="VitalsSyncPacket"/> (BUG-06: authoritative source for remote clone
+        /// damage instead of the local PlayerData).
+        /// </summary>
+        public int RemoteNeedleUpgradeLevel
+        {
+            get { lock (_stateLock) { return _remoteNeedleUpgradeLevel; } }
+            private set { lock (_stateLock) { _remoteNeedleUpgradeLevel = value; } }
+        }
+
         private bool _hasRemoteData;
         public bool HasRemoteData
         {
@@ -97,6 +109,15 @@ namespace SilksongCoop.Core.State
                 LocalSilk = initialSilk;
                 SharedMaxSilkSpools = initialMaxSilkSpools;
                 SharedNeedleUpgradeLevel = needleLevel;
+
+                // BUG-11: reset the remote vitals HUD state too — otherwise a reconnect
+                // shows the previous partner's stale health/silk until a new packet arrives.
+                _remoteHealth = 0;
+                _remoteSilk = 0;
+                _remoteMaxHealth = 0;
+                _remoteMaxSilk = 0;
+                _remoteNeedleUpgradeLevel = 0;
+                _hasRemoteData = false;
             }
             lock (_transactionLock)
             {
@@ -306,6 +327,7 @@ namespace SilksongCoop.Core.State
                     RemoteSilk = packet.CurrentSilk;
                     RemoteMaxHealth = packet.MaxHealth;
                     RemoteMaxSilk = packet.MaxSilkSpools;
+                    RemoteNeedleUpgradeLevel = packet.NeedleUpgradeLevel;
                     HasRemoteData = true;
                 }
 

@@ -36,6 +36,39 @@ namespace SilksongCoop.Core.Networking
             public int Retries;
         }
 
+        /// <summary>
+        /// Kind of deferred transport event queued for delivery outside the transport lock.
+        /// </summary>
+        private enum DeferredEventKind
+        {
+            PeerConnected,
+            PeerDisconnected,
+            DataReceived
+        }
+
+        /// <summary>
+        /// A transport event queued under <see cref="_lock"/> and delivered after the lock
+        /// is released (see <see cref="DrainPendingEvents"/>). Handler callbacks re-enter
+        /// the transport (Send / Disconnect / session orchestration), so they must never
+        /// execute while the lock is held.
+        /// </summary>
+        private readonly struct DeferredEvent
+        {
+            public readonly DeferredEventKind Kind;
+            public readonly NetworkPeerId Peer;
+            public readonly DisconnectReason Reason;
+            public readonly byte[]? Data;
+
+            public DeferredEvent(DeferredEventKind kind, NetworkPeerId peer,
+                DisconnectReason reason = DisconnectReason.None, byte[]? data = null)
+            {
+                Kind = kind;
+                Peer = peer;
+                Reason = reason;
+                Data = data;
+            }
+        }
+
         #endregion
 
         #region Fields and Constants
@@ -62,6 +95,11 @@ namespace SilksongCoop.Core.Networking
         private long _connectionAttemptStartMs;
         private const long ConnectionTimeoutMs = 10000;
         private const long HeartbeatTimeoutMs = 15000;
+
+        // BUG-02/BUG-03: transport events are enqueued under _lock and drained after the
+        // lock is released, because handler callbacks re-enter the transport
+        // (Send / Disconnect / death-state chains) and must not run while it is held.
+        private readonly Queue<DeferredEvent> _pendingEvents = new();
 
         // Pre-allocated receive buffer to avoid per-poll GC pressure
         private readonly byte[] _recvBuffer = new byte[2048];
@@ -308,7 +346,9 @@ namespace SilksongCoop.Core.Networking
 
                 if (wasConnected)
                 {
-                    OnPeerDisconnected?.Invoke(peer, reason);
+                    // BUG-02: defer the event - handlers re-enter the transport (Send /
+                    // Disconnect / session teardown) and must not run while _lock is held.
+                    _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerDisconnected, peer, reason));
                 }
             }
         }
@@ -381,137 +421,152 @@ namespace SilksongCoop.Core.Networking
         /// </summary>
         public void PollEvents()
         {
+            // BUG-02/BUG-03: socket I/O runs under _lock, but transport events are
+            // delivered OUTSIDE the lock (see DrainPendingEvents) so handler callbacks
+            // can re-enter the transport (Send / Disconnect / orchestration) without
+            // reentrant locking.
+            PollEventsLocked();
+            DrainPendingEvents();
+        }
+
+        /// <summary>
+        /// Polls socket I/O and connection state under <see cref="_lock"/>.
+        /// Transport events raised here are queued for deferred delivery.
+        /// </summary>
+        private void PollEventsLocked()
+        {
             lock (_lock)
             {
-                if (_socket == null) return;
-
-                long now = GetTimestampMs();
-
-                // 1. Receive incoming datagrams - reuse pre-allocated buffer
-                EndPoint senderEp = new IPEndPoint(IPAddress.Any, 0);
-
-                while (true)
+                if (_socket != null)
                 {
-                    Socket? socket = _socket;
-                    if (socket == null) break;
+                    long now = GetTimestampMs();
 
-                    int available;
-                    try
-                    {
-                        available = socket.Available;
-                    }
-                    catch (SocketException)
-                    {
-                        break;
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                        break;
-                    }
+                    // 1. Receive incoming datagrams - reuse pre-allocated buffer
+                    EndPoint senderEp = new IPEndPoint(IPAddress.Any, 0);
 
-                    if (available <= 0) break;
-
-                    // Fresh sender endpoint per iteration to avoid stale data
-                    senderEp = new IPEndPoint(IPAddress.Any, 0);
-
-                    try
+                    while (true)
                     {
-                        int received = socket.ReceiveFrom(_recvBuffer, ref senderEp);
-                        if (received == 0) break;
-                        if (received >= 8) // Minimum envelope header
+                        Socket? socket = _socket;
+                        if (socket == null) break;
+
+                        int available;
+                        try
                         {
-                            ProcessIncomingDatagram(_recvBuffer.AsSpan(0, received), senderEp);
+                            available = socket.Available;
+                        }
+                        catch (SocketException)
+                        {
+                            break;
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            break;
+                        }
+
+                        if (available <= 0) break;
+
+                        // Fresh sender endpoint per iteration to avoid stale data
+                        senderEp = new IPEndPoint(IPAddress.Any, 0);
+
+                        try
+                        {
+                            int received = socket.ReceiveFrom(_recvBuffer, ref senderEp);
+                            if (received == 0) break;
+                            if (received >= 8) // Minimum envelope header
+                            {
+                                ProcessIncomingDatagram(_recvBuffer.AsSpan(0, received), senderEp);
+                            }
+                        }
+                        catch (SocketException)
+                        {
+                            break;
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            break;
                         }
                     }
-                    catch (SocketException)
-                    {
-                        break;
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                        break;
-                    }
-                }
 
-                // Client-side connection timeout: avoid stuck "Connecting" state (UX)
-                if (!IsHost && !IsConnected && _remoteEndPoint != null && _socket != null && _connectionAttemptStartMs > 0)
-                {
-                    if (GetTimestampMs() - _connectionAttemptStartMs > ConnectionTimeoutMs)
+                    // Client-side connection timeout: avoid stuck "Connecting" state (UX)
+                    if (!IsHost && !IsConnected && _remoteEndPoint != null && _socket != null && _connectionAttemptStartMs > 0)
                     {
-                        var peer = _remotePeerId ?? new NetworkPeerId(0);
-                        _connectionAttemptStartMs = 0;
-                        ResetSessionState();
-                        CloseSocket();
-                        OnPeerDisconnected?.Invoke(peer, DisconnectReason.Timeout);
+                        if (GetTimestampMs() - _connectionAttemptStartMs > ConnectionTimeoutMs)
+                        {
+                            var peer = _remotePeerId ?? new NetworkPeerId(0);
+                            _connectionAttemptStartMs = 0;
+                            ResetSessionState();
+                            CloseSocket();
+                            _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerDisconnected, peer, DisconnectReason.Timeout));
+                            return;
+                        }
+                    }
+
+                    // Host-side heartbeat timeout: detect client disappearance
+                    if (IsHost && IsConnected && _remoteEndPoint != null && _socket != null && _lastReceivedMs > 0)
+                    {
+                        if (GetTimestampMs() - _lastReceivedMs > HeartbeatTimeoutMs)
+                        {
+                            Disconnect(DisconnectReason.Timeout);
+                            return;
+                        }
+                    }
+
+                    // Early exit if disconnected or socket closed during datagram processing
+                    if (_socket == null || !IsConnected || _remoteEndPoint == null)
+                    {
                         return;
                     }
-                }
 
-                // Host-side heartbeat timeout: detect client disappearance
-                if (IsHost && IsConnected && _remoteEndPoint != null && _socket != null && _lastReceivedMs > 0)
-                {
-                    if (GetTimestampMs() - _lastReceivedMs > HeartbeatTimeoutMs)
+                    // 2. Retransmit unacknowledged reliable packets
+                    bool connectionLost = false;
+                    var node = _unacknowledged.First;
+                    while (node != null)
+                    {
+                        var next = node.Next;
+                        var item = node.Value;
+                        // Exponential backoff: 100ms, 200ms, 400ms, 800ms, capped at 2000ms
+                        int backoffMs = Math.Min(100 * (1 << Math.Min(item.Retries, 4)), 2000);
+                        if (now - item.LastSentTimeMs > backoffMs)
+                        {
+                            if (item.Retries >= 10)
+                            {
+                                // Connection lost - mark for disconnect after loop
+                                connectionLost = true;
+                                break;
+                            }
+
+                            item.Retries++;
+                            item.LastSentTimeMs = now;
+                            node.Value = item;
+
+                            if (_remoteEndPoint != null && _socket != null)
+                            {
+                                try
+                                {
+                                    _socket.SendTo(item.Envelope, _remoteEndPoint);
+                                }
+                                catch (SocketException ex) { System.Diagnostics.Debug.WriteLine($"Socket error: {ex.Message}"); }
+                                catch (ObjectDisposedException ex) { System.Diagnostics.Debug.WriteLine($"Socket disposed: {ex.Message}"); }
+                            }
+                        }
+                        node = next;
+                    }
+
+                    if (connectionLost)
                     {
                         Disconnect(DisconnectReason.Timeout);
                         return;
                     }
-                }
 
-                // Early exit if disconnected or socket closed during datagram processing
-                if (_socket == null || !IsConnected || _remoteEndPoint == null)
-                {
-                    return;
-                }
-
-                // 2. Retransmit unacknowledged reliable packets
-                bool connectionLost = false;
-                var node = _unacknowledged.First;
-                while (node != null)
-                {
-                    var next = node.Next;
-                    var item = node.Value;
-                    // Exponential backoff: 100ms, 200ms, 400ms, 800ms, capped at 2000ms
-                    int backoffMs = Math.Min(100 * (1 << Math.Min(item.Retries, 4)), 2000);
-                    if (now - item.LastSentTimeMs > backoffMs)
+                    // 3. Heartbeat ping
+                    if (IsConnected && _remoteEndPoint != null && _socket != null)
                     {
-                        if (item.Retries >= 10)
+                        if (now - _lastPingSentMs > 1000)
                         {
-                            // Connection lost - mark for disconnect after loop
-                            connectionLost = true;
-                            break;
+                            _lastPingSentMs = now;
+                            byte[] timestampPayload = BitConverter.GetBytes(now);
+                            SendEnvelope(UdpFrameType.Ping, 0, 0, DeliveryMethod.Unreliable, timestampPayload);
                         }
-
-                        item.Retries++;
-                        item.LastSentTimeMs = now;
-                        node.Value = item;
-
-                        if (_remoteEndPoint != null && _socket != null)
-                        {
-                            try
-                            {
-                                _socket.SendTo(item.Envelope, _remoteEndPoint);
-                            }
-                            catch (SocketException ex) { System.Diagnostics.Debug.WriteLine($"Socket error: {ex.Message}"); }
-                            catch (ObjectDisposedException ex) { System.Diagnostics.Debug.WriteLine($"Socket disposed: {ex.Message}"); }
-                        }
-                    }
-                    node = next;
-                }
-
-                if (connectionLost)
-                {
-                    Disconnect(DisconnectReason.Timeout);
-                    return;
-                }
-
-                // 3. Heartbeat ping
-                if (IsConnected && _remoteEndPoint != null && _socket != null)
-                {
-                    if (now - _lastPingSentMs > 1000)
-                    {
-                        _lastPingSentMs = now;
-                        byte[] timestampPayload = BitConverter.GetBytes(now);
-                        SendEnvelope(UdpFrameType.Ping, 0, 0, DeliveryMethod.Unreliable, timestampPayload);
                     }
                 }
             }
@@ -601,7 +656,7 @@ namespace SilksongCoop.Core.Networking
                                 // No room code set, fall back to old behavior (no authentication)
                                 _isConnected = true;
                                 SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
-                                OnPeerConnected?.Invoke(_remotePeerId.Value);
+                                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, _remotePeerId.Value));
                             }
                         }
                         break;
@@ -634,7 +689,7 @@ namespace SilksongCoop.Core.Networking
                             {
                                 _isConnected = true;
                                 SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
-                                OnPeerConnected?.Invoke(_remotePeerId!.Value);
+                                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, _remotePeerId!.Value));
                             }
                             else
                             {
@@ -668,7 +723,7 @@ namespace SilksongCoop.Core.Networking
                             _remotePeerId = new NetworkPeerId(hostPeerValue, "Host");
                             _isConnected = true;
 
-                            OnPeerConnected?.Invoke(_remotePeerId.Value);
+                            _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, _remotePeerId.Value));
                         }
                         break;
 
@@ -729,9 +784,10 @@ namespace SilksongCoop.Core.Networking
                             _remoteEndPoint = null;
                             _remotePeerId = null;
                             ResetSessionState();
-                            // Defer event invocation to avoid reentrancy under lock
-                            // Note: This still fires under lock in current design; documented as reentrant-safe
-                            OnPeerDisconnected?.Invoke(peer, DisconnectReason.GracefulDisconnect);
+                            // BUG-02: defer the event - the handler re-enters the transport
+                            // (TriggerTeamWipe в†’ ExitSpectatorMode в†’ Disconnect) and must
+                            // not run while _lock is held.
+                            _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerDisconnected, peer, DisconnectReason.GracefulDisconnect));
                         }
                         break;
                 }
@@ -774,21 +830,13 @@ namespace SilksongCoop.Core.Networking
                             pending.Remove(key);
                         }
 
-                        // If still over cap, remove oldest entries
-                        while (pending.Count >= MaxPendingPerChannel && pending.Count > 0)
+                        // If still over cap, remove oldest entries. On a SortedDictionary the
+                        // enumerator walks directly to the minimum key (O(log n) per removal).
+                        while (pending.Count >= MaxPendingPerChannel)
                         {
-                            uint oldestKey = 0;
-                            bool found = false;
-                            foreach (var key in pending.Keys)
-                            {
-                                oldestKey = key;
-                                found = true;
-                                break;
-                            }
-                            if (found)
-                                pending.Remove(oldestKey);
-                            else
-                                break;
+                            var first = pending.Keys.GetEnumerator();
+                            if (!first.MoveNext()) break;
+                            pending.Remove(first.Current);
                         }
                     }
 
@@ -848,11 +896,54 @@ namespace SilksongCoop.Core.Networking
                 }
                 if (data == null || data.Length == 0) return;
                 var peer = _remotePeerId.Value;
-                OnDataReceived?.Invoke(peer, data, 0, data.Length);
+                // BUG-03: defer dispatch - handlers call transport.Send() and must not
+                // execute while _lock is held.
+                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.DataReceived, peer, data: data));
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[LiteNetLibTransport] DispatchData error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Delivers queued transport events on the caller's thread, outside <see cref="_lock"/>.
+        /// Handlers may re-enter the transport (Send / Disconnect / StartHost); any events they
+        /// enqueue are picked up by the following drain iteration. Bounded to avoid pathological
+        /// loops caused by handler feedback.
+        /// </summary>
+        private void DrainPendingEvents()
+        {
+            for (int guard = 0; guard < 1024; guard++)
+            {
+                DeferredEvent[] batch;
+                lock (_lock)
+                {
+                    if (_pendingEvents.Count == 0) return;
+                    batch = _pendingEvents.ToArray();
+                    _pendingEvents.Clear();
+                }
+
+                foreach (var e in batch)
+                {
+                    switch (e.Kind)
+                    {
+                        case DeferredEventKind.PeerConnected:
+                            OnPeerConnected?.Invoke(e.Peer);
+                            break;
+
+                        case DeferredEventKind.PeerDisconnected:
+                            OnPeerDisconnected?.Invoke(e.Peer, e.Reason);
+                            break;
+
+                        case DeferredEventKind.DataReceived:
+                            // The connection may have been dropped by an earlier handler in this
+                            // batch (e.g. Disconnect inside a data callback) - drop stale data.
+                            if (!_isConnected || e.Data == null) break;
+                            OnDataReceived?.Invoke(e.Peer, e.Data, 0, e.Data.Length);
+                            break;
+                    }
+                }
             }
         }
 
