@@ -9,6 +9,8 @@ namespace SilksongCoop.Core.Protocol
     /// </summary>
     public ref struct PacketWriter
     {
+        #region Fields and Constructor
+
         private readonly Span<byte> _buffer;
         private int _position;
 
@@ -22,6 +24,10 @@ namespace SilksongCoop.Core.Protocol
             _position = 0;
         }
 
+        #endregion
+
+        #region Properties
+
         public int Position => _position;
         public int Capacity => _buffer.Length;
         public int Remaining => _buffer.Length - _position;
@@ -30,6 +36,10 @@ namespace SilksongCoop.Core.Protocol
         /// Gets a read-only span over the bytes that have been written so far.
         /// </summary>
         public ReadOnlySpan<byte> WrittenSpan => _buffer.Slice(0, _position);
+
+        #endregion
+
+        #region Header and Primitive Writers
 
         /// <summary>
         /// Writes a packet header to the buffer.
@@ -150,6 +160,10 @@ namespace SilksongCoop.Core.Protocol
             WriteByte(value ? (byte)1 : (byte)0);
         }
 
+        #endregion
+
+        #region Complex Type Writers
+
         /// <summary>
         /// Writes a sequence of bytes to the buffer.
         /// </summary>
@@ -194,6 +208,8 @@ namespace SilksongCoop.Core.Protocol
                 throw new InvalidOperationException("Failed to write GUID bytes");
             _position += 16;
         }
+
+        #endregion
 
         private void EnsureCapacity(int size)
         {

@@ -11,6 +11,8 @@ namespace SilksongCoop.Core.State
     /// </summary>
     public class VitalsSyncService : IVitalsSyncService
     {
+        #region Fields and Properties
+
         private static void Log(string msg) => System.Diagnostics.Debug.WriteLine(msg);
 
         private readonly HashSet<Guid> _processedTransactions = new HashSet<Guid>();
@@ -64,6 +66,10 @@ namespace SilksongCoop.Core.State
 
         private readonly object _stateLock = new object();
 
+        #endregion
+
+        #region Events
+
         public event Action<int, int>? OnRemoteVitalsObserved;
         public event Action<int>? OnSharedMaxHealthChanged;
         public event Action<int>? OnSharedMaxSilkChanged;
@@ -98,6 +104,10 @@ namespace SilksongCoop.Core.State
                 SharedShellShards = initialShards;
             }
         }
+
+        #endregion
+
+        #region State Synchronization
 
         /// <summary>
         /// Handles local player taking damage.
@@ -276,6 +286,10 @@ namespace SilksongCoop.Core.State
             OnOutgoingCurrencyBroadcast?.Invoke(packet);
         }
 
+        #endregion
+
+        #region Packet Handling
+
         /// <summary>
         /// Handles an incoming vitals sync packet from a remote peer.
         /// </summary>
@@ -380,6 +394,10 @@ namespace SilksongCoop.Core.State
                 Log($"[VitalsSyncService] HandleCurrencyPacket error: {ex.Message}");
             }
         }
+
+        #endregion
+
+        #region Broadcasting
 
         /// <summary>
         /// Broadcasts the current local player's vitals to the remote peer.
@@ -487,5 +505,7 @@ namespace SilksongCoop.Core.State
                 _processedTransactions.Remove(oldest);
             }
         }
+
+        #endregion
     }
 }

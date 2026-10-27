@@ -18,6 +18,8 @@ namespace SilksongCoop.Mod.Clones
     /// </summary>
     public class RemotePlayerController : MonoBehaviour
     {
+        #region Fields and Properties
+
         private const double TargetDelayMs = 50.0; // 50ms adaptive jitter delay window
 
         private NetworkPeerId _peerId;
@@ -49,6 +51,10 @@ namespace SilksongCoop.Mod.Clones
         public ushort StateFlags => _stateFlags;
         public uint LastTimestampMs => _lastTimestampMs;
         public bool IsInSameScene => _isInSameScene;
+
+        #endregion
+
+        #region Initialization
 
         private void Awake()
         {
@@ -121,6 +127,10 @@ namespace SilksongCoop.Mod.Clones
                 _fallbackClip = library.clips[0];
             }
         }
+
+        #endregion
+
+        #region State Synchronization
 
         /// <summary>
         /// Updates the remote player's transform, velocity, animation, and state.
@@ -343,6 +353,10 @@ namespace SilksongCoop.Mod.Clones
             _dashTrail?.TriggerDash(isAirDash);
         }
 
+        #endregion
+
+        #region Update and Helper Methods
+
         /// <summary>
         /// Retrieves the current state of the remote player clone.
         /// </summary>
@@ -503,5 +517,7 @@ namespace SilksongCoop.Mod.Clones
                 }
             }
         }
+
+        #endregion
     }
 }

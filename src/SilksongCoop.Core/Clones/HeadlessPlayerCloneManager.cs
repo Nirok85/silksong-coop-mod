@@ -14,6 +14,8 @@ namespace SilksongCoop.Core.Clones
     /// </summary>
     public class HeadlessPlayerCloneManager : IPlayerCloneManager
     {
+        #region Nested Types
+
         private class CloneEntry
         {
             public NetworkPeerId PeerId;
@@ -32,8 +34,16 @@ namespace SilksongCoop.Core.Clones
             public uint LastTimestampMs;
         }
 
+        #endregion
+
+        #region Fields and Properties
+
         private readonly Dictionary<NetworkPeerId, CloneEntry> _clones = new Dictionary<NetworkPeerId, CloneEntry>();
         private readonly double _targetDelayMs;
+
+        #endregion
+
+        #region Constructors
 
         /// <summary>
         /// Initializes a new instance of the headless clone manager.
@@ -45,6 +55,10 @@ namespace SilksongCoop.Core.Clones
         }
 
         public int ActiveCloneCount => _clones.Count;
+
+        #endregion
+
+        #region Clone Management
 
         /// <summary>
         /// Spawns a remote player clone or resets an existing one.
@@ -157,6 +171,10 @@ namespace SilksongCoop.Core.Clones
             }
         }
 
+        #endregion
+
+        #region Remote State Updates
+
         /// <summary>
         /// Triggers a remote action on the specified player clone.
         /// </summary>
@@ -207,6 +225,10 @@ namespace SilksongCoop.Core.Clones
             if (!_clones.TryGetValue(peerId, out var clone)) return;
             clone.DashLifecycle.TriggerDash(isAirDash, clone.IsPlayer2);
         }
+
+        #endregion
+
+        #region State Queries
 
         /// <summary>
         /// Attempts to retrieve the current position of a remote player.
@@ -268,6 +290,10 @@ namespace SilksongCoop.Core.Clones
         {
             return _clones.ContainsKey(peerId);
         }
+
+        #endregion
+
+        #region Interpolation
 
         /// <summary>
         /// Updates interpolation for all remote clones based on current time.
@@ -352,6 +378,10 @@ namespace SilksongCoop.Core.Clones
             }
         }
 
+        #endregion
+
+        #region Cleanup
+
         /// <summary>
         /// Resets and despawns all remote player clones.
         /// </summary>
@@ -359,5 +389,7 @@ namespace SilksongCoop.Core.Clones
         {
             _clones.Clear();
         }
+
+        #endregion
     }
 }

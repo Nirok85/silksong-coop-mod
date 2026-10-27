@@ -11,7 +11,13 @@ namespace SilksongCoop.Mod.Hooks
     [HarmonyPatch]
     public static class HeroVitalsHooks
     {
+        #region Fields
+
         private static int _lastNailUpgradeLevel = -1;
+
+        #endregion
+
+        #region Harmony Patches
 
         /// <summary>
         /// Hook that fires after max health is increased.
@@ -261,5 +267,7 @@ namespace SilksongCoop.Mod.Hooks
                 SilksongCoopPlugin.LogWarn($"[HeroVitalsHooks] PostfixIntAdd error: {ex.Message}");
             }
         }
+
+        #endregion
     }
 }

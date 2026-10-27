@@ -14,6 +14,8 @@ namespace SilksongCoop.Mod.Visuals
     /// </summary>
     public class DashTrailController : MonoBehaviour
     {
+        #region Fields
+
         private const float GhostEmissionInterval = 0.04f;
         private const float GhostFadeDuration = 0.22f;
 
@@ -25,15 +27,17 @@ namespace SilksongCoop.Mod.Visuals
         private Light? _rimLight;
         private int _lastUpdateFrame = -1;
 
+        #endregion
+
+        #region Properties
+
         public DashTrailPhase CurrentPhase => _lifecycle.CurrentPhase;
         public bool CanTriggerDash => _lifecycle.CanTriggerDash;
         public bool IsPlayer2 => _isPlayer2;
 
-        private void Awake()
-        {
-            _sourceSprite = GetComponent<tk2dSprite>();
-            SetupRimLight();
-        }
+        #endregion
+
+        #region Public Methods
 
         /// <summary>
         /// Initializes the dash trail controller for the specified player.
@@ -103,6 +107,16 @@ namespace SilksongCoop.Mod.Visuals
                     _rimLightObject?.SetActive(false);
                 }
             }
+        }
+
+        #endregion
+
+        #region Private Methods
+
+        private void Awake()
+        {
+            _sourceSprite = GetComponent<tk2dSprite>();
+            SetupRimLight();
         }
 
         private void Update()
@@ -242,6 +256,10 @@ namespace SilksongCoop.Mod.Visuals
             }
         }
 
+        #endregion
+
+        #region Nested Types
+
         private class DashGhostInstance : MonoBehaviour
         {
             private tk2dSprite? _sprite;
@@ -300,6 +318,8 @@ namespace SilksongCoop.Mod.Visuals
                 }
             }
         }
+
+        #endregion
 
         // Object pool for ghost instances to reduce GC pressure
         private readonly Queue<DashGhostInstance> _ghostPool = new Queue<DashGhostInstance>();

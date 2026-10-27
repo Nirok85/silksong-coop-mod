@@ -11,6 +11,8 @@ namespace SilksongCoop.Mod.UI
     /// </summary>
     public class ToastNotifier
     {
+        #region Nested Types
+
         /// <summary>
         /// Types of toast notifications.
         /// </summary>
@@ -33,6 +35,10 @@ namespace SilksongCoop.Mod.UI
             public float FadeOutDuration;
         }
 
+        #endregion
+
+        #region Constants and Fields
+
         private const int MaxVisible = 4;
         private const float ToastWidth = 340f;
         private const float ToastHeight = 34f;
@@ -42,6 +48,10 @@ namespace SilksongCoop.Mod.UI
 
         private readonly LinkedList<Toast> _pending = new LinkedList<Toast>();
         private readonly List<Toast> _active = new List<Toast>(MaxVisible);
+
+        #endregion
+
+        #region Public Methods
 
         /// <summary>
         /// Enqueue a new toast message. If too many toasts are queued, oldest are dropped.
@@ -184,6 +194,10 @@ namespace SilksongCoop.Mod.UI
             GUI.color = Color.white;
         }
 
+        #endregion
+
+        #region Private Methods
+
         private static (Color bg, Color border, Color text, string icon) GetKindColors(ToastKind kind)
         {
             return kind switch
@@ -228,5 +242,7 @@ namespace SilksongCoop.Mod.UI
         {
             return s.Replace("<", "<\u200B").Replace(">", "\u200B>");
         }
+
+        #endregion
     }
 }

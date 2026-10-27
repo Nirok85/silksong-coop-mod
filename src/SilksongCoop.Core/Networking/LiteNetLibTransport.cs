@@ -12,6 +12,8 @@ namespace SilksongCoop.Core.Networking
     /// </summary>
     public class LiteNetLibTransport : INetworkTransport
     {
+        #region Nested Types
+
         private enum UdpFrameType : byte
         {
             Handshake = 0x01,
@@ -33,6 +35,10 @@ namespace SilksongCoop.Core.Networking
             public long LastSentTimeMs;
             public int Retries;
         }
+
+        #endregion
+
+        #region Fields and Constants
 
         private Socket? _socket;
         private EndPoint? _remoteEndPoint;
@@ -62,6 +68,10 @@ namespace SilksongCoop.Core.Networking
 
         private static long GetTimestampMs() => DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
 
+        #endregion
+
+        #region Events and Properties
+
         public event Action<NetworkPeerId>? OnPeerConnected;
         public event Action<NetworkPeerId, DisconnectReason>? OnPeerDisconnected;
         public event Action<NetworkPeerId, byte[], int, int>? OnDataReceived;
@@ -78,6 +88,10 @@ namespace SilksongCoop.Core.Networking
         public NetworkPeerId? RemotePeerId => _remotePeerId;
         public int RoundTripTimeMs => _rttMs;
         public int BoundPort => _boundPort;
+
+        #endregion
+
+        #region Connection Management
 
         /// <summary>
         /// Initializes a new instance of the LiteNetLibTransport class.
@@ -299,6 +313,10 @@ namespace SilksongCoop.Core.Networking
             }
         }
 
+        #endregion
+
+        #region Sending and Event Polling
+
         /// <summary>
         /// Sends data to the specified target peer.
         /// </summary>
@@ -498,6 +516,10 @@ namespace SilksongCoop.Core.Networking
                 }
             }
         }
+
+        #endregion
+
+        #region Incoming Packet Processing
 
         private void ProcessIncomingDatagram(ReadOnlySpan<byte> datagram, EndPoint sender)
         {
@@ -834,6 +856,10 @@ namespace SilksongCoop.Core.Networking
             }
         }
 
+        #endregion
+
+        #region Helper Methods
+
         private void SendEnvelope(UdpFrameType type, byte channel, uint sequence, DeliveryMethod method, ReadOnlySpan<byte> payload)
         {
             if (_socket == null || _remoteEndPoint == null) return;
@@ -887,5 +913,7 @@ namespace SilksongCoop.Core.Networking
         {
             Disconnect();
         }
+
+        #endregion
     }
 }

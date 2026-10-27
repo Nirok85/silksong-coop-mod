@@ -9,6 +9,8 @@ namespace SilksongCoop.Core.Protocol
     /// </summary>
     public ref struct PacketReader
     {
+        #region Fields and Constructor
+
         private readonly ReadOnlySpan<byte> _buffer;
         private int _position;
 
@@ -22,9 +24,17 @@ namespace SilksongCoop.Core.Protocol
             _position = 0;
         }
 
+        #endregion
+
+        #region Properties
+
         public int Position => _position;
         public int Length => _buffer.Length;
         public int Remaining => _buffer.Length - _position;
+
+        #endregion
+
+        #region Header Methods
 
         /// <summary>
         /// Reads and advances past a packet header.
@@ -56,6 +66,10 @@ namespace SilksongCoop.Core.Protocol
             }
             return false;
         }
+
+        #endregion
+
+        #region Primitive Read Methods
 
         /// <summary>
         /// Reads a single byte from the buffer.
@@ -172,6 +186,10 @@ namespace SilksongCoop.Core.Protocol
             return ReadByte() != 0;
         }
 
+        #endregion
+
+        #region Complex Read Methods
+
         /// <summary>
         /// Reads a specified number of bytes from the buffer.
         /// </summary>
@@ -212,6 +230,8 @@ namespace SilksongCoop.Core.Protocol
             _position += 16;
             return guid;
         }
+
+        #endregion
 
         private void EnsureAvailable(int count)
         {

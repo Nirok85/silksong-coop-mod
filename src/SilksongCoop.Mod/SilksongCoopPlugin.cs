@@ -1255,7 +1255,7 @@ namespace SilksongCoop.Mod
         }
         #endregion
 
-        #region Network Broadcasting
+        #region Frame Update and Lifecycle
         /// <summary>
         /// Broadcasts the local hero's authoritative position, velocity, state flags and
         /// animation state to the remote peer at the configured tick rate.

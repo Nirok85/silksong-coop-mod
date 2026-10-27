@@ -10,6 +10,8 @@ namespace SilksongCoop.Mod.Settings
     /// </summary>
     public class KeybindManager
     {
+        #region Fields
+
         private readonly Dictionary<string, KeyCode> _keybinds = new Dictionary<string, KeyCode>();
         private readonly SilksongCoopPlugin _plugin;
 
@@ -17,6 +19,16 @@ namespace SilksongCoop.Mod.Settings
         public const string ToggleMenu = "ToggleMenu";
         public const string ToggleSpectatorCamera = "ToggleSpectatorCamera";
         public const string ToggleDiagnostics = "ToggleDiagnostics";
+
+        private static bool _legacyInputLogged = false;
+        private static bool _newInputLogged = false;
+        private static bool _keyboardTypeLogged = false;
+        private static bool _keyboardCurrentLogged = false;
+        private static bool _newInputExceptionLogged = false;
+
+        #endregion
+
+        #region Constructors
 
         /// <summary>
         /// Initializes a new keybind manager with default bindings.
@@ -29,30 +41,9 @@ namespace SilksongCoop.Mod.Settings
             LoadFromConfig();
         }
 
-        private void InitializeDefaults()
-        {
-            _keybinds[ToggleMenu] = KeyCode.F10;
-            _keybinds[ToggleSpectatorCamera] = KeyCode.F9;
-            _keybinds[ToggleDiagnostics] = KeyCode.F11;
-        }
+        #endregion
 
-        private void LoadFromConfig()
-        {
-            if (_plugin.Config == null) return;
-
-            // Iterate over a snapshot list of keys to prevent 'Collection was modified' InvalidOperationException
-            var keys = new List<string>(_keybinds.Keys);
-            foreach (var action in keys)
-            {
-                var configEntry = _plugin.Config.Bind(
-                    "Keybinds",
-                    action,
-                    _keybinds[action],
-                    $"Keybind for {action}"
-                );
-                _keybinds[action] = configEntry.Value;
-            }
-        }
+        #region Public Methods
 
         /// <summary>
         /// Gets the keybind for the specified action.
@@ -134,9 +125,68 @@ namespace SilksongCoop.Mod.Settings
             }
             return result;
         }
-        
-        private static bool _legacyInputLogged = false;
-        private static bool _newInputLogged = false;
+
+        /// <summary>
+        /// Gets a copy of all keybinds.
+        /// </summary>
+        /// <returns>Dictionary of action names to their bound keys.</returns>
+        public Dictionary<string, KeyCode> GetAllKeybinds()
+        {
+            return new Dictionary<string, KeyCode>(_keybinds);
+        }
+
+        /// <summary>
+        /// Resets all keybinds to their default values and persists them.
+        /// </summary>
+        public void ResetToDefaults()
+        {
+            InitializeDefaults();
+            
+            // Persist defaults to config
+            if (_plugin.Config != null)
+            {
+                var keys = new List<string>(_keybinds.Keys);
+                foreach (var action in keys)
+                {
+                    var configEntry = _plugin.Config.Bind(
+                        "Keybinds",
+                        action,
+                        _keybinds[action],
+                        $"Keybind for {action}"
+                    );
+                    configEntry.Value = _keybinds[action];
+                }
+            }
+        }
+
+        #endregion
+
+        #region Private Methods
+
+        private void InitializeDefaults()
+        {
+            _keybinds[ToggleMenu] = KeyCode.F10;
+            _keybinds[ToggleSpectatorCamera] = KeyCode.F9;
+            _keybinds[ToggleDiagnostics] = KeyCode.F11;
+        }
+
+        private void LoadFromConfig()
+        {
+            if (_plugin.Config == null) return;
+
+            // Iterate over a snapshot list of keys to prevent 'Collection was modified' InvalidOperationException
+            var keys = new List<string>(_keybinds.Keys);
+            foreach (var action in keys)
+            {
+                var configEntry = _plugin.Config.Bind(
+                    "Keybinds",
+                    action,
+                    _keybinds[action],
+                    $"Keybind for {action}"
+                );
+                _keybinds[action] = configEntry.Value;
+            }
+        }
 
         private static bool CheckNewInputSystemKey(KeyCode key)
         {
@@ -213,42 +263,7 @@ namespace SilksongCoop.Mod.Settings
 
             return false;
         }
-        
-        private static bool _keyboardTypeLogged = false;
-        private static bool _keyboardCurrentLogged = false;
-        private static bool _newInputExceptionLogged = false;
 
-        /// <summary>
-        /// Gets a copy of all keybinds.
-        /// </summary>
-        /// <returns>Dictionary of action names to their bound keys.</returns>
-        public Dictionary<string, KeyCode> GetAllKeybinds()
-        {
-            return new Dictionary<string, KeyCode>(_keybinds);
-        }
-
-        /// <summary>
-        /// Resets all keybinds to their default values and persists them.
-        /// </summary>
-        public void ResetToDefaults()
-        {
-            InitializeDefaults();
-            
-            // Persist defaults to config
-            if (_plugin.Config != null)
-            {
-                var keys = new List<string>(_keybinds.Keys);
-                foreach (var action in keys)
-                {
-                    var configEntry = _plugin.Config.Bind(
-                        "Keybinds",
-                        action,
-                        _keybinds[action],
-                        $"Keybind for {action}"
-                    );
-                    configEntry.Value = _keybinds[action];
-                }
-            }
-        }
+        #endregion
     }
 }

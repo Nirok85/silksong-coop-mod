@@ -13,6 +13,8 @@ namespace SilksongCoop.Mod.UI
     /// </summary>
     public class NetworkDiagnostics
     {
+        #region Fields
+
         private const float WindowSeconds = 2.0f; // Rolling window for rate calculations
         private const float HistoryDuration = 60.0f; // 60-second history for graphs
         private const int HistorySampleInterval = 1; // Sample every 1 second
@@ -45,6 +47,10 @@ namespace SilksongCoop.Mod.UI
         private float _lastHistorySampleTime;
         private float _currentPing;
 
+        #endregion
+
+        #region Properties
+
         public long BytesOutPerSecond => (long)_bytesOutPerSecond;
         public long BytesInPerSecond => (long)_bytesInPerSecond;
         public long PacketsOutPerSecond => (long)_packetsOutPerSecond;
@@ -65,36 +71,9 @@ namespace SilksongCoop.Mod.UI
             }
         }
 
-        /// <summary>
-        /// Update rolling averages. Call once per frame from Update().
-        /// </summary>
-        public void Update(float deltaTime)
-        {
-            _elapsed += deltaTime;
+        #endregion
 
-            if (_elapsed >= WindowSeconds)
-            {
-                float inv = 1f / _elapsed;
-                _bytesOutPerSecond = _bytesOutAccumulator * inv;
-                _bytesInPerSecond = _bytesInAccumulator * inv;
-                _packetsOutPerSecond = _packetsOutAccumulator * inv;
-                _packetsInPerSecond = _packetsInAccumulator * inv;
-
-                _bytesOutAccumulator = 0;
-                _bytesInAccumulator = 0;
-                _packetsOutAccumulator = 0;
-                _packetsInAccumulator = 0;
-                _elapsed = 0f;
-            }
-
-            // Sample historical data every second
-            float currentTime = Time.time;
-            if (currentTime - _lastHistorySampleTime >= HistorySampleInterval)
-            {
-                SampleHistory(currentTime);
-                _lastHistorySampleTime = currentTime;
-            }
-        }
+        #region Public Methods
 
         /// <summary>
         /// Record ping (RTT) value in milliseconds.
@@ -102,26 +81,6 @@ namespace SilksongCoop.Mod.UI
         public void RecordPing(float pingMs)
         {
             _currentPing = pingMs;
-        }
-
-        /// <summary>
-        /// Sample current metrics for historical graphs.
-        /// </summary>
-        private void SampleHistory(float timestamp)
-        {
-            // Record current metrics
-            _pingHistory.Enqueue((timestamp, _currentPing));
-            _packetLossHistory.Enqueue((timestamp, PacketLossPercent));
-            _bandwidthHistory.Enqueue((timestamp, _bytesOutPerSecond + _bytesInPerSecond));
-
-            // Remove old samples (older than 60 seconds)
-            float cutoffTime = timestamp - HistoryDuration;
-            while (_pingHistory.Count > 0 && _pingHistory.Peek().timestamp < cutoffTime)
-                _pingHistory.Dequeue();
-            while (_packetLossHistory.Count > 0 && _packetLossHistory.Peek().timestamp < cutoffTime)
-                _packetLossHistory.Dequeue();
-            while (_bandwidthHistory.Count > 0 && _bandwidthHistory.Peek().timestamp < cutoffTime)
-                _bandwidthHistory.Dequeue();
         }
 
         /// <summary>
@@ -183,18 +142,6 @@ namespace SilksongCoop.Mod.UI
             }
             _sessionActive = false;
             Reset();
-        }
-
-        /// <summary>
-        /// Clear all historical data.
-        /// </summary>
-        private void ClearHistory()
-        {
-            _pingHistory.Clear();
-            _packetLossHistory.Clear();
-            _bandwidthHistory.Clear();
-            _lastHistorySampleTime = 0f;
-            _currentPing = 0f;
         }
 
         /// <summary>
@@ -295,6 +242,73 @@ namespace SilksongCoop.Mod.UI
             File.WriteAllText(filePath, sb.ToString());
         }
 
+        #endregion
+
+        #region Private Methods
+
+        /// <summary>
+        /// Update rolling averages. Call once per frame from Update().
+        /// </summary>
+        public void Update(float deltaTime)
+        {
+            _elapsed += deltaTime;
+
+            if (_elapsed >= WindowSeconds)
+            {
+                float inv = 1f / _elapsed;
+                _bytesOutPerSecond = _bytesOutAccumulator * inv;
+                _bytesInPerSecond = _bytesInAccumulator * inv;
+                _packetsOutPerSecond = _packetsOutAccumulator * inv;
+                _packetsInPerSecond = _packetsInAccumulator * inv;
+
+                _bytesOutAccumulator = 0;
+                _bytesInAccumulator = 0;
+                _packetsOutAccumulator = 0;
+                _packetsInAccumulator = 0;
+                _elapsed = 0f;
+            }
+
+            // Sample historical data every second
+            float currentTime = Time.time;
+            if (currentTime - _lastHistorySampleTime >= HistorySampleInterval)
+            {
+                SampleHistory(currentTime);
+                _lastHistorySampleTime = currentTime;
+            }
+        }
+
+        /// <summary>
+        /// Sample current metrics for historical graphs.
+        /// </summary>
+        private void SampleHistory(float timestamp)
+        {
+            // Record current metrics
+            _pingHistory.Enqueue((timestamp, _currentPing));
+            _packetLossHistory.Enqueue((timestamp, PacketLossPercent));
+            _bandwidthHistory.Enqueue((timestamp, _bytesOutPerSecond + _bytesInPerSecond));
+
+            // Remove old samples (older than 60 seconds)
+            float cutoffTime = timestamp - HistoryDuration;
+            while (_pingHistory.Count > 0 && _pingHistory.Peek().timestamp < cutoffTime)
+                _pingHistory.Dequeue();
+            while (_packetLossHistory.Count > 0 && _packetLossHistory.Peek().timestamp < cutoffTime)
+                _packetLossHistory.Dequeue();
+            while (_bandwidthHistory.Count > 0 && _bandwidthHistory.Peek().timestamp < cutoffTime)
+                _bandwidthHistory.Dequeue();
+        }
+
+        /// <summary>
+        /// Clear all historical data.
+        /// </summary>
+        private void ClearHistory()
+        {
+            _pingHistory.Clear();
+            _packetLossHistory.Clear();
+            _bandwidthHistory.Clear();
+            _lastHistorySampleTime = 0f;
+            _currentPing = 0f;
+        }
+
         private void Reset()
         {
             _elapsed = 0f;
@@ -307,5 +321,7 @@ namespace SilksongCoop.Mod.UI
             _packetsOutPerSecond = 0f;
             _packetsInPerSecond = 0f;
         }
+
+        #endregion
     }
 }

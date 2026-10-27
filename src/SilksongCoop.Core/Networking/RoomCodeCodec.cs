@@ -11,8 +11,14 @@ namespace SilksongCoop.Core.Networking
     /// </summary>
     public static class RoomCodeCodec
     {
+        #region Constants
+
         private const string CrockfordAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
         private const string Prefix = "SK-";
+
+        #endregion
+
+        #region Public Methods
 
         /// <summary>
         /// Encodes an IP address and port into a room code string.
@@ -189,6 +195,10 @@ namespace SilksongCoop.Core.Networking
             return crc;
         }
 
+        #endregion
+
+        #region Private Methods
+
         private static string NormalizeCode(string input)
         {
             string trimmed = input.Trim();
@@ -284,5 +294,7 @@ namespace SilksongCoop.Core.Networking
             }
             return true;
         }
+
+        #endregion
     }
 }

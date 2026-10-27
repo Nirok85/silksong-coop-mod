@@ -12,6 +12,8 @@ namespace SilksongCoop.Mod.Visuals
     /// </summary>
     public class PaletteSwapController : MonoBehaviour
     {
+        #region Fields
+
         private tk2dSprite[]? _sprites;
         private Renderer[]? _renderers;
         private MaterialPropertyBlock? _propertyBlock;
@@ -23,6 +25,10 @@ namespace SilksongCoop.Mod.Visuals
 
         public bool IsPlayer2 => _isPlayer2;
         public float HueShift => _hueShift;
+
+        #endregion
+
+        #region Unity Lifecycle
 
         private void Awake()
         {
@@ -55,6 +61,30 @@ namespace SilksongCoop.Mod.Visuals
             _needsUpdate = true;
             ApplyPaletteSwap();
         }
+
+        private void LateUpdate()
+        {
+            try
+            {
+                // Enforce palette swap in LateUpdate after all animations and state changes
+                if (_isPlayer2)
+                {
+                    ApplyPaletteSwap();
+                }
+                else if (_needsUpdate)
+                {
+                    ApplyPaletteSwap();
+                }
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[PaletteSwapController] LateUpdate error: {ex.Message}");
+            }
+        }
+
+        #endregion
+
+        #region Palette Swap Operations
 
         /// <summary>
         /// Sets whether this is player 2 and applies the appropriate palette swap.
@@ -193,26 +223,6 @@ namespace SilksongCoop.Mod.Visuals
             }
         }
 
-        private void LateUpdate()
-        {
-            try
-            {
-                // Enforce palette swap in LateUpdate after all animations and state changes
-                if (_isPlayer2)
-                {
-                    ApplyPaletteSwap();
-                }
-                else if (_needsUpdate)
-                {
-                    ApplyPaletteSwap();
-                }
-            }
-            catch (Exception ex)
-            {
-                SilksongCoopPlugin.LogWarn($"[PaletteSwapController] LateUpdate error: {ex.Message}");
-            }
-        }
-
         /// <summary>
         /// Gets the shader property ID for the hue shift parameter.
         /// </summary>
@@ -231,5 +241,7 @@ namespace SilksongCoop.Mod.Visuals
 
             return Shader.PropertyToID(PaletteSwapMath.ShaderPropertyHueShift);
         }
+
+        #endregion
     }
 }

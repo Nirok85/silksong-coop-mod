@@ -9,6 +9,8 @@ namespace SilksongCoop.Core.Visuals
     /// </summary>
     public static class PaletteSwapMath
     {
+        #region Constants
+
         public const string KeywordHueShift = "CAN_HUESHIFT";
         public const string KeywordRecolour = "RECOLOUR";
         public const string ShaderPropertyHueShift = "_HueShift";
@@ -25,6 +27,10 @@ namespace SilksongCoop.Core.Visuals
 
         private const float OneOverSqrt3 = 0.5773502691896257645f;
         private const float OneThird = 1.0f / 3.0f;
+
+        #endregion
+
+        #region Color Space Conversions
 
         /// <summary>
         /// Converts an RGB triplet in [0, 1] to HSV in [0, 1].
@@ -105,6 +111,10 @@ namespace SilksongCoop.Core.Visuals
             b = Math.Clamp(b, 0f, 1f);
         }
 
+        #endregion
+
+        #region Hue Rotation Methods
+
         /// <summary>
         /// Applies normalized hue shift in [0, 1] using standard cylindrical HSV colorimetry.
         /// When S == 0 (achromatic colors: white mask, black horns, gray needle),
@@ -160,6 +170,10 @@ namespace SilksongCoop.Core.Visuals
             outB = b * cosTheta + crossZ * sinTheta + kDotV * (1f - cosTheta);
         }
 
+        #endregion
+
+        #region Analysis Methods
+
         /// <summary>
         /// Proves saturation invariance by evaluating whether an achromatic color is invariant under hue rotation.
         /// Returns true if the maximum channel deviation between shifted and original color is below tolerance.
@@ -209,5 +223,7 @@ namespace SilksongCoop.Core.Visuals
         {
             return CalculateSaturation(r, g, b) <= tolerance;
         }
+
+        #endregion
     }
 }

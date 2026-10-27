@@ -12,7 +12,7 @@ namespace SilksongCoop.Core.State
     /// </summary>
     public class InventorySyncService : IInventorySyncService
     {
-        private static void Log(string msg) => System.Diagnostics.Debug.WriteLine(msg);
+        #region Fields
 
         private readonly HashSet<string> _unlockedItems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<Guid> _processedTransactions = new HashSet<Guid>();
@@ -22,6 +22,10 @@ namespace SilksongCoop.Core.State
         private const int MaxTrackedTransactions = 500;
         private uint _sequenceCounter = 0;
         private string _localEquippedCrest = string.Empty;
+
+        #endregion
+
+        #region Properties
 
         public IReadOnlyCollection<string> UnlockedItems
         {
@@ -67,6 +71,10 @@ namespace SilksongCoop.Core.State
 
         public event Action<string, ItemCategory>? OnItemUnlocked;
         public event Action<ItemUnlockPacket>? OnOutgoingItemUnlockPacket;
+
+        #endregion
+
+        #region Public Methods
 
         /// <summary>
         /// Handles a local item discovery by numeric ID.
@@ -219,6 +227,12 @@ namespace SilksongCoop.Core.State
             }
         }
 
+        #endregion
+
+        #region Private Methods
+
+        private static void Log(string msg) => System.Diagnostics.Debug.WriteLine(msg);
+
         private void RecordTransaction(Guid transactionId)
         {
             _processedTransactions.Add(transactionId);
@@ -241,5 +255,7 @@ namespace SilksongCoop.Core.State
                 Log($"[InventorySyncService] RecordTransactionOrder error: {ex.Message}");
             }
         }
+
+        #endregion
     }
 }

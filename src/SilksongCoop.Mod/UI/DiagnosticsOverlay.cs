@@ -9,12 +9,18 @@ namespace SilksongCoop.Mod.UI
     /// </summary>
     public class DiagnosticsOverlay
     {
+        #region Constants
+
         private const float GraphWidth = 280f;
         private const float GraphHeight = 70f;
         private const float Padding = 10f;
         private const float RowSpacing = 8f;
         private const float TotalWidth = GraphWidth + Padding * 2;
         private const float TotalHeight = 20f + (GraphHeight + RowSpacing) * 3 + 24f + Padding * 2;
+
+        #endregion
+
+        #region Fields
 
         private readonly NetworkDiagnostics _diagnostics;
         private bool _isVisible;
@@ -25,11 +31,19 @@ namespace SilksongCoop.Mod.UI
         private static Texture2D? _bgTex;
         private static Texture2D? _gridTex;
 
+        #endregion
+
+        #region Properties
+
         public bool IsVisible
         {
             get => _isVisible;
             set => _isVisible = value;
         }
+
+        #endregion
+
+        #region Constructors
 
         /// <summary>
         /// Initializes a new instance of the DiagnosticsOverlay class.
@@ -39,6 +53,10 @@ namespace SilksongCoop.Mod.UI
         {
             _diagnostics = diagnostics;
         }
+
+        #endregion
+
+        #region Static Methods
 
         private static Texture2D GetSolidTexture(Color color)
         {
@@ -55,6 +73,10 @@ namespace SilksongCoop.Mod.UI
             if (_bgTex == null) _bgTex = GetSolidTexture(new Color(0f, 0f, 0f, 0.75f));
             if (_gridTex == null) _gridTex = GetSolidTexture(new Color(1f, 1f, 1f, 0.15f));
         }
+
+        #endregion
+
+        #region Public Methods
 
         /// <summary>
         /// Renders the diagnostics overlay GUI. Call from OnGUI when visible.
@@ -130,6 +152,10 @@ namespace SilksongCoop.Mod.UI
                 GUI.matrix = savedMatrix;
             }
         }
+
+        #endregion
+
+        #region Private Methods
 
         private void DrawGraph(string label, float y, float x,
             IEnumerable<float> data, float currentValue, string unit,
@@ -244,5 +270,7 @@ namespace SilksongCoop.Mod.UI
             foreach (float bps in bytesPerSecond)
                 yield return bps / 1024f;
         }
+
+        #endregion
     }
 }

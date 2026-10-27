@@ -10,6 +10,8 @@ namespace SilksongCoop.Core.Networking
     /// </summary>
     public class MockNetworkTransport : INetworkTransport
     {
+        #region Nested Types
+
         /// <summary>
         /// Represents a packet queued for delivery in the mock transport.
         /// </summary>
@@ -23,6 +25,10 @@ namespace SilksongCoop.Core.Networking
             public NetworkPeerId Sender;
         }
 
+        #endregion
+
+        #region Fields
+
         private MockNetworkTransport? _peer;
         private readonly List<QueuedPacket> _incomingQueue = new();
         private readonly object _lock = new();
@@ -32,9 +38,17 @@ namespace SilksongCoop.Core.Networking
         private readonly Dictionary<byte, uint> _receivedSequences = new();
         private readonly Dictionary<byte, SortedDictionary<uint, QueuedPacket>> _reliablePending = new();
 
+        #endregion
+
+        #region Events
+
         public event Action<NetworkPeerId>? OnPeerConnected;
         public event Action<NetworkPeerId, DisconnectReason>? OnPeerDisconnected;
         public event Action<NetworkPeerId, byte[], int, int>? OnDataReceived;
+
+        #endregion
+
+        #region Properties
 
         public bool IsHost { get; private set; }
         public bool IsConnected { get; private set; }
@@ -47,6 +61,10 @@ namespace SilksongCoop.Core.Networking
         public long CurrentVirtualTimeMs { get; set; }
         public bool UseVirtualTime { get; set; }
 
+        #endregion
+
+        #region Constructors
+
         /// <summary>
         /// Initializes a new mock transport instance for testing.
         /// </summary>
@@ -58,6 +76,10 @@ namespace SilksongCoop.Core.Networking
             LocalPeerId = new NetworkPeerId(peerId, displayName);
             _random = new Random(seed);
         }
+
+        #endregion
+
+        #region Public Methods
 
         /// <summary>
         /// Creates a paired host and client mock transport with configurable network conditions.
@@ -244,6 +266,10 @@ namespace SilksongCoop.Core.Networking
             }
         }
 
+        #endregion
+
+        #region Private Methods
+
         private void ProcessPacket(QueuedPacket packet)
         {
             byte channel = packet.Channel;
@@ -302,6 +328,18 @@ namespace SilksongCoop.Core.Networking
             OnDataReceived?.Invoke(packet.Sender, packet.Data, 0, packet.Data.Length);
         }
 
+        private long GetCurrentTimeMs()
+        {
+            if (UseVirtualTime)
+                return CurrentVirtualTimeMs;
+
+            return DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
+        }
+
+        #endregion
+
+        #region Public Methods
+
         /// <summary>
         /// Advances virtual time for deterministic testing.
         /// </summary>
@@ -311,14 +349,6 @@ namespace SilksongCoop.Core.Networking
             CurrentVirtualTimeMs += ms;
         }
 
-        private long GetCurrentTimeMs()
-        {
-            if (UseVirtualTime)
-                return CurrentVirtualTimeMs;
-
-            return DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
-        }
-
         /// <summary>
         /// Disposes the transport, releasing resources and disconnecting.
         /// </summary>
@@ -326,5 +356,7 @@ namespace SilksongCoop.Core.Networking
         {
             Disconnect();
         }
+
+        #endregion
     }
 }

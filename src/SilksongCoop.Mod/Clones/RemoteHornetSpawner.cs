@@ -16,6 +16,8 @@ namespace SilksongCoop.Mod.Clones
     /// </summary>
     public class RemoteHornetSpawner : MonoBehaviour, IPlayerCloneManager
     {
+        #region Singleton and Fields
+
         public static RemoteHornetSpawner? Instance { get; private set; }
 
         private readonly Dictionary<NetworkPeerId, RemotePlayerController> _activeClones =
@@ -33,6 +35,10 @@ namespace SilksongCoop.Mod.Clones
                 Destroy(this);
             }
         }
+
+        #endregion
+
+        #region Clone Lifecycle
 
         /// <summary>
         /// Spawns a remote player clone for the specified peer.
@@ -168,6 +174,10 @@ namespace SilksongCoop.Mod.Clones
                 SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] DespawnRemotePlayer error: {ex.Message}");
             }
         }
+
+        #endregion
+
+        #region Remote Control
 
         /// <summary>
         /// Updates the remote player's transform with interpolation and animation sync.
@@ -323,6 +333,10 @@ namespace SilksongCoop.Mod.Clones
             }
         }
 
+        #endregion
+
+        #region Query and Cleanup
+
         /// <summary>
         /// Attempts to retrieve the current position of a remote player clone.
         /// </summary>
@@ -421,5 +435,7 @@ namespace SilksongCoop.Mod.Clones
                 Instance = null;
             }
         }
+
+        #endregion
     }
 }

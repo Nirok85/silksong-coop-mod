@@ -10,25 +10,36 @@ namespace SilksongCoop.Core.State
     /// </summary>
     public class DeathLifecycleCoordinator : IDeathLifecycleCoordinator
     {
+        #region Fields
+
         private static void Log(string msg) => System.Diagnostics.Debug.WriteLine(msg);
 
         private readonly object _lock = new object();
 
         private DeathState _currentState = DeathState.Alive;
+        private bool _isPartnerAlive = true;
+        private float _remainingSpectatorTime;
+        private (float X, float Y) _lastPartnerPosition = (0f, 0f);
+        private uint _currentEpoch = 1;
+        private bool _isPostBenchRespawn = false;
+        private float _postBenchRespawnTimer = 0f;
+
+        #endregion
+
+        #region Properties
+
         public DeathState CurrentState
         {
             get { lock (_lock) { return _currentState; } }
             private set { lock (_lock) { _currentState = value; } }
         }
 
-        private bool _isPartnerAlive = true;
         public bool IsPartnerAlive
         {
             get { lock (_lock) { return _isPartnerAlive; } }
             set { lock (_lock) { _isPartnerAlive = value; } }
         }
 
-        private float _remainingSpectatorTime;
         public float RemainingSpectatorTime
         {
             get { lock (_lock) { return _remainingSpectatorTime; } }
@@ -37,7 +48,6 @@ namespace SilksongCoop.Core.State
 
         public float ReviveCooldownDuration { get; set; } = 20.0f; // Configurable between 15-30s
 
-        private (float X, float Y) _lastPartnerPosition = (0f, 0f);
         /// <summary>
         /// Gets or sets the last known position of the remote partner for revive targeting.
         /// </summary>
@@ -47,20 +57,24 @@ namespace SilksongCoop.Core.State
             set { lock (_lock) { _lastPartnerPosition = value; } }
         }
 
-        private uint _currentEpoch = 1;
         public uint CurrentEpoch
         {
             get { lock (_lock) { return _currentEpoch; } }
             private set { lock (_lock) { _currentEpoch = value; } }
         }
 
-        private bool _isPostBenchRespawn = false;
-        private float _postBenchRespawnTimer = 0f;
+        #endregion
+
+        #region Events
 
         public event Action<float, float>? OnSoloDeathSuppressed;
         public event Action? OnTeamWipeTriggered;
         public event Action<float, float>? OnReviveAtPartnerRequested;
         public event Action<DeathLifecyclePacket>? OnOutgoingDeathPacket;
+
+        #endregion
+
+        #region Public Methods
 
         /// <summary>
         /// Handles local player death, determining whether to enter spectator mode or trigger team wipe.
@@ -341,5 +355,7 @@ namespace SilksongCoop.Core.State
             _isPostBenchRespawn = true;
             _postBenchRespawnTimer = 5.0f;
         }
+
+        #endregion
     }
 }

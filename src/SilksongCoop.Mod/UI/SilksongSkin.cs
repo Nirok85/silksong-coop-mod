@@ -10,6 +10,8 @@ namespace SilksongCoop.Mod.UI
     /// </summary>
     public static class SilksongSkin
     {
+        #region Palette Constants
+
         // ── Palette ────────────────────────────────────────────────────────────
         // Backgrounds (darkest → lightest)
         /// <summary>
@@ -82,6 +84,10 @@ namespace SilksongCoop.Mod.UI
         /// </summary>
         public static readonly Color BlueInfo    = new Color(0.400f, 0.700f, 0.950f, 1.00f);
 
+        #endregion
+
+        #region Cached Textures
+
         // ── Cached skin (built once) ───────────────────────────────────────────
         private static GUISkin? _cached;
         private static Texture2D? _texBgDeepest, _texBgPanel, _texBgField, _texBgSubtle;
@@ -92,6 +98,10 @@ namespace SilksongCoop.Mod.UI
         /// Gets a 1x1 white texture used for drawing solid color bars and backgrounds.
         /// </summary>
         public static Texture2D WhitePixel => _texWhite ??= MakeTex(Color.white);
+
+        #endregion
+
+        #region Public Methods
 
         /// <summary>Returns the cached Silksong skin (created on first call).</summary>
         public static GUISkin GetSkin()
@@ -107,6 +117,10 @@ namespace SilksongCoop.Mod.UI
         {
             _cached = null;
         }
+
+        #endregion
+
+        #region Private Methods
 
         // ── Textures ───────────────────────────────────────────────────────────
         private static Texture2D MakeTex(Color c)
@@ -347,6 +361,10 @@ namespace SilksongCoop.Mod.UI
             return skin;
         }
 
+        #endregion
+
+        #region Public Style Methods
+
         /// <summary>
         /// Retrieve a custom named style from the skin (e.g. "SilksongTitle").
         /// Returns null if the style is not found.
@@ -374,5 +392,7 @@ namespace SilksongCoop.Mod.UI
             }
             GUILayout.Space(marginBottom);
         }
+
+        #endregion
     }
 }

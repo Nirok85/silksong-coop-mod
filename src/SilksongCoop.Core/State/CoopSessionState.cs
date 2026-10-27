@@ -31,53 +31,16 @@ namespace SilksongCoop.Core.State
     /// </summary>
     public class CoopSessionState
     {
+        #region Fields
+
         private readonly object _lock = new object();
 
         private SessionStatus _status = SessionStatus.Disconnected;
-        public SessionStatus Status
-        {
-            get { lock (_lock) { return _status; } }
-            private set { lock (_lock) { _status = value; } }
-        }
-
         private SessionRole _role = SessionRole.None;
-        public SessionRole Role
-        {
-            get { lock (_lock) { return _role; } }
-            private set { lock (_lock) { _role = value; } }
-        }
-
         private NetworkPeerId? _localPeerId;
-        public NetworkPeerId? LocalPeerId
-        {
-            get { lock (_lock) { return _localPeerId; } }
-            set { lock (_lock) { _localPeerId = value; } }
-        }
-
         private NetworkPeerId? _remotePeerId;
-        public NetworkPeerId? RemotePeerId
-        {
-            get { lock (_lock) { return _remotePeerId; } }
-            set { lock (_lock) { _remotePeerId = value; } }
-        }
-
         private string? _currentRoomCode;
-        public string? CurrentRoomCode
-        {
-            get { lock (_lock) { return _currentRoomCode; } }
-            set { lock (_lock) { _currentRoomCode = value; } }
-        }
-
         private ulong? _steamLobbyId;
-        public ulong? SteamLobbyId
-        {
-            get { lock (_lock) { return _steamLobbyId; } }
-            set { lock (_lock) { _steamLobbyId = value; } }
-        }
-
-        public event Action<SessionStatus, SessionStatus>? OnStatusChanged;
-        public event Action<NetworkPeerId>? OnPeerJoined;
-        public event Action<NetworkPeerId, DisconnectReason>? OnPeerLeft;
 
         private int _roundTripTimeMs;
         private uint _sentPackets;
@@ -85,6 +48,46 @@ namespace SilksongCoop.Core.State
         private ulong _sentBytes;
         private ulong _receivedBytes;
         private uint _currentTick;
+
+        #endregion
+
+        #region Properties
+
+        public SessionStatus Status
+        {
+            get { lock (_lock) { return _status; } }
+            private set { lock (_lock) { _status = value; } }
+        }
+
+        public SessionRole Role
+        {
+            get { lock (_lock) { return _role; } }
+            private set { lock (_lock) { _role = value; } }
+        }
+
+        public NetworkPeerId? LocalPeerId
+        {
+            get { lock (_lock) { return _localPeerId; } }
+            set { lock (_lock) { _localPeerId = value; } }
+        }
+
+        public NetworkPeerId? RemotePeerId
+        {
+            get { lock (_lock) { return _remotePeerId; } }
+            set { lock (_lock) { _remotePeerId = value; } }
+        }
+
+        public string? CurrentRoomCode
+        {
+            get { lock (_lock) { return _currentRoomCode; } }
+            set { lock (_lock) { _currentRoomCode = value; } }
+        }
+
+        public ulong? SteamLobbyId
+        {
+            get { lock (_lock) { return _steamLobbyId; } }
+            set { lock (_lock) { _steamLobbyId = value; } }
+        }
 
         public int RoundTripTimeMs
         {
@@ -135,6 +138,18 @@ namespace SilksongCoop.Core.State
                 }
             }
         }
+
+        #endregion
+
+        #region Events
+
+        public event Action<SessionStatus, SessionStatus>? OnStatusChanged;
+        public event Action<NetworkPeerId>? OnPeerJoined;
+        public event Action<NetworkPeerId, DisconnectReason>? OnPeerLeft;
+
+        #endregion
+
+        #region Public Methods
 
         /// <summary>
         /// Transitions the session to hosting state with the specified local peer and room code.
@@ -305,5 +320,7 @@ namespace SilksongCoop.Core.State
                 _currentTick++;
             }
         }
+
+        #endregion
     }
 }
