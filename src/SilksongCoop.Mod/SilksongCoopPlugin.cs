@@ -5,6 +5,7 @@
 // ============================================================================
 
 using System;
+using System.Buffers;
 using System.Collections;
 using System.Threading;
 using BepInEx;
@@ -38,7 +39,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "2.0.12";
+        public const string PluginVersion = "2.0.13";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -819,16 +820,23 @@ namespace SilksongCoop.Mod
                 };
 
                 // P3: heap buffer passed directly (no stackalloc + ToArray copy).
-                byte[] buffer = new byte[64];
-                var writer = new PacketWriter(buffer);
-                packet.Serialize(ref writer);
-                ActiveTransport.Send(
-                    SessionState.RemotePeerId.Value,
-                    buffer,
-                    0,
-                    writer.Position,
-                    DeliveryMethod.ReliableOrdered,
-                    1);
+                byte[] buffer = ArrayPool<byte>.Shared.Rent(64);
+                try
+                {
+                    var writer = new PacketWriter(buffer);
+                    packet.Serialize(ref writer);
+                    ActiveTransport.Send(
+                        SessionState.RemotePeerId.Value,
+                        buffer,
+                        0,
+                        writer.Position,
+                        DeliveryMethod.ReliableOrdered,
+                        1);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
             }
             catch (Exception ex)
             {
@@ -861,16 +869,23 @@ namespace SilksongCoop.Mod
                 // BUG-C1: scene and marker names can exceed 128 bytes — a stack buffer
                 // threw in EnsureCapacity and silently aborted the sync (P3: heap buffer
                 // passed directly, no extra ToArray copy).
-                byte[] buffer = new byte[512];
-                var writer = new PacketWriter(buffer);
-                packet.Serialize(ref writer);
-                ActiveTransport.Send(
-                    SessionState.RemotePeerId.Value,
-                    buffer,
-                    0,
-                    writer.Position,
-                    DeliveryMethod.ReliableOrdered,
-                    0);
+                byte[] buffer = ArrayPool<byte>.Shared.Rent(512);
+                try
+                {
+                    var writer = new PacketWriter(buffer);
+                    packet.Serialize(ref writer);
+                    ActiveTransport.Send(
+                        SessionState.RemotePeerId.Value,
+                        buffer,
+                        0,
+                        writer.Position,
+                        DeliveryMethod.ReliableOrdered,
+                        0);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
             }
             catch (Exception ex)
             {
@@ -1463,18 +1478,25 @@ namespace SilksongCoop.Mod
 
                 // P3: heap buffer passed directly — the former stackalloc+ToArray pattern
                 // allocated twice per packet (120 allocs/sec on the transform hot path).
-                byte[] buffer = new byte[64];
-                var writer = new PacketWriter(buffer);
-                packet.Serialize(ref writer);
-                ActiveTransport.Send(
-                    SessionState.RemotePeerId.Value,
-                    buffer,
-                    0,
-                    writer.Position,
-                    DeliveryMethod.Unreliable,
-                    0);
-                SessionState?.RecordSent(writer.Position);
-                MenuUI?.Diagnostics?.RecordSent(writer.Position);
+                byte[] buffer = ArrayPool<byte>.Shared.Rent(64);
+                try
+                {
+                    var writer = new PacketWriter(buffer);
+                    packet.Serialize(ref writer);
+                    ActiveTransport.Send(
+                        SessionState.RemotePeerId.Value,
+                        buffer,
+                        0,
+                        writer.Position,
+                        DeliveryMethod.Unreliable,
+                        0);
+                    SessionState?.RecordSent(writer.Position);
+                    MenuUI?.Diagnostics?.RecordSent(writer.Position);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
             }
             catch (Exception ex)
             {
@@ -1506,18 +1528,25 @@ namespace SilksongCoop.Mod
                 };
 
                 // P3: heap buffer passed directly (see BroadcastLocalTransform).
-                byte[] buffer = new byte[64];
-                var writer = new PacketWriter(buffer);
-                packet.Serialize(ref writer);
-                ActiveTransport.Send(
-                    SessionState.RemotePeerId.Value,
-                    buffer,
-                    0,
-                    writer.Position,
-                    DeliveryMethod.ReliableOrdered,
-                    1);
-                SessionState?.RecordSent(writer.Position);
-                MenuUI?.Diagnostics?.RecordSent(writer.Position);
+                byte[] buffer = ArrayPool<byte>.Shared.Rent(64);
+                try
+                {
+                    var writer = new PacketWriter(buffer);
+                    packet.Serialize(ref writer);
+                    ActiveTransport.Send(
+                        SessionState.RemotePeerId.Value,
+                        buffer,
+                        0,
+                        writer.Position,
+                        DeliveryMethod.ReliableOrdered,
+                        1);
+                    SessionState?.RecordSent(writer.Position);
+                    MenuUI?.Diagnostics?.RecordSent(writer.Position);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
             }
             catch (Exception ex)
             {

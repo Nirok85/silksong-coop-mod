@@ -5,7 +5,13 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/),
 и этот проект придерживается [Semantic Versioning](https://semver.org/).
 
+## [2.0.13] - 2026-10-27
+
+### Производительность
+- **ArrayPool<byte>** в hot-path Mod: `BroadcastLocalTransform`, `BroadcastActionTrigger`, `BroadcastBenchCheckpoint`, `BroadcastSceneTransitionDeparture` — арендуют буфер из пула и возвращают после отправки (0 аллокаций на трансформ/атаку/переход сцены).
+
 ## [2.0.12] - 2026-10-27
+
 
 ### Производительность
 - **ArrayPool<byte>** в горячем пути `LiteNetLibTransport.Send`: envelope-буферы арендуются из пула и возвращаются (unreliable — сразу после `SendTo`, reliable — при ACK/drop/сбросе сессии). 0 аллокаций на отправку трансформа.
