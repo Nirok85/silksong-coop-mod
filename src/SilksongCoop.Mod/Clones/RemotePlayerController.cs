@@ -440,16 +440,16 @@ namespace SilksongCoop.Mod.Clones
                 }
             }
 
-            // Keep sorting layer synchronized with local hero
-            var meshRenderer = GetComponent<MeshRenderer>();
-            if (meshRenderer != null)
+            // Keep sorting layer synchronized with local hero (via tk2dSprite's renderer)
+            if (_sprite != null)
             {
+                var spriteRenderer = _sprite.GetComponent<Renderer>();
                 var heroRenderer = hero.GetComponent<Renderer>() ?? hero.GetComponentInChildren<Renderer>();
-                if (heroRenderer != null && (meshRenderer.sortingLayerID != heroRenderer.sortingLayerID || meshRenderer.sortingOrder != heroRenderer.sortingOrder))
+                if (spriteRenderer != null && heroRenderer != null && (spriteRenderer.sortingLayerID != heroRenderer.sortingLayerID || spriteRenderer.sortingOrder != heroRenderer.sortingOrder))
                 {
-                    meshRenderer.sortingLayerID = heroRenderer.sortingLayerID;
-                    meshRenderer.sortingLayerName = heroRenderer.sortingLayerName;
-                    meshRenderer.sortingOrder = heroRenderer.sortingOrder;
+                    spriteRenderer.sortingLayerID = heroRenderer.sortingLayerID;
+                    spriteRenderer.sortingLayerName = heroRenderer.sortingLayerName;
+                    spriteRenderer.sortingOrder = heroRenderer.sortingOrder;
                 }
             }
         }

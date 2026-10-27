@@ -49,8 +49,9 @@ namespace SilksongCoop.Mod.Visuals
             _emissionTimer = 0f;
             EmitGhostAfterImage();
 
-            if (_rimLight != null)
+            if (_rimLight != null && _rimLightObject != null)
             {
+                _rimLightObject.SetActive(true);
                 _rimLight.intensity = 2.5f;
             }
         }
@@ -76,9 +77,14 @@ namespace SilksongCoop.Mod.Visuals
             }
 
             // Smoothly decay rim light intensity back to baseline
-            if (_rimLight != null && _rimLight.intensity > 0.8f)
+            if (_rimLight != null && _rimLight.intensity > 0.1f)
             {
-                _rimLight.intensity = Mathf.Lerp(_rimLight.intensity, 0.8f, deltaTime * 5f);
+                _rimLight.intensity = Mathf.Lerp(_rimLight.intensity, 0f, deltaTime * 5f);
+                if (_rimLight.intensity < 0.05f)
+                {
+                    _rimLight.intensity = 0f;
+                    _rimLightObject?.SetActive(false);
+                }
             }
         }
 
@@ -186,7 +192,8 @@ namespace SilksongCoop.Mod.Visuals
             _rimLight = _rimLightObject.AddComponent<Light>();
             _rimLight.type = LightType.Point;
             _rimLight.range = 3.5f;
-            _rimLight.intensity = 0.8f;
+            _rimLight.intensity = 0f; // OFF by default — only enabled during dash
+            _rimLightObject.SetActive(false); // Disable entire light object to avoid any rendering cost
             UpdateRimLightColor();
         }
 

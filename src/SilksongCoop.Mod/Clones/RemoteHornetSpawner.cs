@@ -62,19 +62,8 @@ namespace SilksongCoop.Mod.Clones
                 }
                 DontDestroyOnLoad(cloneGo);
 
-                // Add mesh filter and renderer
-                cloneGo.AddComponent<MeshFilter>();
-                var meshRenderer = cloneGo.AddComponent<MeshRenderer>();
-                if (hero != null)
-                {
-                    var heroRenderer = hero.GetComponent<Renderer>() ?? hero.GetComponentInChildren<Renderer>();
-                    if (heroRenderer != null)
-                    {
-                        meshRenderer.sortingLayerID = heroRenderer.sortingLayerID;
-                        meshRenderer.sortingLayerName = heroRenderer.sortingLayerName;
-                        meshRenderer.sortingOrder = heroRenderer.sortingOrder;
-                    }
-                }
+                // tk2dSprite provides its own renderer — do NOT add a bare MeshRenderer/MeshFilter
+                // (a MeshRenderer without a mesh assigned renders uninitialized geometry → glow artifact)
 
                 // Setup tk2dSprite
                 tk2dSprite sprite = cloneGo.AddComponent<tk2dSprite>();
