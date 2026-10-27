@@ -5,6 +5,15 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/),
 и этот проект придерживается [Semantic Versioning](https://semver.org/).
 
+## [2.0.11] - 2026-10-27
+
+### Улучшения
+- **Адаптивные таймауты** (п. 6 плана): heartbeat/connection-timeout масштабируются с RTT (`max(base, rtt*4+5000)`).
+- **Валюта**: initial sync использует `Math.Max` вместо перезаписи, чтобы не затирать локальный подбор.
+- **KeybindManager**: кэширование `Type`/`PropertyInfo` reflection (было на каждом кадре).
+- **README**: раздел «Известные ограничения» (RU+EN).
+- **Тесты**: добавлены `DeathStateMachineTests` (14) и `PropertyBasedTests` (8) — проверка переходов смерти/возрождения и свойств RoomCode/PacketValidator/Hermite/SnapshotBuffer/AnimationClipHasher. Итого 645/645.
+
 ## [2.0.10] - 2026-10-27
 
 ### Исправлено — Medium

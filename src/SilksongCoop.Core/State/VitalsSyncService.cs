@@ -385,8 +385,9 @@ namespace SilksongCoop.Core.State
                     {
                         if (delta == 0)
                         {
-                            // Initial sync: set absolute value
-                            SharedRosaries = Math.Max(0, packet.TotalWalletAmount);
+                            // Initial sync: take the higher of the two values so a local
+                            // pickup that has not been synced yet is not clobbered.
+                            SharedRosaries = Math.Max(SharedRosaries, Math.Max(0, packet.TotalWalletAmount));
                         }
                         else
                         {
@@ -398,8 +399,7 @@ namespace SilksongCoop.Core.State
                     {
                         if (delta == 0)
                         {
-                            // Initial sync: set absolute value
-                            SharedShellShards = Math.Max(0, packet.TotalWalletAmount);
+                            SharedShellShards = Math.Max(SharedShellShards, Math.Max(0, packet.TotalWalletAmount));
                         }
                         else
                         {

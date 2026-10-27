@@ -103,6 +103,15 @@ namespace SilksongCoop.Core.Networking
         private const long ConnectionTimeoutMs = 10000;
         private const long HeartbeatTimeoutMs = 15000;
 
+        /// <summary>
+        /// BUG-P6: timeouts scale with the measured RTT so a WAN peer with a 300 ms ping
+        /// is not falsely declared dead (fixed 15 s was too short) and a LAN peer is not
+        /// kept waiting the full 15 s after a real outage (fixed was too long). Base values
+        /// are floors; the adaptive value is <c>max(base, rtt * 4 + margin)</c>.
+        /// </summary>
+        private long AdaptiveConnectionTimeoutMs => Math.Max(ConnectionTimeoutMs, (long)_rttMs * 4 + 5000);
+        private long AdaptiveHeartbeatTimeoutMs => Math.Max(HeartbeatTimeoutMs, (long)_rttMs * 4 + 5000);
+
         // BUG-02/BUG-03: transport events are enqueued under _lock and drained after the
         // lock is released, because handler callbacks re-enter the transport
         // (Send / Disconnect / death-state chains) and must not run while it is held.
@@ -580,7 +589,7 @@ namespace SilksongCoop.Core.Networking
                     // Client-side connection timeout: avoid stuck "Connecting" state (UX)
                     if (!IsHost && !IsConnected && _remoteEndPoint != null && _socket != null && _connectionAttemptStartMs > 0)
                     {
-                        if (GetTimestampMs() - _connectionAttemptStartMs > ConnectionTimeoutMs)
+                        if (GetTimestampMs() - _connectionAttemptStartMs > AdaptiveConnectionTimeoutMs)
                         {
                             var peer = _remotePeerId ?? new NetworkPeerId(0);
                             _connectionAttemptStartMs = 0;
@@ -608,7 +617,7 @@ namespace SilksongCoop.Core.Networking
                     // timed out and stayed "Connected" forever)
                     if (IsConnected && _remoteEndPoint != null && _socket != null && _lastReceivedMs > 0)
                     {
-                        if (GetTimestampMs() - _lastReceivedMs > HeartbeatTimeoutMs)
+                        if (GetTimestampMs() - _lastReceivedMs > AdaptiveHeartbeatTimeoutMs)
                         {
                             // BUG-N13: a host must keep listening so the partner can reconnect.
                             if (IsHost) DropPeerForTimeout(DisconnectReason.Timeout);

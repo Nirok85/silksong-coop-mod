@@ -20,11 +20,9 @@ namespace SilksongCoop.Mod.Settings
         public const string ToggleSpectatorCamera = "ToggleSpectatorCamera";
         public const string ToggleDiagnostics = "ToggleDiagnostics";
 
-        private static bool _legacyInputLogged = false;
-        private static bool _newInputLogged = false;
-        private static bool _keyboardTypeLogged = false;
-        private static bool _keyboardCurrentLogged = false;
-        private static bool _newInputExceptionLogged = false;
+        private static Type? _cachedKeyboardType;
+        private static bool _keyboardTypeResolved;
+        private static PropertyInfo? _cachedCurrentProp;
 
         #endregion
 
@@ -192,11 +190,18 @@ namespace SilksongCoop.Mod.Settings
         {
             try
             {
-                // Try multiple assembly names for Unity.InputSystem
-                var keyboardType = Type.GetType("UnityEngine.InputSystem.Keyboard, Unity.InputSystem") ??
-                                   Type.GetType("UnityEngine.InputSystem.Keyboard, UnityEngine.InputSystem") ??
-                                   Type.GetType("UnityEngine.InputSystem.Keyboard");
-                
+                // BUG-P15: cache the Keyboard type and its 'current' property — Type.GetType
+                // and GetProperty used to run on every IsKeyDown call (every frame, every key).
+                if (!_keyboardTypeResolved)
+                {
+                    _cachedKeyboardType = Type.GetType("UnityEngine.InputSystem.Keyboard, Unity.InputSystem") ??
+                                          Type.GetType("UnityEngine.InputSystem.Keyboard, UnityEngine.InputSystem") ??
+                                          Type.GetType("UnityEngine.InputSystem.Keyboard");
+                    _cachedCurrentProp = _cachedKeyboardType?.GetProperty("current", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                    _keyboardTypeResolved = true;
+                }
+
+                var keyboardType = _cachedKeyboardType;
                 if (keyboardType == null)
                 {
                     if (!_keyboardTypeLogged)
@@ -207,8 +212,7 @@ namespace SilksongCoop.Mod.Settings
                     return false;
                 }
 
-                var currentProp = keyboardType.GetProperty("current", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                var keyboard = currentProp?.GetValue(null);
+                var keyboard = _cachedCurrentProp?.GetValue(null);
                 if (keyboard == null)
                 {
                     if (!_keyboardCurrentLogged)

@@ -3,8 +3,8 @@
 ![Platform](https://img.shields.io/badge/Platform-PC%20%7C%20Steam-blue)
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
 ![Loader](https://img.shields.io/badge/ModLoader-BepInEx%205.4.x-purple)
-![Tests](https://img.shields.io/badge/Tests-623%20%2F%20623%20Passing%20(100%25)-brightgreen)
-![Version](https://img.shields.io/badge/Version-2.0.10-success)
+![Tests](https://img.shields.io/badge/Tests-645%20%2F%20645%20Passing%20(100%25)-brightgreen)
+![Version](https://img.shields.io/badge/Version-2.0.11-success)
 
 **[🇷🇺 Русская версия](README.ru.md)**
 
@@ -79,7 +79,7 @@ No other downloads required.
 
 ### Method A — Release Package (Recommended)
 
-The `SilksongCoop_v2.0.10.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21, HarmonyX and the mod DLLs.
+The `SilksongCoop_v2.0.11.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21, HarmonyX and the mod DLLs.
 
 1. Close the game if it is running.
 2. Open the Silksong install folder in Steam (Manage → Browse local files). Typical path:
@@ -240,7 +240,7 @@ silksong_coop_mod/
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 623 tests
+    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 645 tests
         ├── TestHarness/              # DualClientTestHarness (2-client simulation, no Unity)
         ├── Tier1_FeatureTests/       # Requirement coverage tests (F01–F28)
         ├── Tier2_BoundaryTests/      # Boundary value tests
@@ -262,8 +262,8 @@ dotnet test SilksongCoop.sln -c Release
 Current result:
 
 ```text
-Total tests:   623
-Passed:        623 (100.0%)
+Total tests:   645
+Passed:        645 (100.0%)
 Failed:        0
 Skipped:       0
 Duration:      ~3 s
@@ -271,6 +271,21 @@ Build:         0 errors, 0 warnings (Debug + Release)
 ```
 
 ---
+
+---
+
+## Known Limitations
+
+The mod is in active development. The following limitations are by design or are tracked for future releases:
+
+- **Two players only.** Multi-peer (3+) is on the roadmap (v3.0).
+- **Same game and mod version on both sides** is required; mismatched versions may fail the handshake.
+- **Enemies are simulated independently** on each machine — remote needle damage is applied to the local enemy instance, so bosses effectively have per-player HP pools. A shared simulation is not implemented.
+- **Maximum stats only grow.** `maxHealth`, `silkMax` and `nailUpgrades` are monotonic; a higher value on one peer never downgrades the other.
+- **Internet play requires Steam.** Direct UDP works over LAN or VPN (Radmin/Hamachi); the host's detected LAN IP may be wrong behind VPNs — use the room code or paste a direct `IP:Port`.
+- **Steam lobby RTT/loss** are not measured (Steam P2P API exposes no counters); the diagnostics overlay shows `n/a` for Steam sessions.
+- **Revive requires the partner to be in the same scene.** Cross-scene death falls back to a bench respawn.
+- **`RemoteApplyScope` guards feedback loops**, but very fast simultaneous pickups can still produce transient desync that self-corrects on the next sync packet.
 
 ## FAQ & Troubleshooting
 
@@ -281,7 +296,7 @@ Build:         0 errors, 0 warnings (Debug + Release)
 * **F11** — network diagnostics overlay (ping/loss/bandwidth graphs, top-right corner).
 * Keys are remappable in `BepInEx\config\com.silksong.coop.cfg`, section `[Keybinds]`.
 
-If keys don't respond: check that `BepInEx\LogOutput.log` shows the plugin loading (look for `Initializing Silksong Co-op Multiplayer v2.0.10...`). Ensure no other mod or OS utility (e.g. screen recorders, media players) binds F10/F11 globally.
+If keys don't respond: check that `BepInEx\LogOutput.log` shows the plugin loading (look for `Initializing Silksong Co-op Multiplayer v2.0.11...`). Ensure no other mod or OS utility (e.g. screen recorders, media players) binds F10/F11 globally.
 </details>
 
 <details>
