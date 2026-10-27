@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
@@ -32,6 +33,7 @@ namespace SilksongCoop.Core.Networking
             public uint Sequence;
             public byte Channel;
             public byte[] Envelope;
+            public int EnvelopeLength;
             public long LastSentTimeMs;
             public int Retries;
         }
@@ -201,6 +203,10 @@ namespace SilksongCoop.Core.Networking
 
         private void ResetSessionState()
         {
+            foreach (var node in _unacknowledged)
+            {
+                ReturnPooledBuffer(node.Envelope);
+            }
             _sendSequences.Clear();
             _expectedReceiveSequences.Clear();
             _latestSequencedReceived.Clear();
@@ -479,15 +485,26 @@ namespace SilksongCoop.Core.Networking
                     seq = 0;
                 _sendSequences[sequenceKey] = seq + 1;
 
-                // Build envelope directly to avoid extra allocation
-                byte[] envelope = BuildEnvelope(UdpFrameType.Data, channel, seq, method, data.AsSpan(offset, length));
+                // Build envelope into a pooled buffer to avoid per-packet heap allocations
+                // (BUG-P16). The rented buffer is returned immediately for unreliable
+                // traffic; reliable traffic keeps it until the packet is acked/dropped.
+                int envelopeLength = 8 + length;
+                byte[] envelope = ArrayPool<byte>.Shared.Rent(envelopeLength);
+                envelope[0] = (byte)UdpFrameType.Data;
+                envelope[1] = channel;
+                envelope[2] = (byte)method;
+                Buffer.BlockCopy(BitConverter.GetBytes(seq), 0, envelope, 3, 4);
+                envelope[7] = 0; // Flags/Reserved
+                data.AsSpan(offset, length).CopyTo(envelope.AsSpan(8));
+
+                bool sendOk = true;
                 try
                 {
-                    _socket.SendTo(envelope, _remoteEndPoint);
+                    _socket.SendTo(envelope, 0, envelopeLength, SocketFlags.None, _remoteEndPoint);
                 }
-                catch (SocketException ex) { System.Diagnostics.Debug.WriteLine($"Socket error: {ex.Message}"); }
-                catch (ObjectDisposedException ex) { System.Diagnostics.Debug.WriteLine($"Socket disposed: {ex.Message}"); }
-                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Send error: {ex.Message}"); }
+                catch (SocketException ex) { System.Diagnostics.Debug.WriteLine($"Socket error: {ex.Message}"); sendOk = false; }
+                catch (ObjectDisposedException ex) { System.Diagnostics.Debug.WriteLine($"Socket disposed: {ex.Message}"); sendOk = false; }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Send error: {ex.Message}"); sendOk = false; }
 
                 if (method == DeliveryMethod.ReliableOrdered)
                 {
@@ -498,6 +515,7 @@ namespace SilksongCoop.Core.Networking
                         var oldest = _unacknowledged.First;
                         if (oldest != null)
                         {
+                            ReturnPooledBuffer(oldest.Value.Envelope);
                             _unacknowledgedIndex.Remove((oldest.Value.Channel, oldest.Value.Sequence));
                             _unacknowledged.RemoveFirst();
                         }
@@ -507,10 +525,16 @@ namespace SilksongCoop.Core.Networking
                         Sequence = seq,
                         Channel = channel,
                         Envelope = envelope,
+                        EnvelopeLength = envelopeLength,
                         LastSentTimeMs = GetTimestampMs(),
                         Retries = 0
                     });
                     _unacknowledgedIndex[(channel, seq)] = node;
+                }
+                else
+                {
+                    // Unreliable/sequenced: buffer is no longer needed after SendTo.
+                    ReturnPooledBuffer(envelope);
                 }
             }
         }
@@ -665,7 +689,7 @@ namespace SilksongCoop.Core.Networking
                             {
                                 try
                                 {
-                                    _socket.SendTo(item.Envelope, _remoteEndPoint);
+                                    _socket.SendTo(item.Envelope, 0, item.EnvelopeLength, SocketFlags.None, _remoteEndPoint);
                                 }
                                 catch (SocketException ex) { System.Diagnostics.Debug.WriteLine($"Socket error: {ex.Message}"); }
                                 catch (ObjectDisposedException ex) { System.Diagnostics.Debug.WriteLine($"Socket disposed: {ex.Message}"); }
@@ -900,6 +924,7 @@ namespace SilksongCoop.Core.Networking
                             // O(1) removal using index
                             if (_unacknowledgedIndex.TryGetValue((ackChannel, ackSeq), out var node))
                             {
+                                ReturnPooledBuffer(node.Value.Envelope);
                                 _unacknowledged.Remove(node);
                                 _unacknowledgedIndex.Remove((ackChannel, ackSeq));
                             }
@@ -1174,6 +1199,14 @@ namespace SilksongCoop.Core.Networking
         #endregion
 
         #region Helper Methods
+
+        private static void ReturnPooledBuffer(byte[]? buffer)
+        {
+            if (buffer != null)
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
 
         private void SendEnvelope(UdpFrameType type, byte channel, uint sequence, DeliveryMethod method, ReadOnlySpan<byte> payload)
         {

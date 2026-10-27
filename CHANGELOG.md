@@ -5,7 +5,14 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/),
 и этот проект придерживается [Semantic Versioning](https://semver.org/).
 
+## [2.0.12] - 2026-10-27
+
+### Производительность
+- **ArrayPool<byte>** в горячем пути `LiteNetLibTransport.Send`: envelope-буферы арендуются из пула и возвращаются (unreliable — сразу после `SendTo`, reliable — при ACK/drop/сбросе сессии). 0 аллокаций на отправку трансформа.
+- Добавлен `EnvelopeLength` в `SentReliablePacket` для корректной повторной отправки арендованного буфера.
+
 ## [2.0.11] - 2026-10-27
+
 
 ### Улучшения
 - **Адаптивные таймауты** (п. 6 плана): heartbeat/connection-timeout масштабируются с RTT (`max(base, rtt*4+5000)`).
