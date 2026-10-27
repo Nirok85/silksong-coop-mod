@@ -367,7 +367,7 @@ The `ManagedDir` in `src/SilksongCoop.Mod/SilksongCoop.Mod.csproj` points to you
 To reproduce the release archives (self-contained Windows zip + plugin-only zip):
 
 ```bash
-ManagedDir="/path/to/Hollow Knight Silksong_Data/Managed" ./scripts/package-release.sh
+ManagedDir="/path/to/Hollow Knight Silksong_Data/Managed" bash scripts/package-release.sh
 ```
 
 The script builds both projects in Release with warnings-as-errors, bundles BepInEx 5.4.21 x64 and

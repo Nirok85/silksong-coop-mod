@@ -366,7 +366,7 @@ dotnet test SilksongCoop.sln -c Release
 Чтобы воспроизвести релизные архивы (самодостаточный Windows-zip + plugin-only zip):
 
 ```bash
-ManagedDir="/path/to/Hollow Knight Silksong_Data/Managed" ./scripts/package-release.sh
+ManagedDir="/path/to/Hollow Knight Silksong_Data/Managed" bash scripts/package-release.sh
 ```
 
 Скрипт собирает оба проекта в Release с `TreatWarningsAsErrors`, добавляет BepInEx 5.4.21 x64
