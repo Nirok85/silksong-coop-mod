@@ -26,9 +26,10 @@ namespace SilksongCoop.Mod
     {
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "2.0.4";
+        public const string PluginVersion = "2.0.5";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
+        public static void LogInfo(string message) => Instance?.Logger.LogInfo(message);
         public static void LogWarn(string message) => Instance?.Logger.LogWarning(message);
 
         public CoopSessionState SessionState { get; private set; } = null!;

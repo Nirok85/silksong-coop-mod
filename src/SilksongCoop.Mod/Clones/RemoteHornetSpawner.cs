@@ -62,16 +62,37 @@ namespace SilksongCoop.Mod.Clones
                 }
                 DontDestroyOnLoad(cloneGo);
 
-                // tk2dSprite provides its own renderer — do NOT add a bare MeshRenderer/MeshFilter
-                // (a MeshRenderer without a mesh assigned renders uninitialized geometry → glow artifact)
+                // Get sprite collection and ID from hero BEFORE creating tk2dSprite
+                tk2dSpriteCollectionData? collection = null;
+                int spriteId = 0;
+                if (hero != null && hero.AnimCtrl != null && hero.AnimCtrl.animator != null)
+                {
+                    if (hero.AnimCtrl.animator.Sprite != null && hero.AnimCtrl.animator.Sprite.Collection != null)
+                    {
+                        collection = hero.AnimCtrl.animator.Sprite.Collection;
+                        spriteId = hero.AnimCtrl.animator.Sprite.spriteId;
+                    }
+                }
 
-                // Setup tk2dSprite
-                tk2dSprite sprite = cloneGo.AddComponent<tk2dSprite>();
+                // Create tk2dSprite with proper renderer using static AddComponent method
+                // This creates MeshFilter + MeshRenderer automatically
+                tk2dSprite sprite;
+                if (collection != null)
+                {
+                    sprite = tk2dSprite.AddComponent(cloneGo, collection, spriteId);
+                    SilksongCoopPlugin.LogInfo($"[RemoteHornetSpawner] Created tk2dSprite with collection '{collection.name}', spriteId={spriteId}");
+                }
+                else
+                {
+                    // Fallback: create without collection (will be set later via EnsureAnimationLibraryBound)
+                    sprite = cloneGo.AddComponent<tk2dSprite>();
+                    SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] No sprite collection available, created bare tk2dSprite");
+                }
 
                 // Setup tk2dSpriteAnimator
                 tk2dSpriteAnimator animator = cloneGo.AddComponent<tk2dSpriteAnimator>();
 
-                // Borrow Hornet sprite collection and animation library from local HeroController if available
+                // Borrow animation library from local HeroController if available
                 if (hero != null && hero.AnimCtrl != null && hero.AnimCtrl.animator != null)
                 {
                     var heroAnimator = hero.AnimCtrl.animator;
@@ -79,10 +100,18 @@ namespace SilksongCoop.Mod.Clones
                     {
                         animator.Library = heroAnimator.Library;
                     }
+                }
 
-                    if (heroAnimator.Sprite != null && heroAnimator.Sprite.Collection != null)
+                // Set sorting layer to match hero
+                var spriteRenderer = sprite.GetComponent<Renderer>();
+                if (spriteRenderer != null && hero != null)
+                {
+                    var heroRenderer = hero.GetComponent<Renderer>() ?? hero.GetComponentInChildren<Renderer>();
+                    if (heroRenderer != null)
                     {
-                        sprite.SetSprite(heroAnimator.Sprite.Collection, heroAnimator.Sprite.spriteId);
+                        spriteRenderer.sortingLayerID = heroRenderer.sortingLayerID;
+                        spriteRenderer.sortingLayerName = heroRenderer.sortingLayerName;
+                        spriteRenderer.sortingOrder = heroRenderer.sortingOrder;
                     }
                 }
 

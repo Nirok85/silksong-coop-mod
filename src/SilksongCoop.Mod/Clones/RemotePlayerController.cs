@@ -430,11 +430,13 @@ namespace SilksongCoop.Mod.Clones
                     {
                         _animator.Library = heroAnimator.Library;
                         SetAnimationLibrary(heroAnimator.Library);
+                        SilksongCoopPlugin.LogInfo($"[RemotePlayerController] Animation library bound for peer {_peerId}");
                     }
 
                     if (_sprite != null && _sprite.Collection == null && heroAnimator.Sprite != null)
                     {
                         _sprite.SetSprite(heroAnimator.Sprite.Collection, heroAnimator.Sprite.spriteId);
+                        SilksongCoopPlugin.LogInfo($"[RemotePlayerController] Sprite collection set for peer {_peerId}");
                         _paletteSwap?.ApplyPaletteSwap();
                     }
                 }
