@@ -37,7 +37,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "2.0.5";
+        public const string PluginVersion = "2.0.6";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
