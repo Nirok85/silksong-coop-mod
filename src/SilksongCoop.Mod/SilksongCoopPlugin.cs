@@ -39,7 +39,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "2.0.13";
+        public const string PluginVersion = "2.0.14";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -1329,11 +1329,13 @@ namespace SilksongCoop.Mod
 
                         case PacketType.BenchCheckpointSync:
                             var bench = BenchCheckpointSyncPacket.Deserialize(ref reader);
+                            if (!PacketValidator.ValidateBenchCheckpoint(bench)) return;
                             ApplyRemoteBenchCheckpoint(bench.SceneName, bench.RespawnMarker, bench.FacingDirection, bench.AtBench);
                             break;
 
                         case PacketType.ActionTrigger:
                             var action = ActionTriggerPacket.Deserialize(ref reader);
+                            if (!PacketValidator.ValidateActionTrigger(action)) return;
                             CloneSpawner?.TriggerRemoteAction(peer, action.Action, (byte)action.Parameter);
                             break;
 
@@ -1351,6 +1353,7 @@ namespace SilksongCoop.Mod
 
                         case PacketType.PlayerDeath:
                             var death = DeathLifecyclePacket.Deserialize(ref reader);
+                            if (!PacketValidator.ValidateDeathLifecycle(death)) return;
                             DeathCoordinator?.HandleDeathPacket(peer, death);
                             ApplyRemoteDeathVisibility(peer, death.EventType);
                             break;
@@ -1360,6 +1363,7 @@ namespace SilksongCoop.Mod
                             // immediately and drop buffered snapshots so it never lingers at
                             // its last position during the remote's scene load.
                             var scene = SceneTransitionPacket.Deserialize(ref reader);
+                            if (!PacketValidator.ValidateSceneTransition(scene)) return;
                             if (scene.TransitionPhase == 0)
                             {
                                 CloneSpawner?.SetRemoteScenePresence(peer, false);
@@ -1372,6 +1376,7 @@ namespace SilksongCoop.Mod
 
                         case PacketType.ItemUnlockSync:
                             var item = ItemUnlockPacket.Deserialize(ref reader);
+                            if (!PacketValidator.ValidateItemUnlock(item)) return;
                             InventorySync?.HandleItemUnlockPacket(peer, item);
                             break;
                     }

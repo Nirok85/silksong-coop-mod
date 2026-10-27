@@ -397,6 +397,7 @@ namespace SilksongCoop.Core.Networking
                 _remoteEndPoint = null;
                 _remotePeerId = null;
                 _authenticator.Reset();
+                _rateLimiter.RemovePeer(peer);
                 ResetSessionState();
 
                 if (wasConnected)
@@ -445,6 +446,7 @@ namespace SilksongCoop.Core.Networking
                 _remoteEndPoint = null;
                 _remotePeerId = null;
 
+                _rateLimiter.RemovePeer(peer);
                 ResetSessionState();
                 CloseSocket();
 
@@ -497,14 +499,13 @@ namespace SilksongCoop.Core.Networking
                 envelope[7] = 0; // Flags/Reserved
                 data.AsSpan(offset, length).CopyTo(envelope.AsSpan(8));
 
-                bool sendOk = true;
                 try
                 {
                     _socket.SendTo(envelope, 0, envelopeLength, SocketFlags.None, _remoteEndPoint);
                 }
-                catch (SocketException ex) { System.Diagnostics.Debug.WriteLine($"Socket error: {ex.Message}"); sendOk = false; }
-                catch (ObjectDisposedException ex) { System.Diagnostics.Debug.WriteLine($"Socket disposed: {ex.Message}"); sendOk = false; }
-                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Send error: {ex.Message}"); sendOk = false; }
+                catch (SocketException ex) { System.Diagnostics.Debug.WriteLine($"Socket error: {ex.Message}"); }
+                catch (ObjectDisposedException ex) { System.Diagnostics.Debug.WriteLine($"Socket disposed: {ex.Message}"); }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Send error: {ex.Message}"); }
 
                 if (method == DeliveryMethod.ReliableOrdered)
                 {

@@ -88,5 +88,103 @@ namespace SilksongCoop.Core.Protocol
 
             return true;
         }
-    }
+
+        /// <summary>
+        /// Validates a DeathLifecycle packet's field values.
+        /// </summary>
+        public static bool ValidateDeathLifecycle(DeathLifecyclePacket packet)
+        {
+            if (!Enum.IsDefined(typeof(DeathEventType), packet.EventType))
+                return false;
+
+            if (float.IsNaN(packet.CoordinateX) || float.IsInfinity(packet.CoordinateX) ||
+                float.IsNaN(packet.CoordinateY) || float.IsInfinity(packet.CoordinateY))
+                return false;
+
+            if (Math.Abs(packet.CoordinateX) > MaxPositionValue || Math.Abs(packet.CoordinateY) > MaxPositionValue)
+                return false;
+
+            if (packet.RemainingSeconds < 0f || float.IsNaN(packet.RemainingSeconds) || float.IsInfinity(packet.RemainingSeconds))
+                return false;
+
+            if (packet.Epoch == 0)
+                return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Validates an ItemUnlock packet's field values.
+        /// </summary>
+        public static bool ValidateItemUnlock(ItemUnlockPacket packet)
+        {
+            if (string.IsNullOrWhiteSpace(packet.ItemId))
+                return false;
+
+            if (packet.ItemId.Length > 256)
+                return false;
+
+            if (!Enum.IsDefined(typeof(ItemCategory), packet.Category))
+                return false;
+
+            if (packet.TransactionId == Guid.Empty)
+                return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Validates a SceneTransition packet's field values.
+        /// </summary>
+        public static bool ValidateSceneTransition(SceneTransitionPacket packet)
+        {
+            if (packet.TransitionPhase != 0 && packet.TransitionPhase != 1)
+                return false;
+
+            if (packet.TargetScene != null && packet.TargetScene.Length > 256)
+                return false;
+
+            if (packet.EntryGate != null && packet.EntryGate.Length > 256)
+                return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Validates an ActionTrigger packet's field values.
+        /// </summary>
+        public static bool ValidateActionTrigger(ActionTriggerPacket packet)
+        {
+            if (!Enum.IsDefined(typeof(ActionType), packet.Action))
+                return false;
+
+            if (float.IsNaN(packet.OriginX) || float.IsInfinity(packet.OriginX) ||
+                float.IsNaN(packet.OriginY) || float.IsInfinity(packet.OriginY) ||
+                float.IsNaN(packet.DirectionX) || float.IsInfinity(packet.DirectionX) ||
+                float.IsNaN(packet.DirectionY) || float.IsInfinity(packet.DirectionY))
+                return false;
+
+            if (Math.Abs(packet.OriginX) > MaxPositionValue || Math.Abs(packet.OriginY) > MaxPositionValue)
+                return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Validates a BenchCheckpointSync packet's field values.
+        /// </summary>
+        public static bool ValidateBenchCheckpoint(BenchCheckpointSyncPacket packet)
+        {
+            if (packet.SceneName == null || packet.SceneName.Length > 256)
+                return false;
+
+            if (packet.RespawnMarker == null || packet.RespawnMarker.Length > 256)
+                return false;
+
+            if (packet.AtBench && packet.FacingDirection != 0 && packet.FacingDirection != 1)
+                return false;
+
+            return true;
+        }
+}
 }

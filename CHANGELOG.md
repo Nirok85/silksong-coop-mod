@@ -5,7 +5,14 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/),
 и этот проект придерживается [Semantic Versioning](https://semver.org/).
 
+## [2.0.14] - 2026-10-27
+
+### Безопасность и валидация
+- **PacketValidator** расширен: валидация `DeathLifecycle`, `ItemUnlock`, `SceneTransition`, `ActionTrigger`, `BenchCheckpointSync` (enum-ы, NaN/Infinity, bounds). Все пакеты в plugin data-handler теперь проверяются перед применением.
+- **RateLimiter.RemovePeer** теперь вызывается в `Disconnect` и `DropPeerForTimeout` — освобождение памяти на отключение пира.
+
 ## [2.0.13] - 2026-10-27
+
 
 ### Производительность
 - **ArrayPool<byte>** в hot-path Mod: `BroadcastLocalTransform`, `BroadcastActionTrigger`, `BroadcastBenchCheckpoint`, `BroadcastSceneTransitionDeparture` — арендуют буфер из пула и возвращают после отправки (0 аллокаций на трансформ/атаку/переход сцены).
