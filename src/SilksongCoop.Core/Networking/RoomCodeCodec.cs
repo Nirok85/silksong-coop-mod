@@ -151,7 +151,21 @@ namespace SilksongCoop.Core.Networking
                 return false;
 
             string clean = NormalizeCode(code);
-            return clean.Length == 8;
+
+            // BUG-N6: only strings made solely of Crockford Base32 characters can be room
+            // codes. Without this check an IPv4 address of exactly 8 characters (e.g.
+            // "10.0.0.1") was classified as a deprecated code, so connecting to it threw
+            // "8-character room codes are deprecated" instead of dialling the address.
+            if (clean.Length != 8)
+                return false;
+
+            for (int i = 0; i < clean.Length; i++)
+            {
+                if (CrockfordAlphabet.IndexOf(clean[i]) < 0)
+                    return false;
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -204,10 +218,28 @@ namespace SilksongCoop.Core.Networking
             string trimmed = input.Trim();
             var sb = new StringBuilder(trimmed.Length);
             int start = 0;
+
             if (trimmed.StartsWith("SK-", StringComparison.OrdinalIgnoreCase))
+            {
                 start = 3;
+            }
             else if (trimmed.StartsWith("SK", StringComparison.OrdinalIgnoreCase))
-                start = 2;
+            {
+                // BUG-N12: a bare 12-character code can legitimately begin with "SK"
+                // (e.g. codes for 204.192.0.0/10). Only treat a prefix without the hyphen
+                // as a prefix when exactly 12 code characters follow it.
+                int bodyLength = 0;
+                for (int i = 2; i < trimmed.Length; i++)
+                {
+                    char c = trimmed[i];
+                    if (c == '-' || char.IsWhiteSpace(c))
+                        continue;
+                    bodyLength++;
+                }
+
+                if (bodyLength == 12)
+                    start = 2;
+            }
 
             for (int i = start; i < trimmed.Length; i++)
             {

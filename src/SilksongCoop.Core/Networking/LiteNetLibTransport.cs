@@ -81,9 +81,16 @@ namespace SilksongCoop.Core.Networking
         private readonly ConnectionAuthenticator _authenticator = new ConnectionAuthenticator();
         private string? _roomCode;
 
-        private readonly Dictionary<byte, uint> _sendSequences = new();
+        // BUG-N1: sequence spaces are per (channel, delivery method). Unreliable and
+        // ReliableOrdered traffic share a channel in this protocol (channel 0 carries the
+        // 30 Hz unreliable transform stream and the reliable bench-checkpoint packet).
+        // With a single per-channel counter the first reliable packet on channel 0 got a
+        // sequence in the hundreds/thousands while the receiver still expected 0, so it
+        // was buffered as "future" forever and the bench checkpoint was never applied.
+        private readonly Dictionary<(byte Channel, DeliveryMethod Method), uint> _sendSequences = new();
         private readonly Dictionary<byte, uint> _expectedReceiveSequences = new();
         private readonly Dictionary<byte, uint> _latestSequencedReceived = new();
+        private readonly HashSet<byte> _sequencedInitialized = new();
         private readonly Dictionary<byte, SortedDictionary<uint, byte[]>> _pendingReliable = new();
         private readonly LinkedList<SentReliablePacket> _unacknowledged = new();
         private readonly Dictionary<(byte channel, uint sequence), LinkedListNode<SentReliablePacket>> _unacknowledgedIndex = new();
@@ -109,6 +116,19 @@ namespace SilksongCoop.Core.Networking
         // Pre-allocated receive buffer to avoid per-poll GC pressure
         private readonly byte[] _recvBuffer = new byte[2048];
 
+        // BUG-N2: heartbeat spoof protection — a packet from an unknown endpoint used to
+        // refresh _lastReceivedMs before sender validation, letting an off-path attacker
+        // keep a dead session "alive" forever.
+
+        // Diagnostics: last unreliable sequence per channel is used to estimate packet loss.
+        // Unreliable frames are never retransmitted, so sequence gaps are a genuine loss
+        // signal (unlike reliable frames, which are repaired by retries).
+        private readonly Dictionary<byte, uint> _lastUnreliableSequences = new();
+        private long _lossWindowStartMs;
+        private long _lossPacketsExpected;
+        private long _lossPacketsLost;
+        private volatile int _packetLossPercent;
+
         private static long GetTimestampMs() => DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
 
         #endregion
@@ -130,6 +150,11 @@ namespace SilksongCoop.Core.Networking
         public NetworkPeerId LocalPeerId => _localPeerId;
         public NetworkPeerId? RemotePeerId => _remotePeerId;
         public int RoundTripTimeMs => _rttMs;
+        /// <summary>
+        /// Unreliable packet loss estimate (0-100) over the last few seconds, based on
+        /// sequence gaps on the unreliable channel.
+        /// </summary>
+        public int PacketLossPercent => _packetLossPercent;
         public int BoundPort => _boundPort;
 
         #endregion
@@ -170,9 +195,15 @@ namespace SilksongCoop.Core.Networking
             _sendSequences.Clear();
             _expectedReceiveSequences.Clear();
             _latestSequencedReceived.Clear();
+            _sequencedInitialized.Clear();
             _pendingReliable.Clear();
             _unacknowledged.Clear();
             _unacknowledgedIndex.Clear();
+            _lastUnreliableSequences.Clear();
+            _lossWindowStartMs = 0;
+            _lossPacketsExpected = 0;
+            _lossPacketsLost = 0;
+            _packetLossPercent = 0;
             _lastPingSentMs = 0;
             _lastReceivedMs = 0;
             _lastHandshakeSentMs = 0;
@@ -246,6 +277,12 @@ namespace SilksongCoop.Core.Networking
             }
             else
             {
+                // BUG-N3: direct IP:port connection — drop any room code left over from a
+                // previous hosting/join attempt. Otherwise the client advertises "I have a
+                // code" in the handshake and the host challenges it with its own code, so
+                // the HMAC never matches and the connection is refused forever.
+                _roomCode = null;
+
                 // Parse standard host:port or IP:port
                 string[] parts = addressOrCode.Split(':');
                 if (parts.Length == 2 && int.TryParse(parts[1], out int p))
@@ -327,6 +364,34 @@ namespace SilksongCoop.Core.Networking
         }
 
         /// <summary>
+        /// Drops the current peer but keeps the listening socket open (host only), so the
+        /// partner can reconnect without the host having to re-open the session.
+        /// BUG-N13: timeouts used to call <see cref="Disconnect(DisconnectReason)"/>, which
+        /// closed the socket — the host stopped listening, so the client's advertised
+        /// auto-reconnect could never complete after a transient outage.
+        /// </summary>
+        private void DropPeerForTimeout(DisconnectReason reason)
+        {
+            lock (_lock)
+            {
+                if (_socket == null) return;
+
+                bool wasConnected = IsConnected;
+                var peer = _remotePeerId ?? new NetworkPeerId(0);
+                _isConnected = false;
+                _remoteEndPoint = null;
+                _remotePeerId = null;
+                _authenticator.Reset();
+                ResetSessionState();
+
+                if (wasConnected)
+                {
+                    _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerDisconnected, peer, reason));
+                }
+            }
+        }
+
+        /// <summary>
         /// Disconnects gracefully from the current session.
         /// </summary>
         public void Disconnect() => Disconnect(DisconnectReason.GracefulDisconnect);
@@ -400,9 +465,10 @@ namespace SilksongCoop.Core.Networking
                 if (_remotePeerId.HasValue && target != _remotePeerId.Value) return;
 
                 uint seq;
-                if (!_sendSequences.TryGetValue(channel, out seq))
+                var sequenceKey = (channel, method);
+                if (!_sendSequences.TryGetValue(sequenceKey, out seq))
                     seq = 0;
-                _sendSequences[channel] = seq + 1;
+                _sendSequences[sequenceKey] = seq + 1;
 
                 // Build envelope directly to avoid extra allocation
                 byte[] envelope = BuildEnvelope(UdpFrameType.Data, channel, seq, method, data.AsSpan(offset, length));
@@ -544,10 +610,15 @@ namespace SilksongCoop.Core.Networking
                     {
                         if (GetTimestampMs() - _lastReceivedMs > HeartbeatTimeoutMs)
                         {
-                            Disconnect(DisconnectReason.Timeout);
+                            // BUG-N13: a host must keep listening so the partner can reconnect.
+                            if (IsHost) DropPeerForTimeout(DisconnectReason.Timeout);
+                            else Disconnect(DisconnectReason.Timeout);
                             return;
                         }
                     }
+
+                    // Roll the unreliable packet-loss window (diagnostics overlay).
+                    UpdatePacketLossWindow(now);
 
                     // Early exit if disconnected or socket closed during datagram processing
                     if (_socket == null || !IsConnected || _remoteEndPoint == null)
@@ -592,7 +663,9 @@ namespace SilksongCoop.Core.Networking
 
                     if (connectionLost)
                     {
-                        Disconnect(DisconnectReason.Timeout);
+                        // BUG-N13: keep the host listening for a reconnect.
+                        if (IsHost) DropPeerForTimeout(DisconnectReason.Timeout);
+                        else Disconnect(DisconnectReason.Timeout);
                         return;
                     }
 
@@ -619,9 +692,6 @@ namespace SilksongCoop.Core.Networking
             // Guard against malformed/tiny packets
             if (datagram.Length < 8) return;
 
-            // Track last received time for heartbeat timeout
-            _lastReceivedMs = GetTimestampMs();
-
             try
             {
                 UdpFrameType frameType = (UdpFrameType)datagram[0];
@@ -634,14 +704,10 @@ namespace SilksongCoop.Core.Networking
                 if (!Enum.IsDefined(typeof(UdpFrameType), frameType)) return;
                 if (!Enum.IsDefined(typeof(DeliveryMethod), method)) return;
 
-                // Rate limiting: check if peer is allowed to send
-                if (_remotePeerId.HasValue && !_rateLimiter.TryConsume(_remotePeerId.Value))
-                {
-                    System.Diagnostics.Debug.WriteLine($"[LiteNetLibTransport] Rate limit exceeded for peer {_remotePeerId.Value}");
-                    return;
-                }
-
-                // Sender validation: when connected, only accept from known remote endpoint
+                // Sender validation FIRST: when connected, only accept from the known remote
+                // endpoint. BUG-N2: this must run before the rate limiter and before
+                // _lastReceivedMs is refreshed — otherwise an off-path/spoofed datagram
+                // could drain the real peer's token bucket and keep a dead session alive.
                 if (IsConnected && _remoteEndPoint != null)
                 {
                     if (sender is IPEndPoint remoteEp && _remoteEndPoint is IPEndPoint knownEp)
@@ -649,6 +715,16 @@ namespace SilksongCoop.Core.Networking
                         if (!remoteEp.Address.Equals(knownEp.Address) || remoteEp.Port != knownEp.Port)
                             return; // Drop packet from unknown sender
                     }
+                }
+
+                // Track last received time for heartbeat timeout (validated sender only)
+                _lastReceivedMs = GetTimestampMs();
+
+                // Rate limiting: check if peer is allowed to send
+                if (_remotePeerId.HasValue && !_rateLimiter.TryConsume(_remotePeerId.Value))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[LiteNetLibTransport] Rate limit exceeded for peer {_remotePeerId.Value}");
+                    return;
                 }
 
                 switch (frameType)
@@ -928,7 +1004,16 @@ namespace SilksongCoop.Core.Networking
                 else if (method == DeliveryMethod.Sequenced)
                 {
                     _latestSequencedReceived.TryGetValue(channel, out uint latest);
-                    if (sequence > latest || latest == 0)
+                    // BUG-N4: `latest == 0` made every sequence-0 packet look acceptable, so
+                    // duplicates of the first packet were delivered repeatedly. Track whether
+                    // the channel has seen any packet instead of using 0 as a sentinel.
+                    if (!_sequencedInitialized.Contains(channel))
+                    {
+                        _sequencedInitialized.Add(channel);
+                        _latestSequencedReceived[channel] = sequence;
+                        DispatchData(data);
+                    }
+                    else if (sequence > latest)
                     {
                         _latestSequencedReceived[channel] = sequence;
                         DispatchData(data);
@@ -936,6 +1021,7 @@ namespace SilksongCoop.Core.Networking
                 }
                 else
                 {
+                    TrackUnreliableSequences(channel, sequence);
                     DispatchData(data);
                 }
             }
@@ -943,6 +1029,70 @@ namespace SilksongCoop.Core.Networking
             {
                 System.Diagnostics.Debug.WriteLine($"[LiteNetLibTransport] HandleIncomingData error: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Tracks unreliable sequence gaps as a packet-loss estimate. Reliability is not
+        /// repaired for this delivery method, so every missing sequence was genuinely lost.
+        /// </summary>
+        /// <param name="channel">Channel the packet arrived on.</param>
+        /// <param name="sequence">Sequence number carried by the packet.</param>
+        private void TrackUnreliableSequences(byte channel, uint sequence)
+        {
+            if (_lastUnreliableSequences.TryGetValue(channel, out uint last))
+            {
+                uint delta = unchecked(sequence - last);
+                if (delta == 0)
+                {
+                    // Duplicate or reordered packet — not a loss sample.
+                    return;
+                }
+
+                if (delta < 256)
+                {
+                    _lossPacketsExpected += delta;
+                    if (delta > 1)
+                    {
+                        _lossPacketsLost += delta - 1;
+                    }
+                }
+                // else: sequence jump after a reset/wrap — ignore the sample.
+            }
+            else
+            {
+                _lossPacketsExpected++;
+            }
+
+            _lastUnreliableSequences[channel] = sequence;
+        }
+
+        /// <summary>
+        /// Rolls the packet-loss window forward (once every 5 seconds) and publishes the
+        /// estimate used by the diagnostics overlay.
+        /// </summary>
+        private void UpdatePacketLossWindow(long now)
+        {
+            if (_lossWindowStartMs == 0)
+            {
+                _lossWindowStartMs = now;
+                return;
+            }
+
+            if (now - _lossWindowStartMs < 5000) return;
+
+            if (_lossPacketsExpected > 0)
+            {
+                int percent = (int)Math.Round(_lossPacketsLost * 100.0 / _lossPacketsExpected);
+                _packetLossPercent = Math.Clamp(percent, 0, 100);
+            }
+            else
+            {
+                _packetLossPercent = 0;
+            }
+
+            _lossPacketsExpected = 0;
+            _lossPacketsLost = 0;
+            _lossWindowStartMs = now;
         }
 
         private void DispatchData(byte[] data)

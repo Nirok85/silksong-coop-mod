@@ -3,8 +3,8 @@
 ![Platform](https://img.shields.io/badge/Platform-PC%20%7C%20Steam-blue)
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
 ![Loader](https://img.shields.io/badge/ModLoader-BepInEx%205.4.x-purple)
-![Tests](https://img.shields.io/badge/Tests-614%20%2F%20614%20Passing%20(100%25)-brightgreen)
-![Version](https://img.shields.io/badge/Version-2.0.8-success)
+![Tests](https://img.shields.io/badge/Tests-623%20%2F%20623%20Passing%20(100%25)-brightgreen)
+![Version](https://img.shields.io/badge/Version-2.0.9-success)
 
 **[🇷🇺 Русская версия](README.ru.md)**
 
@@ -79,7 +79,7 @@ No other downloads required.
 
 ### Method A — Release Package (Recommended)
 
-The `SilksongCoop_v2.0.8.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21, HarmonyX and the mod DLLs.
+The `SilksongCoop_v2.0.9.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21, HarmonyX and the mod DLLs.
 
 1. Close the game if it is running.
 2. Open the Silksong install folder in Steam (Manage → Browse local files). Typical path:
@@ -240,7 +240,7 @@ silksong_coop_mod/
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 614 tests
+    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 623 tests
         ├── TestHarness/              # DualClientTestHarness (2-client simulation, no Unity)
         ├── Tier1_FeatureTests/       # Requirement coverage tests (F01–F28)
         ├── Tier2_BoundaryTests/      # Boundary value tests
@@ -262,8 +262,8 @@ dotnet test SilksongCoop.sln -c Release
 Current result:
 
 ```text
-Total tests:   614
-Passed:        614 (100.0%)
+Total tests:   623
+Passed:        623 (100.0%)
 Failed:        0
 Skipped:       0
 Duration:      ~3 s
@@ -281,7 +281,7 @@ Build:         0 errors, 0 warnings (Debug + Release)
 * **F11** — network diagnostics overlay (ping/loss/bandwidth graphs, top-right corner).
 * Keys are remappable in `BepInEx\config\com.silksong.coop.cfg`, section `[Keybinds]`.
 
-If keys don't respond: check that `BepInEx\LogOutput.log` shows the plugin loading (look for `Initializing Silksong Co-op Multiplayer v2.0.8...`). Ensure no other mod or OS utility (e.g. screen recorders, media players) binds F10/F11 globally.
+If keys don't respond: check that `BepInEx\LogOutput.log` shows the plugin loading (look for `Initializing Silksong Co-op Multiplayer v2.0.9...`). Ensure no other mod or OS utility (e.g. screen recorders, media players) binds F10/F11 globally.
 </details>
 
 <details>

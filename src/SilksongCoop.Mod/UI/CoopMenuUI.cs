@@ -222,9 +222,9 @@ namespace SilksongCoop.Mod.UI
                     ? _sessionState.RemotePeerId.Value.DisplayName
                     : "Partner";
                 int rtt = _sessionState.RoundTripTimeMs;
-                string quality = rtt < 50 ? "●" : rtt < 150 ? "◐" : "○";
-                watermark = $"[F10] Co-op  {quality} {peerName}  ({rtt}ms)";
-                watermarkColor = rtt < 50 ? SilksongSkin.GreenOk : rtt < 150 ? SilksongSkin.YellowWarn : SilksongSkin.RedError;
+                string quality = rtt <= 0 ? "–" : rtt < 50 ? "●" : rtt < 150 ? "◐" : "○";
+                watermark = $"[F10] Co-op  {quality} {peerName}  {(rtt > 0 ? $"{rtt}ms" : "n/a")}";
+                watermarkColor = rtt <= 0 ? SilksongSkin.TextCream : rtt < 50 ? SilksongSkin.GreenOk : rtt < 150 ? SilksongSkin.YellowWarn : SilksongSkin.RedError;
             }
             else if (_sessionState != null && _sessionState.Status == SessionStatus.Hosting)
             {
@@ -700,10 +700,11 @@ namespace SilksongCoop.Mod.UI
             GUILayout.Space(4);
 
             int rtt = _sessionState.RoundTripTimeMs;
-            string rttColor = rtt < 50 ? "#66DD66" : rtt < 150 ? "#DDDD66" : "#DD6666";
+            string rttColor = rtt <= 0 ? "#998877" : rtt < 50 ? "#66DD66" : rtt < 150 ? "#DDDD66" : "#DD6666";
+            string rttText = rtt > 0 ? $"{rtt} ms" : "n/a";
 
             GUILayout.BeginHorizontal();
-            GUILayout.Label($"<b>Ping:</b>  <color={rttColor}>{rtt} ms</color>", GUILayout.Width(180));
+            GUILayout.Label($"<b>Ping:</b>  <color={rttColor}>{rttText}</color>", GUILayout.Width(180));
             DrawPingBars(rtt);
             GUILayout.EndHorizontal();
 
@@ -735,6 +736,28 @@ namespace SilksongCoop.Mod.UI
                 GUILayout.Label($"<b>Your Address:</b>  {_currentHostAddress}", GUILayout.ExpandWidth(true));
                 DrawCopyButton(_currentHostAddress, "Copy");
                 GUILayout.EndHorizontal();
+            }
+
+            // BUG-N11: hosting switches the active tab to STATUS, so the Steam invite button
+            // (only drawn on the HOST tab) became unreachable right after the lobby was
+            // created — the toast told the user to "use Invite Friends" but there was no
+            // button on screen. Surface lobby sharing on the status tab too.
+            if (_sessionState.SteamLobbyId.HasValue && _steamTransport != null)
+            {
+                GUILayout.Space(4);
+                GUILayout.BeginHorizontal();
+                GUILayout.Label($"<b>Steam Lobby:</b>  {_sessionState.SteamLobbyId.Value}", GUILayout.ExpandWidth(true));
+                DrawCopyButton(_sessionState.SteamLobbyId.Value.ToString(), "Copy");
+                GUILayout.EndHorizontal();
+
+                if (_sessionState.Role == SessionRole.Host)
+                {
+                    if (GUILayout.Button("Invite Steam Friends...", GUILayout.Height(24)))
+                    {
+                        _steamTransport.OpenInviteDialog();
+                        _toasts.ShowInfo("Steam invite dialog opened");
+                    }
+                }
             }
 
             GUILayout.Space(12);
@@ -906,7 +929,7 @@ namespace SilksongCoop.Mod.UI
 
         private void DrawPingBars(int rtt)
         {
-            int bars = rtt < 30 ? 5 : rtt < 60 ? 4 : rtt < 100 ? 3 : rtt < 150 ? 2 : 1;
+            int bars = rtt <= 0 ? 0 : rtt < 30 ? 5 : rtt < 60 ? 4 : rtt < 100 ? 3 : rtt < 150 ? 2 : 1;
             Color barColor = rtt < 60 ? SilksongSkin.GreenOk : rtt < 150 ? SilksongSkin.YellowWarn : SilksongSkin.RedError;
 
             for (int i = 0; i < 5; i++)

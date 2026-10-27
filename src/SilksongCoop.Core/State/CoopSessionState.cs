@@ -193,12 +193,21 @@ namespace SilksongCoop.Core.State
         /// Transitions the session to connected state and registers the remote peer.
         /// </summary>
         /// <param name="remoteId">The remote peer identifier.</param>
-        public void SetConnected(NetworkPeerId remoteId)
+        /// <param name="role">
+        /// Optional role to (re)assert. A host whose peer timed out keeps listening but its
+        /// session state is reset to <see cref="SessionRole.None"/>; restoring the role on the
+        /// next connection keeps the UI and reconnect logic from treating it as a client.
+        /// </param>
+        public void SetConnected(NetworkPeerId remoteId, SessionRole role = SessionRole.None)
         {
             SessionStatus old;
             lock (_lock)
             {
                 old = Status;
+                if (role != SessionRole.None)
+                {
+                    Role = role;
+                }
                 RemotePeerId = remoteId;
                 Status = SessionStatus.Connected;
             }

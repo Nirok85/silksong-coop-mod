@@ -40,6 +40,9 @@ namespace SilksongCoop.Mod.UI
         private long _packetsExpected;
         private long _packetsReceived;
 
+        // Externally supplied loss estimate (transport-level unreliable sequence gaps).
+        private float _externalLossPercent;
+
         // Historical data for graphs (rolling 60s window)
         private readonly Queue<(float timestamp, float value)> _pingHistory = new Queue<(float, float)>();
         private readonly Queue<(float timestamp, float value)> _packetLossHistory = new Queue<(float, float)>();
@@ -59,15 +62,22 @@ namespace SilksongCoop.Mod.UI
         public float CurrentPing => _currentPing;
 
         /// <summary>
-        /// Estimated packet loss percentage (0–100). Returns 0 when insufficient data.
+        /// Estimated packet loss percentage (0–100). Returns the sequence-gap estimate when
+        /// available, otherwise the value reported by the active transport (which measures
+        /// gaps in the unreliable stream — the sequence-gap path is only fed when callers
+        /// pass explicit sequence numbers).
         /// </summary>
         public float PacketLossPercent
         {
             get
             {
-                if (_packetsExpected < 10) return 0f;
-                long lost = Math.Max(0, _packetsExpected - _packetsReceived);
-                return (float)lost / _packetsExpected * 100f;
+                if (_packetsExpected >= 10)
+                {
+                    long lost = Math.Max(0, _packetsExpected - _packetsReceived);
+                    return (float)lost / _packetsExpected * 100f;
+                }
+
+                return _externalLossPercent;
             }
         }
 
@@ -81,6 +91,16 @@ namespace SilksongCoop.Mod.UI
         public void RecordPing(float pingMs)
         {
             _currentPing = pingMs;
+        }
+
+        /// <summary>
+        /// Record the active transport's packet-loss estimate (0–100). Used for the F11
+        /// overlay until/unless explicit sequence numbers are supplied to
+        /// <see cref="RecordReceived"/>.
+        /// </summary>
+        public void RecordLossPercent(float percent)
+        {
+            _externalLossPercent = Math.Clamp(percent, 0f, 100f);
         }
 
         /// <summary>
@@ -320,6 +340,7 @@ namespace SilksongCoop.Mod.UI
             _bytesInPerSecond = 0f;
             _packetsOutPerSecond = 0f;
             _packetsInPerSecond = 0f;
+            _externalLossPercent = 0f;
         }
 
         #endregion

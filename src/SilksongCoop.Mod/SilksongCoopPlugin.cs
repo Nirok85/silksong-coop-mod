@@ -38,7 +38,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "2.0.8";
+        public const string PluginVersion = "2.0.9";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -285,7 +285,7 @@ namespace SilksongCoop.Mod
                 TriggerTeamWipe();
             };
 
-            InventorySync.OnItemUnlocked += (itemId, cat) =>
+            InventorySync.OnRemoteItemUnlocked += (itemId, cat) =>
             {
                 ApplyRemoteItemUnlock(itemId, cat);
             };
@@ -544,7 +544,12 @@ namespace SilksongCoop.Mod
                 var hero = HeroController.instance;
                 if (hero == null || hero.gameObject == null)
                 {
-                    Logger.LogWarning("[Coop] Cannot revive: HeroController or gameObject is null");
+                    // BUG-N10: without a hero there is nothing to revive, but staying in
+                    // RespawningAtPartner forever soft-locked the session (no countdown, no
+                    // transforms, no input). Fall back to a bench respawn instead.
+                    Logger.LogWarning("[Coop] Cannot revive: HeroController or gameObject is null — falling back to bench respawn");
+                    ExitSpectatorMode();
+                    DeathCoordinator?.ForceBenchRespawn();
                     return;
                 }
 
@@ -616,6 +621,7 @@ namespace SilksongCoop.Mod
                 }
 
                 // 6. Restore player state in exact engine sequence: clear dead before RegainControl!
+                _spectatorActive = false;
                 hero.cState.dead = false;
                 hero.cState.hazardDeath = false;
                 hero.cState.recoiling = false;
@@ -1147,7 +1153,7 @@ namespace SilksongCoop.Mod
                     _reconnectAttempts = 0;
                     _reconnectAddress = null;
                     Logger.LogInfo($"[Coop] Peer connected: {peer}");
-                    SessionState?.SetConnected(peer);
+                    SessionState?.SetConnected(peer, transport.IsHost ? SessionRole.Host : SessionRole.Client);
                     MenuUI?.Diagnostics?.OnSessionStarted();
                     MenuUI?.SetStatusMessage($"Connected to {peer.DisplayName}");
 
@@ -1331,6 +1337,7 @@ namespace SilksongCoop.Mod
                         case PacketType.PlayerDeath:
                             var death = DeathLifecyclePacket.Deserialize(ref reader);
                             DeathCoordinator?.HandleDeathPacket(peer, death);
+                            ApplyRemoteDeathVisibility(peer, death.EventType);
                             break;
 
                         case PacketType.SceneTransition:
@@ -1518,6 +1525,55 @@ namespace SilksongCoop.Mod
             }
         }
 
+        /// <summary>
+        /// BUG-N8: the partner's clone used to stay frozen and visible at the death spot
+        /// forever, because a dead player stops streaming transforms but nothing hid the
+        /// clone. Death packets now toggle its visibility: revived players reappear with
+        /// their next transform packet, so a lost "revive" signal self-heals.
+        /// </summary>
+        private void ApplyRemoteDeathVisibility(NetworkPeerId peer, DeathEventType eventType)
+        {
+            try
+            {
+                switch (eventType)
+                {
+                    case DeathEventType.SoloDeathOccurred:
+                    case DeathEventType.TeamWipeOccurred:
+                        CloneSpawner?.SetRemoteScenePresence(peer, false);
+                        break;
+                    case DeathEventType.PartnerReviveTrigger:
+                        CloneSpawner?.SetRemoteScenePresence(peer, true);
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed to update remote clone visibility: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Feeds live transport metrics (RTT and packet loss) into the session state and the
+        /// diagnostics overlay. BUG-N7: neither value was ever wired up before, so the UI
+        /// permanently showed 0 ms / 0% loss, and the adaptive interpolation window in
+        /// <see cref="RemotePlayerController"/> could never react to real latency.
+        /// </summary>
+        private void UpdateTransportDiagnostics()
+        {
+            var transport = ActiveTransport;
+            if (transport == null || SessionState == null) return;
+            if (!transport.IsConnected) return;
+
+            int rtt = transport.RoundTripTimeMs;
+            if (rtt > 0)
+            {
+                SessionState.RoundTripTimeMs = rtt;
+                MenuUI?.Diagnostics?.RecordPing(rtt);
+            }
+
+            MenuUI?.Diagnostics?.RecordLossPercent(transport.PacketLossPercent);
+        }
+
         private void Update()
         {
             try
@@ -1529,6 +1585,7 @@ namespace SilksongCoop.Mod
                     SteamTransport.PollEvents();
                 }
                 ActiveTransport?.PollEvents();
+                UpdateTransportDiagnostics();
 
                 // Auto-reconnect attempt
                 if (_reconnectPending && Time.unscaledTime >= _nextReconnectTime)

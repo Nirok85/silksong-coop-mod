@@ -72,6 +72,14 @@ namespace SilksongCoop.Core.State
         public event Action<string, ItemCategory>? OnItemUnlocked;
         public event Action<ItemUnlockPacket>? OnOutgoingItemUnlockPacket;
 
+        /// <summary>
+        /// BUG-N14: raised ONLY for unlocks received from the network. <see cref="OnItemUnlocked"/>
+        /// also fires for local discoveries (its contract), so consumers that *apply* remote
+        /// state to the local game must use this event — otherwise the local player's own
+        /// unlock was re-applied through the remote-application path (double Unlock()).
+        /// </summary>
+        public event Action<string, ItemCategory>? OnRemoteItemUnlocked;
+
         #endregion
 
         #region Public Methods
@@ -219,6 +227,7 @@ namespace SilksongCoop.Core.State
                 if (isNewItem)
                 {
                     OnItemUnlocked?.Invoke(packet.ItemId, packet.Category);
+                    OnRemoteItemUnlocked?.Invoke(packet.ItemId, packet.Category);
                 }
                 // Note: Never raise OnOutgoingItemUnlockPacket here. Prevents echo loops.
             }

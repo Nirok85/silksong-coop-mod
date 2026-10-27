@@ -48,6 +48,13 @@ namespace SilksongCoop.Mod.Networking
         public NetworkPeerId LocalPeerId { get; private set; }
         public CSteamID CurrentLobbyId => _lobbyId;
 
+        // Steamworks.NET's P2P API exposes no RTT/loss counters for lobby networking, so
+        // these stay 0 (the UI treats 0 as "unknown" and hides the quality indicator).
+        /// <inheritdoc />
+        public int RoundTripTimeMs => 0;
+        /// <inheritdoc />
+        public int PacketLossPercent => 0;
+
         public static BepInEx.Logging.ManualLogSource? Logger { get; set; }
 
         public static bool IsSteamAvailable
@@ -353,6 +360,16 @@ namespace SilksongCoop.Mod.Networking
                             // Fix: Validate that packets are from the expected remote peer
                             if (_remoteSteamId == CSteamID.Nil)
                             {
+                                // BUG-N5: only a host may adopt the first peer it hears from.
+                                // A client must never accept data before its lobby join has
+                                // resolved to the lobby owner, otherwise any Steam user who
+                                // learned the lobby id could hijack the session.
+                                if (!IsHost)
+                                {
+                                    Logger?.LogWarning($"[Steam] Dropped packet from {remoteId.m_SteamID} before the host was known");
+                                    continue;
+                                }
+
                                 _remoteSteamId = remoteId;
                             }
 

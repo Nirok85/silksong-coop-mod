@@ -27,6 +27,13 @@ namespace SilksongCoop.Mod.Visuals
         private Light? _rimLight;
         private int _lastUpdateFrame = -1;
 
+        /// <summary>
+        /// When false the owning component drives <see cref="UpdateLifecycle"/> explicitly
+        /// (remote clones get accurate grounded/wall-slide flags from their controller).
+        /// Self-ticking would otherwise double-advance the lifecycle in the same frame.
+        /// </summary>
+        public bool SelfTick { get; set; } = true;
+
         #endregion
 
         #region Properties
@@ -84,6 +91,11 @@ namespace SilksongCoop.Mod.Visuals
         /// <param name="isWallSliding">True if the player is wall sliding.</param>
         public void UpdateLifecycle(float deltaTime, bool isGrounded, bool isWallSliding)
         {
+            // BUG-N9: the controller and the owning MonoBehaviour both ticked the lifecycle
+            // in the same frame (RemotePlayerController.Update + DashTrailController.Update),
+            // advancing the dash timers twice as fast. Never tick twice per frame.
+            if (_lastUpdateFrame == Time.frameCount) return;
+
             _lastUpdateFrame = Time.frameCount;
             _lifecycle.Update(deltaTime, isGrounded, isWallSliding);
 
@@ -124,6 +136,7 @@ namespace SilksongCoop.Mod.Visuals
 
         private void Update()
         {
+            if (!SelfTick) return;
             if (_lastUpdateFrame == Time.frameCount) return;
             // By default, if not externally ticked, tick with Time.deltaTime
             UpdateLifecycle(Time.deltaTime, isGrounded: false, isWallSliding: false);

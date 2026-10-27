@@ -15,6 +15,17 @@ namespace SilksongCoop.Core.Networking
         bool IsConnected { get; }
         NetworkPeerId LocalPeerId { get; }
 
+        /// <summary>
+        /// Current round-trip time in milliseconds, or 0 when the transport cannot
+        /// measure it. Fed into the diagnostics overlay and adaptive interpolation.
+        /// </summary>
+        int RoundTripTimeMs { get; }
+
+        /// <summary>
+        /// Estimated packet loss percentage (0-100) for the current window.
+        /// </summary>
+        int PacketLossPercent { get; }
+
         void StartHost(int port = 7777);
         void Connect(string addressOrCode);
         void Disconnect();

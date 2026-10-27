@@ -49,6 +49,11 @@ namespace SilksongCoop.Mod.UI
         private readonly LinkedList<Toast> _pending = new LinkedList<Toast>();
         private readonly List<Toast> _active = new List<Toast>(MaxVisible);
 
+        // BUG-N15: Draw() runs several times per frame (Layout/Repaint/events) and allocated
+        // a fresh GUIStyle per visible toast on every call — the same GC churn class as
+        // BUG-P2 in DiagnosticsOverlay. Build it once and reuse it.
+        private GUIStyle? _toastStyle;
+
         #endregion
 
         #region Public Methods
@@ -179,7 +184,7 @@ namespace SilksongCoop.Mod.UI
 
                 // Text
                 GUI.color = text;
-                var style = new GUIStyle(skin.label)
+                var style = _toastStyle ??= new GUIStyle(skin.label)
                 {
                     fontSize = 12,
                     fontStyle = FontStyle.Normal,

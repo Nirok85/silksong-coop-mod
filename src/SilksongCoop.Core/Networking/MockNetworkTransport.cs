@@ -34,8 +34,8 @@ namespace SilksongCoop.Core.Networking
         private readonly object _lock = new();
         private readonly Random _random;
 
-        private readonly Dictionary<byte, uint> _sendSequences = new();
-        private readonly Dictionary<byte, uint> _receivedSequences = new();
+        private readonly Dictionary<(byte Channel, DeliveryMethod Method), uint> _sendSequences = new();
+        private readonly Dictionary<(byte Channel, DeliveryMethod Method), uint> _receivedSequences = new();
         private readonly Dictionary<byte, SortedDictionary<uint, QueuedPacket>> _reliablePending = new();
 
         #endregion
@@ -53,6 +53,12 @@ namespace SilksongCoop.Core.Networking
         public bool IsHost { get; private set; }
         public bool IsConnected { get; private set; }
         public NetworkPeerId LocalPeerId { get; private set; }
+
+        /// <summary>Simulated round-trip time (two one-way latencies).</summary>
+        public int RoundTripTimeMs => LatencyMs * 2;
+
+        /// <summary>Simulated packet-loss percentage for the configured loss rate.</summary>
+        public int PacketLossPercent => (int)Math.Round(PacketLossRate * 100f);
 
         public int LatencyMs { get; set; }
         public int JitterMs { get; set; }
@@ -195,8 +201,9 @@ namespace SilksongCoop.Core.Networking
             uint seq;
             lock (_sendSequences)
             {
-                _sendSequences.TryGetValue(channel, out seq);
-                _sendSequences[channel] = seq + 1;
+                var sequenceKey = (channel, method);
+                _sendSequences.TryGetValue(sequenceKey, out seq);
+                _sendSequences[sequenceKey] = seq + 1;
             }
 
             byte[] buffer = new byte[length];
@@ -282,13 +289,14 @@ namespace SilksongCoop.Core.Networking
                     _reliablePending[channel] = pending;
                 }
 
-                _receivedSequences.TryGetValue(channel, out uint expectedSeq);
+                var sequenceKey = (channel, DeliveryMethod.ReliableOrdered);
+                _receivedSequences.TryGetValue(sequenceKey, out uint expectedSeq);
 
                 if (packet.Sequence == expectedSeq)
                 {
                     DispatchPacket(packet);
                     expectedSeq++;
-                    _receivedSequences[channel] = expectedSeq;
+                    _receivedSequences[sequenceKey] = expectedSeq;
 
                     // Drain subsequent ordered packets
                     while (pending.TryGetValue(expectedSeq, out var nextPkt))
@@ -296,7 +304,7 @@ namespace SilksongCoop.Core.Networking
                         pending.Remove(expectedSeq);
                         DispatchPacket(nextPkt);
                         expectedSeq++;
-                        _receivedSequences[channel] = expectedSeq;
+                        _receivedSequences[sequenceKey] = expectedSeq;
                     }
                 }
                 else if (packet.Sequence > expectedSeq)
@@ -308,10 +316,16 @@ namespace SilksongCoop.Core.Networking
             }
             else if (packet.Method == DeliveryMethod.Sequenced)
             {
-                _receivedSequences.TryGetValue(channel, out uint latestSeq);
-                if (packet.Sequence >= latestSeq)
+                var sequenceKey = (channel, DeliveryMethod.Sequenced);
+                if (!_receivedSequences.TryGetValue(sequenceKey, out uint latestSeq))
                 {
-                    _receivedSequences[channel] = packet.Sequence + 1;
+                    // First packet on this channel is always accepted.
+                    _receivedSequences[sequenceKey] = packet.Sequence;
+                    DispatchPacket(packet);
+                }
+                else if (packet.Sequence > latestSeq)
+                {
+                    _receivedSequences[sequenceKey] = packet.Sequence;
                     DispatchPacket(packet);
                 }
                 // Drop out-of-order old sequenced packet

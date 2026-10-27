@@ -92,7 +92,12 @@ namespace SilksongCoop.Mod.Clones
             _isInSameScene = true;
             _buffer.Clear();
             _paletteSwap?.SetPlayer2(isPlayer2);
-            _dashTrail?.Initialize(isPlayer2);
+            if (_dashTrail != null)
+            {
+                _dashTrail.Initialize(isPlayer2);
+                // BUG-N9: clones are ticked by this controller with real ground/wall flags.
+                _dashTrail.SelfTick = false;
+            }
             SetVisibility(true);
         }
 
