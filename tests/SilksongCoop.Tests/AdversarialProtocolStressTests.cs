@@ -153,20 +153,21 @@ namespace SilksongCoop.Tests
         [Fact]
         public void TruncatedPacketBodies_AllPacketTypes_ThrowCleanBufferUnderflow()
         {
-            // 1. TransformSyncPacket (expected size = 37 bytes)
+            // 1. TransformSyncPacket (expected size = 41 bytes)
             var transform = new TransformSyncPacket
             {
                 Header = new PacketHeader(PacketType.TransformSync, 0, 1, 100),
                 PositionX = 10f, PositionY = 20f, VelocityX = 1f, VelocityY = 2f,
-                FacingDirection = 1, StateFlags = 1, AnimationClipHash = 1234, NormalizedTime = 500
+                FacingDirection = 1, StateFlags = 1, AnimationClipHash = 1234, NormalizedTime = 500,
+                SceneNameHash = 9999
             };
             Span<byte> tBuf = stackalloc byte[64];
             var tw = new PacketWriter(tBuf);
             transform.Serialize(ref tw);
             int tLen = tw.Position;
-            Assert.Equal(37, tLen);
+            Assert.Equal(41, tLen);
 
-            // Truncate at every length from 12 to 36
+            // Truncate at every length from 12 to 40
             for (int len = PacketHeader.HeaderSize; len < tLen; len++)
             {
                 bool threw = false;

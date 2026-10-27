@@ -27,7 +27,9 @@ namespace SilksongCoop.Mod.Hooks
                 var pd = PlayerData.instance;
                 var coreType = (type == CurrencyType.Money) ? Core.Protocol.Packets.CurrencyType.Rosaries : Core.Protocol.Packets.CurrencyType.ShellShards;
                 int currentWallet = (type == CurrencyType.Money) ? pd.geo : pd.ShellShards;
-                int projectedTotal = Math.Max(0, currentWallet + amount);
+                // Postfix runs AFTER ChangeCurrency has already updated pd.geo / pd.ShellShards.
+                // currentWallet already holds the updated balance.
+                int projectedTotal = Math.Max(0, currentWallet);
 
                 SilksongCoopPlugin.Instance.VitalsSync.OnLocalCurrencyChanged(coreType, amount, projectedTotal, Guid.NewGuid());
             }

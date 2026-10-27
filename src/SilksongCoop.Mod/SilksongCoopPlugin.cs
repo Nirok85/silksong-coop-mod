@@ -26,7 +26,7 @@ namespace SilksongCoop.Mod
     {
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "2.0.2";
+        public const string PluginVersion = "2.0.3";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         public static void LogWarn(string message) => Instance?.Logger.LogWarning(message);
@@ -214,7 +214,12 @@ namespace SilksongCoop.Mod
                     using (RemoteApplyScope.Begin())
                     {
                         var silkgurrencyType = (type == Core.Protocol.Packets.CurrencyType.Rosaries) ? CurrencyType.Money : CurrencyType.Shard;
-                        CurrencyManager.ChangeCurrency(delta, silkgurrencyType, true);
+                        int current = (type == Core.Protocol.Packets.CurrencyType.Rosaries) ? pd.geo : pd.ShellShards;
+                        int diff = total - current;
+                        if (diff != 0)
+                        {
+                            CurrencyManager.ChangeCurrency(diff, silkgurrencyType, true);
+                        }
                     }
                 }
             };
@@ -385,6 +390,15 @@ namespace SilksongCoop.Mod
                     hero.AffectedByGravity(false);
                     hero.RelinquishControl();
                     
+                    // HIGH-01: Disable colliders so invisible dead body doesn't block path or take hits
+                    foreach (var col in hero.gameObject.GetComponentsInChildren<Collider2D>())
+                    {
+                        if (col != null)
+                        {
+                            col.enabled = false;
+                        }
+                    }
+
                     foreach (var ren in hero.gameObject.GetComponentsInChildren<Renderer>())
                     {
                         if (ren != null)
@@ -403,6 +417,43 @@ namespace SilksongCoop.Mod
             catch (Exception ex)
             {
                 Logger.LogError($"[Coop] Failed entering spectator mode: {ex.Message}\n{ex.StackTrace}");
+            }
+        }
+
+        public void ExitSpectatorMode()
+        {
+            try
+            {
+                var hero = HeroController.instance;
+                if (hero != null && hero.gameObject != null)
+                {
+                    hero.AffectedByGravity(true);
+                    hero.RegainControl(allowInput: true);
+
+                    foreach (var col in hero.gameObject.GetComponentsInChildren<Collider2D>())
+                    {
+                        if (col != null)
+                        {
+                            col.enabled = true;
+                        }
+                    }
+
+                    foreach (var ren in hero.gameObject.GetComponentsInChildren<Renderer>())
+                    {
+                        if (ren != null)
+                        {
+                            ren.enabled = true;
+                        }
+                    }
+                }
+
+                var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
+                camTarget?.EndFreeMode();
+                GameManager.instance?.cameraCtrl?.PositionToHero(forceDirect: false);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed exiting spectator mode: {ex.Message}");
             }
         }
 
@@ -458,7 +509,14 @@ namespace SilksongCoop.Mod
                     VitalsSync?.BroadcastCurrentVitals();
                 }
 
-                // 5. Re-enable renderers
+                // 5. Re-enable renderers and colliders
+                foreach (var col in hero.gameObject.GetComponentsInChildren<Collider2D>())
+                {
+                    if (col != null)
+                    {
+                        col.enabled = true;
+                    }
+                }
                 foreach (var ren in hero.gameObject.GetComponentsInChildren<Renderer>())
                 {
                     if (ren != null)
@@ -588,6 +646,183 @@ namespace SilksongCoop.Mod
             }
         }
 
+        private uint _actionTick;
+
+        public void BroadcastActionTrigger(ActionType action, byte parameter = 0)
+        {
+            try
+            {
+                if (ActiveTransport == null || SessionState?.IsConnected != true || !SessionState.RemotePeerId.HasValue) return;
+                var hero = HeroController.instance;
+                Vector2 pos = (hero != null) ? (Vector2)hero.transform.position : Vector2.zero;
+                Vector2 dir = (hero != null && hero.cState.facingRight) ? Vector2.right : Vector2.left;
+
+                _actionTick++;
+                var packet = new ActionTriggerPacket
+                {
+                    Header = new PacketHeader(PacketType.ActionTrigger, 0, _actionTick, (uint)(Time.timeAsDouble * 1000.0)),
+                    Action = action,
+                    ActionSequenceId = _actionTick,
+                    OriginX = pos.x,
+                    OriginY = pos.y,
+                    DirectionX = dir.x,
+                    DirectionY = dir.y,
+                    Parameter = parameter
+                };
+
+                Span<byte> buffer = stackalloc byte[64];
+                var writer = new PacketWriter(buffer);
+                packet.Serialize(ref writer);
+                ActiveTransport.Send(
+                    SessionState.RemotePeerId.Value,
+                    buffer.ToArray(),
+                    0,
+                    writer.Position,
+                    DeliveryMethod.ReliableOrdered,
+                    1);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed broadcasting action trigger: {ex.Message}");
+            }
+        }
+
+        public void BroadcastBenchCheckpoint(string sceneName, string respawnMarker, int spawnType, bool facingRight)
+        {
+            try
+            {
+                if (ActiveTransport == null || SessionState?.IsConnected != true || !SessionState.RemotePeerId.HasValue) return;
+
+                var packet = new BenchCheckpointSyncPacket
+                {
+                    Header = new PacketHeader(PacketType.BenchCheckpointSync, 0, 0, (uint)(Time.timeAsDouble * 1000.0)),
+                    SceneName = sceneName,
+                    RespawnMarker = respawnMarker,
+                    FacingDirection = spawnType,
+                    AtBench = facingRight
+                };
+
+                Span<byte> buffer = stackalloc byte[128];
+                var writer = new PacketWriter(buffer);
+                packet.Serialize(ref writer);
+                ActiveTransport.Send(
+                    SessionState.RemotePeerId.Value,
+                    buffer.ToArray(),
+                    0,
+                    writer.Position,
+                    DeliveryMethod.ReliableOrdered,
+                    0);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed broadcasting bench checkpoint: {ex.Message}");
+            }
+        }
+
+        public void ApplyRemoteBenchCheckpoint(string sceneName, string respawnMarker, int spawnType, bool facingRight)
+        {
+            try
+            {
+                using (RemoteApplyScope.Begin())
+                {
+                    var pd = PlayerData.instance;
+                    if (pd != null)
+                    {
+                        pd.SetBenchRespawn(respawnMarker, sceneName, spawnType, facingRight);
+                        Logger.LogInfo($"[Coop] Applied remote bench checkpoint: {sceneName} / {respawnMarker}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed applying remote bench checkpoint: {ex.Message}");
+            }
+        }
+
+        public void BroadcastHeartPieces(int count)
+        {
+            try
+            {
+                if (SessionState?.IsConnected != true) return;
+                InventorySync?.OnLocalItemDiscovered($"heartPieces:{count}", ItemCategory.KeyItem);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed broadcasting heart pieces: {ex.Message}");
+            }
+        }
+
+        public void BroadcastSilkParts(int count)
+        {
+            try
+            {
+                if (SessionState?.IsConnected != true) return;
+                InventorySync?.OnLocalItemDiscovered($"silkParts:{count}", ItemCategory.KeyItem);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed broadcasting silk parts: {ex.Message}");
+            }
+        }
+
+        public void BroadcastInitialInventory(NetworkPeerId peer)
+        {
+            try
+            {
+                var pd = PlayerData.instance;
+                if (pd == null || InventorySync == null) return;
+
+                // 1. Shared ability bools
+                foreach (var boolName in Hooks.InventoryHooks.SharedAbilityBools)
+                {
+                    if (pd.GetBool(boolName))
+                    {
+                        InventorySync.OnLocalItemDiscovered(boolName, ItemCategory.Ability);
+                    }
+                }
+
+                // 2. Unlocked tools
+                try
+                {
+                    var unlocked = ToolItemManager.GetUnlockedTools();
+                    if (unlocked != null)
+                    {
+                        foreach (var tool in unlocked)
+                        {
+                            if (tool != null && !string.IsNullOrEmpty(tool.name))
+                            {
+                                InventorySync.OnLocalItemDiscovered(tool.name, ItemCategory.Tool);
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning($"[Coop] Tool enumeration fallback: {ex.Message}");
+                }
+
+                // 3. Current crest
+                if (!string.IsNullOrEmpty(pd.CurrentCrestID))
+                {
+                    InventorySync.OnLocalItemDiscovered(pd.CurrentCrestID, ItemCategory.Crest);
+                }
+
+                // 4. Heart pieces & silk parts
+                if (pd.heartPieces > 0)
+                {
+                    BroadcastHeartPieces(pd.heartPieces);
+                }
+                if (pd.silkParts > 0)
+                {
+                    BroadcastSilkParts(pd.silkParts);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed broadcasting initial inventory: {ex.Message}");
+            }
+        }
+
         public void ApplyRemoteItemUnlock(string itemId, ItemCategory category)
         {
             if (string.IsNullOrEmpty(itemId))
@@ -604,6 +839,40 @@ namespace SilksongCoop.Mod
                     if (playerData == null)
                     {
                         Logger.LogWarning("[Coop] Cannot apply remote item unlock: PlayerData.instance is null");
+                        return;
+                    }
+
+                    // MED-02: Partial health and silk fragment synchronizations
+                    if (itemId.StartsWith("heartPieces:"))
+                    {
+                        if (int.TryParse(itemId.Substring("heartPieces:".Length), out int pieces))
+                        {
+                            if (pieces > playerData.heartPieces)
+                            {
+                                playerData.heartPieces = pieces;
+                                if (playerData.heartPieces >= 4)
+                                {
+                                    HeroController.instance?.AddToMaxHealth(1);
+                                    playerData.heartPieces -= 4;
+                                }
+                            }
+                        }
+                        return;
+                    }
+                    if (itemId.StartsWith("silkParts:"))
+                    {
+                        if (int.TryParse(itemId.Substring("silkParts:".Length), out int parts))
+                        {
+                            if (parts > playerData.silkParts)
+                            {
+                                playerData.silkParts = parts;
+                                if (playerData.silkParts >= 3)
+                                {
+                                    HeroController.instance?.AddToMaxSilk(1);
+                                    playerData.silkParts -= 3;
+                                }
+                            }
+                        }
                         return;
                     }
 
@@ -730,6 +999,9 @@ namespace SilksongCoop.Mod
                         }
                         VitalsSync.BroadcastCurrentVitals();
                         VitalsSync.BroadcastCurrentCurrency();
+
+                        // HIGH-02: Broadcast initial inventory dump (abilities, tools, crests) to client
+                        BroadcastInitialInventory(peer);
                     }
                 }
                 catch (Exception ex)
@@ -753,6 +1025,16 @@ namespace SilksongCoop.Mod
                         : (transport == SteamTransport
                             ? SessionState?.SteamLobbyId?.ToString()
                             : SessionState?.CurrentRoomCode);
+
+                    // CRIT-02: If partner disconnected while local player was spectating/pending revive,
+                    // exit spectator mode and trigger bench respawn to prevent perma-softlock!
+                    if (DeathCoordinator?.CurrentState == DeathState.Spectating ||
+                        DeathCoordinator?.CurrentState == DeathState.RespawningAtPartner)
+                    {
+                        Logger.LogWarning("[Coop] Partner disconnected while in spectator mode. Exiting spectator and respawning at bench.");
+                        ExitSpectatorMode();
+                        TriggerTeamWipe();
+                    }
 
                     SessionState?.SetDisconnected(reason);
                     MenuUI?.Diagnostics?.OnSessionEnded();
@@ -812,6 +1094,8 @@ namespace SilksongCoop.Mod
                         case PacketType.TransformSync:
                             var trans = TransformSyncPacket.Deserialize(ref reader);
                             if (!PacketValidator.ValidateTransformSync(trans)) return;
+                            int localSceneHash = GameManager.instance != null ? GameManager.instance.sceneNameHash : 0;
+                            bool isSameScene = (trans.SceneNameHash == 0 || localSceneHash == 0 || trans.SceneNameHash == localSceneHash);
                             CloneSpawner?.UpdateRemoteTransform(
                                 peer,
                                 trans.PositionX, trans.PositionY,
@@ -820,7 +1104,13 @@ namespace SilksongCoop.Mod
                                 trans.StateFlags,
                                 trans.AnimationClipHash,
                                 trans.NormalizedTime,
-                                header.Timestamp);
+                                header.Timestamp,
+                                isSameScene);
+                            break;
+
+                        case PacketType.BenchCheckpointSync:
+                            var bench = BenchCheckpointSyncPacket.Deserialize(ref reader);
+                            ApplyRemoteBenchCheckpoint(bench.SceneName, bench.RespawnMarker, bench.FacingDirection, bench.AtBench);
                             break;
 
                         case PacketType.ActionTrigger:
@@ -931,6 +1221,7 @@ namespace SilksongCoop.Mod
                     }
                 }
 
+                int localSceneHash = GameManager.instance != null ? GameManager.instance.sceneNameHash : 0;
                 _transformTick++;
                 var packet = new TransformSyncPacket
                 {
@@ -944,7 +1235,8 @@ namespace SilksongCoop.Mod
                     FacingDirection = (byte)(state.facingRight ? 1 : 0),
                     StateFlags = flags,
                     AnimationClipHash = clipHash,
-                    NormalizedTime = normalizedTime
+                    NormalizedTime = normalizedTime,
+                    SceneNameHash = localSceneHash
                 };
 
                 Span<byte> buffer = stackalloc byte[64];
@@ -1035,8 +1327,8 @@ namespace SilksongCoop.Mod
 
                 SessionState?.AdvanceTick();
 
-                // Stream our own transform to the partner (this was missing entirely).
-                BroadcastLocalTransform(Time.deltaTime);
+                // MED-05: Stream transform using unscaled delta time so pause menu doesn't freeze replication
+                BroadcastLocalTransform(Time.unscaledDeltaTime);
 
                 if (SessionState?.IsConnected == true && SessionState.RemotePeerId.HasValue)
                 {
@@ -1060,7 +1352,7 @@ namespace SilksongCoop.Mod
                     }
                 }
 
-                DeathCoordinator?.UpdateTick(Time.deltaTime);
+                DeathCoordinator?.UpdateTick(Time.unscaledDeltaTime);
             }
             catch (Exception ex)
             {
@@ -1072,6 +1364,7 @@ namespace SilksongCoop.Mod
         {
             try
             {
+                StopAllCoroutines();
                 // Disconnect both transports
                 ActiveTransport?.Disconnect();
                 CancelReconnect();

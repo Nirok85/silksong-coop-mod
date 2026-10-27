@@ -86,8 +86,33 @@ namespace SilksongCoop.Mod.UI
             _toasts.ShowInfo(message);
         }
 
+        private bool _diagnosticLogged = false;
+        
         private void Update()
         {
+            // ONE-TIME diagnostic log to verify Update() runs and which input path works
+            if (!_diagnosticLogged && Time.frameCount > 10)
+            {
+                _diagnosticLogged = true;
+                Debug.Log($"[Coop] Update() is running. _keybinds={_keybinds != null}");
+                
+                // Test which input work
+                bool legacyWorks = false;
+                try
+                {
+                    var test = Input.GetKeyDown(KeyCode.F10);
+                    legacyWorks = true;
+                    Debug.Log($"[Coop] Legacy Input.GetKeyDown() works: {legacyWorks}");
+                }
+                catch (System.Exception ex)
+                {
+                    Debug.Log($"[Coop] Legacy Input.GetKeyDown() throws: {ex.GetType().Name}: {ex.Message}");
+                }
+                
+                bool newInputWorks = KeybindManager.IsKeyTriggered(KeyCode.F12); // Test with F12
+                Debug.Log($"[Coop] New Input System fallback works: {newInputWorks}");
+            }
+            
             // Toggle menu using configurable keybind
             if (_keybinds != null && _keybinds.IsKeyDown(KeybindManager.ToggleMenu))
             {
@@ -465,6 +490,7 @@ namespace SilksongCoop.Mod.UI
                     GUILayout.Label($"<color=#D4A843><b>{_currentHostAddress}</b></color>");
                     DrawCopyButton(_currentHostAddress, "Copy");
                     GUILayout.EndHorizontal();
+                    GUILayout.Label("<color=#999999><i>Note: Direct UDP works via LAN or VPN (Radmin/Hamachi). For Internet, use Steam Host.</i></color>");
                 }
 
                 if (_sessionState!.SteamLobbyId.HasValue)

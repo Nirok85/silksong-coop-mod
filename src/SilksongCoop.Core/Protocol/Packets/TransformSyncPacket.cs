@@ -24,6 +24,7 @@ namespace SilksongCoop.Core.Protocol.Packets
         public ushort StateFlags;
         public int AnimationClipHash;
         public ushort NormalizedTime;
+        public int SceneNameHash;
 
         public bool FacingRight => FacingDirection != 0;
         public bool IsGrounded => (StateFlags & FlagGrounded) != 0;
@@ -40,6 +41,7 @@ namespace SilksongCoop.Core.Protocol.Packets
             writer.WriteUInt16(StateFlags);
             writer.WriteInt32(AnimationClipHash);
             writer.WriteUInt16(NormalizedTime);
+            writer.WriteInt32(SceneNameHash);
         }
 
         public static TransformSyncPacket Deserialize(ref PacketReader reader)
@@ -54,7 +56,8 @@ namespace SilksongCoop.Core.Protocol.Packets
                 FacingDirection = reader.ReadByte(),
                 StateFlags = reader.ReadUInt16(),
                 AnimationClipHash = reader.ReadInt32(),
-                NormalizedTime = reader.ReadUInt16()
+                NormalizedTime = reader.ReadUInt16(),
+                SceneNameHash = reader.ReadInt32()
             };
             return packet;
         }

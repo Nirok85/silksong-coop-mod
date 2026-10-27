@@ -90,25 +90,60 @@ namespace SilksongCoop.Mod.Settings
                     return true;
                 }
             }
-            catch
+            catch (System.Exception ex)
             {
                 // Unity 6 throws InvalidOperationException if PlayerSettings only enables New Input System
+                // Log once for diagnostics
+                if (!_legacyInputLogged)
+                {
+                    _legacyInputLogged = true;
+                    Debug.Log($"[Coop] Legacy Input threw {ex.GetType().Name}: {ex.Message}");
+                }
             }
 
             // 2. Try Unity New Input System via reflection if present in Silksong
-            return CheckNewInputSystemKey(key);
+            var result = CheckNewInputSystemKey(key);
+            if (result && !_newInputLogged)
+            {
+                _newInputLogged = true;
+                Debug.Log($"[Coop] New Input System detected key press: {key}");
+            }
+            return result;
         }
+        
+        private static bool _legacyInputLogged = false;
+        private static bool _newInputLogged = false;
 
         private static bool CheckNewInputSystemKey(KeyCode key)
         {
             try
             {
-                var keyboardType = Type.GetType("UnityEngine.InputSystem.Keyboard, Unity.InputSystem");
-                if (keyboardType == null) return false;
+                // Try multiple assembly names for Unity.InputSystem
+                var keyboardType = Type.GetType("UnityEngine.InputSystem.Keyboard, Unity.InputSystem") ??
+                                   Type.GetType("UnityEngine.InputSystem.Keyboard, UnityEngine.InputSystem") ??
+                                   Type.GetType("UnityEngine.InputSystem.Keyboard");
+                
+                if (keyboardType == null)
+                {
+                    if (!_keyboardTypeLogged)
+                    {
+                        _keyboardTypeLogged = true;
+                        Debug.Log("[Coop] Unity.InputSystem.Keyboard type not found via reflection");
+                    }
+                    return false;
+                }
 
                 var currentProp = keyboardType.GetProperty("current", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
                 var keyboard = currentProp?.GetValue(null);
-                if (keyboard == null) return false;
+                if (keyboard == null)
+                {
+                    if (!_keyboardCurrentLogged)
+                    {
+                        _keyboardCurrentLogged = true;
+                        Debug.Log("[Coop] Keyboard.current is null");
+                    }
+                    return false;
+                }
 
                 string? keyPropName = key switch
                 {
@@ -142,13 +177,22 @@ namespace SilksongCoop.Mod.Settings
                     }
                 }
             }
-            catch
+            catch (System.Exception ex)
             {
                 // Fallback safe ignore
+                if (!_newInputExceptionLogged)
+                {
+                    _newInputExceptionLogged = true;
+                    Debug.Log($"[Coop] New Input System reflection failed: {ex.GetType().Name}: {ex.Message}");
+                }
             }
 
             return false;
         }
+        
+        private static bool _keyboardTypeLogged = false;
+        private static bool _keyboardCurrentLogged = false;
+        private static bool _newInputExceptionLogged = false;
 
         public Dictionary<string, KeyCode> GetAllKeybinds()
         {

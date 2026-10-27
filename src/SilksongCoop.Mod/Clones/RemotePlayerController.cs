@@ -5,6 +5,7 @@ using SilksongCoop.Core.Interpolation;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol.Packets;
 using SilksongCoop.Core.Visuals;
+using SilksongCoop.Mod.State;
 using SilksongCoop.Mod.Visuals;
 using UnityEngine;
 
@@ -39,6 +40,7 @@ namespace SilksongCoop.Mod.Clones
         private uint _lastTimestampMs;
         private bool _hasClockOffset;
         private double _clockOffsetMs;
+        private bool _isInSameScene = true;
 
         public NetworkPeerId PeerId => _peerId;
         public bool IsPlayer2 => _isPlayer2;
@@ -46,6 +48,7 @@ namespace SilksongCoop.Mod.Clones
         public bool FacingRight => _facingRight;
         public ushort StateFlags => _stateFlags;
         public uint LastTimestampMs => _lastTimestampMs;
+        public bool IsInSameScene => _isInSameScene;
 
         private void Awake()
         {
@@ -62,9 +65,20 @@ namespace SilksongCoop.Mod.Clones
             _lastTimestampMs = 0;
             _hasClockOffset = false;
             _clockOffsetMs = 0.0;
+            _isInSameScene = true;
             _buffer.Clear();
             _paletteSwap?.SetPlayer2(isPlayer2);
             _dashTrail?.Initialize(isPlayer2);
+            SetVisibility(true);
+        }
+
+        public void SetVisibility(bool visible)
+        {
+            var renderers = GetComponentsInChildren<Renderer>(includeInactive: true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                if (renderers[i] != null) renderers[i].enabled = visible;
+            }
         }
 
         public void SetAnimationLibrary(tk2dSpriteAnimation library)
@@ -102,8 +116,32 @@ namespace SilksongCoop.Mod.Clones
             ushort stateFlags,
             int animClipHash,
             ushort normalizedTime,
-            uint timestampMs)
+            uint timestampMs,
+            bool isSameScene = true)
         {
+            // CRIT-01: If remote player is in a different room/scene, hide clone and ignore position
+            if (!isSameScene)
+            {
+                if (_isInSameScene)
+                {
+                    _isInSameScene = false;
+                    SetVisibility(false);
+                    _buffer.Clear();
+                }
+                return;
+            }
+            else
+            {
+                if (!_isInSameScene)
+                {
+                    _isInSameScene = true;
+                    SetVisibility(true);
+                    transform.position = new Vector3(posX, posY, transform.position.z);
+                    _hasClockOffset = false;
+                    _buffer.Clear();
+                }
+            }
+
             // Proper packet ordering: handle both normal progression and clock wrap detection
             // A packet is newer if:
             // 1. LastTimestampMs is 0 (first packet), OR
@@ -168,6 +206,78 @@ namespace SilksongCoop.Mod.Clones
             if (action == ActionType.AirDash || action == ActionType.HarpoonDash)
             {
                 _dashTrail?.TriggerDash(action == ActionType.AirDash);
+            }
+            else if (action == ActionType.SlashNormal || action == ActionType.SlashUp || action == ActionType.SlashDown)
+            {
+                PerformSlashAttack(action);
+            }
+        }
+
+        private void PerformSlashAttack(ActionType action)
+        {
+            try
+            {
+                Vector2 origin = transform.position;
+                Vector2 size = new Vector2(2.5f, 1.8f);
+                Vector2 offset = Vector2.zero;
+
+                if (action == ActionType.SlashNormal)
+                {
+                    offset = new Vector2(_facingRight ? 1.2f : -1.2f, 0f);
+                }
+                else if (action == ActionType.SlashUp)
+                {
+                    offset = new Vector2(0f, 1.5f);
+                    size = new Vector2(2.0f, 2.5f);
+                }
+                else if (action == ActionType.SlashDown)
+                {
+                    offset = new Vector2(0f, -1.2f);
+                    size = new Vector2(2.0f, 2.0f);
+                }
+
+                Vector2 hitCenter = origin + offset;
+                var colliders = Physics2D.OverlapBoxAll(hitCenter, size, 0f);
+                if (colliders != null && colliders.Length > 0)
+                {
+                    int damage = 5;
+                    var pd = PlayerData.instance;
+                    if (pd != null)
+                    {
+                        damage += pd.nailUpgrades * 3;
+                    }
+
+                    for (int i = 0; i < colliders.Length; i++)
+                    {
+                        var col = colliders[i];
+                        if (col == null || col.isTrigger) continue;
+                        var hm = col.GetComponent<HealthManager>() ?? col.GetComponentInParent<HealthManager>();
+                        if (hm != null && !hm.GetIsDead())
+                        {
+                            using (RemoteApplyScope.Begin())
+                            {
+                                var hit = new HitInstance
+                                {
+                                    Source = gameObject,
+                                    DamageDealt = damage,
+                                    AttackType = AttackTypes.Nail,
+                                    MoveAngle = _facingRight ? 0f : 180f,
+                                    MoveDirection = _facingRight,
+                                    Multiplier = 1f,
+                                    MagnitudeMultiplier = 1f,
+                                    CircleDirection = false,
+                                    SpecialType = SpecialTypes.None,
+                                    IsHeroDamage = true
+                                };
+                                hm.Hit(hit);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[RemotePlayerController] PerformSlashAttack error: {ex.Message}");
             }
         }
 

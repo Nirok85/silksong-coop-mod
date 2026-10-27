@@ -100,6 +100,56 @@ namespace SilksongCoop.Mod.Hooks
         }
 
         [HarmonyPostfix]
+        [HarmonyPatch(typeof(HeroController), "DoAttack")]
+        public static void PostfixDoAttack(HeroController __instance)
+        {
+            if (RemoteApplyScope.IsActive) return;
+            if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
+            try
+            {
+                bool up = __instance != null && __instance.vertical_input > 0.5f;
+                SilksongCoopPlugin.Instance?.BroadcastActionTrigger(up ? ActionType.SlashUp : ActionType.SlashNormal);
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[HeroVitalsHooks] PostfixDoAttack error: {ex.Message}");
+            }
+        }
+
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(HeroController), "DownAttack")]
+        public static void PostfixDownAttack()
+        {
+            if (RemoteApplyScope.IsActive) return;
+            if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
+            try
+            {
+                SilksongCoopPlugin.Instance?.BroadcastActionTrigger(ActionType.SlashDown);
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[HeroVitalsHooks] PostfixDownAttack error: {ex.Message}");
+            }
+        }
+
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(HeroController), "HeroDash")]
+        public static void PostfixHeroDash(HeroController __instance)
+        {
+            if (RemoteApplyScope.IsActive) return;
+            if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
+            try
+            {
+                bool isAir = __instance != null && !__instance.cState.onGround;
+                SilksongCoopPlugin.Instance?.BroadcastActionTrigger(isAir ? ActionType.AirDash : ActionType.HarpoonDash);
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[HeroVitalsHooks] PostfixHeroDash error: {ex.Message}");
+            }
+        }
+
+        [HarmonyPostfix]
         [HarmonyPatch(typeof(PlayerData), nameof(PlayerData.SetInt))]
         public static void PostfixSetInt(string intName, int value)
         {
@@ -107,13 +157,23 @@ namespace SilksongCoop.Mod.Hooks
             
             try
             {
-                if (intName == "nailUpgrades" && SilksongCoopPlugin.Instance?.VitalsSync != null && SilksongCoopPlugin.Instance.SessionState.IsConnected)
+                if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
+
+                if (intName == "nailUpgrades" && SilksongCoopPlugin.Instance?.VitalsSync != null)
                 {
                     if (value != _lastNailUpgradeLevel)
                     {
                         _lastNailUpgradeLevel = value;
                         SilksongCoopPlugin.Instance.VitalsSync.OnLocalNeedleUpgrade(value);
                     }
+                }
+                else if (intName == "heartPieces")
+                {
+                    SilksongCoopPlugin.Instance?.BroadcastHeartPieces(value);
+                }
+                else if (intName == "silkParts")
+                {
+                    SilksongCoopPlugin.Instance?.BroadcastSilkParts(value);
                 }
             }
             catch (Exception ex)
@@ -130,17 +190,25 @@ namespace SilksongCoop.Mod.Hooks
             
             try
             {
-                if (intName == "nailUpgrades" && SilksongCoopPlugin.Instance?.VitalsSync != null && SilksongCoopPlugin.Instance.SessionState.IsConnected)
+                if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
+                var pd = PlayerData.instance;
+                if (pd == null) return;
+
+                if (intName == "nailUpgrades" && SilksongCoopPlugin.Instance?.VitalsSync != null)
                 {
-                    var pd = PlayerData.instance;
-                    if (pd != null)
+                    if (pd.nailUpgrades != _lastNailUpgradeLevel)
                     {
-                        if (pd.nailUpgrades != _lastNailUpgradeLevel)
-                        {
-                            _lastNailUpgradeLevel = pd.nailUpgrades;
-                            SilksongCoopPlugin.Instance.VitalsSync.OnLocalNeedleUpgrade(pd.nailUpgrades);
-                        }
+                        _lastNailUpgradeLevel = pd.nailUpgrades;
+                        SilksongCoopPlugin.Instance.VitalsSync.OnLocalNeedleUpgrade(pd.nailUpgrades);
                     }
+                }
+                else if (intName == "heartPieces")
+                {
+                    SilksongCoopPlugin.Instance?.BroadcastHeartPieces(pd.heartPieces);
+                }
+                else if (intName == "silkParts")
+                {
+                    SilksongCoopPlugin.Instance?.BroadcastSilkParts(pd.silkParts);
                 }
             }
             catch (Exception ex)

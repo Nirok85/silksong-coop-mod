@@ -11,7 +11,7 @@ namespace SilksongCoop.Mod.Hooks
     {
         // Guard flag replaced by RemoteApplyScope.IsActive
 
-        private static readonly HashSet<string> SharedAbilityBools = new HashSet<string>(StringComparer.Ordinal)
+        public static readonly HashSet<string> SharedAbilityBools = new HashSet<string>(StringComparer.Ordinal)
         {
             "hasDash",
             "hasWalljump",

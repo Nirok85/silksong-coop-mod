@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using HarmonyLib;
 using SilksongCoop.Core.State;
+using SilksongCoop.Mod.State;
 using UnityEngine;
 
 namespace SilksongCoop.Mod.Hooks
@@ -69,6 +70,38 @@ namespace SilksongCoop.Mod.Hooks
             }
 
             SilksongCoopPlugin.Instance.OnBenchRespawnCompleted();
+        }
+
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(PlayerData), nameof(PlayerData.SetBenchRespawn), new Type[] { typeof(string), typeof(string), typeof(int), typeof(bool) })]
+        public static void PostfixSetBenchRespawnFull(string spawnMarker, string sceneName, int spawnType, bool facingRight)
+        {
+            if (RemoteApplyScope.IsActive) return;
+            if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
+            try
+            {
+                SilksongCoopPlugin.Instance?.BroadcastBenchCheckpoint(sceneName, spawnMarker, spawnType, facingRight);
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[DeathHooks] PostfixSetBenchRespawnFull error: {ex.Message}");
+            }
+        }
+
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(PlayerData), nameof(PlayerData.SetBenchRespawn), new Type[] { typeof(string), typeof(string), typeof(bool) })]
+        public static void PostfixSetBenchRespawnSimple(string spawnMarker, string sceneName, bool facingRight)
+        {
+            if (RemoteApplyScope.IsActive) return;
+            if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
+            try
+            {
+                SilksongCoopPlugin.Instance?.BroadcastBenchCheckpoint(sceneName, spawnMarker, 1, facingRight);
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[DeathHooks] PostfixSetBenchRespawnSimple error: {ex.Message}");
+            }
         }
     }
 }

@@ -152,6 +152,20 @@ namespace SilksongCoop.Mod.Clones
             ushort normalizedTime,
             uint timestampMs)
         {
+            UpdateRemoteTransform(peerId, posX, posY, velX, velY, facingDirection, stateFlags, animClipHash, normalizedTime, timestampMs, true);
+        }
+
+        public void UpdateRemoteTransform(
+            NetworkPeerId peerId,
+            float posX, float posY,
+            float velX, float velY,
+            byte facingDirection,
+            ushort stateFlags,
+            int animClipHash,
+            ushort normalizedTime,
+            uint timestampMs,
+            bool isSameScene)
+        {
             try
             {
                 if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
@@ -163,7 +177,8 @@ namespace SilksongCoop.Mod.Clones
                         stateFlags,
                         animClipHash,
                         normalizedTime,
-                        timestampMs);
+                        timestampMs,
+                        isSameScene);
                 }
             }
             catch (Exception ex)

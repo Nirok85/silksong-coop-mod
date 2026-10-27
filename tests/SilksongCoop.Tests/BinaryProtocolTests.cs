@@ -47,14 +47,15 @@ namespace SilksongCoop.Tests
                 FacingDirection = 1,
                 StateFlags = TransformSyncPacket.FlagGrounded | TransformSyncPacket.FlagDashing,
                 AnimationClipHash = 987654321,
-                NormalizedTime = 32768
+                NormalizedTime = 32768,
+                SceneNameHash = 12345678
             };
 
             Span<byte> buffer = stackalloc byte[128];
             var writer = new PacketWriter(buffer);
             original.Serialize(ref writer);
 
-            Assert.Equal(37, writer.Position); // 12 header + 25 payload = 37 bytes
+            Assert.Equal(41, writer.Position); // 12 header + 29 payload = 41 bytes
 
             var reader = new PacketReader(writer.WrittenSpan);
             var deserialized = TransformSyncPacket.Deserialize(ref reader);
@@ -63,6 +64,7 @@ namespace SilksongCoop.Tests
             Assert.Equal(original.PositionX, deserialized.PositionX);
             Assert.Equal(original.PositionY, deserialized.PositionY);
             Assert.Equal(original.VelocityX, deserialized.VelocityX);
+            Assert.Equal(original.SceneNameHash, deserialized.SceneNameHash);
             Assert.Equal(original.VelocityY, deserialized.VelocityY);
             Assert.Equal(original.FacingDirection, deserialized.FacingDirection);
             Assert.True(deserialized.FacingRight);
@@ -229,6 +231,58 @@ namespace SilksongCoop.Tests
             Assert.Equal(12.0f, deserialized.CoordinateY);
             Assert.Equal(24.5f, deserialized.RemainingSeconds);
             Assert.Equal(12345, deserialized.BenchSceneHash);
+        }
+
+        [Fact]
+        public void BenchCheckpointSyncPacket_SerializationRoundtrip_MatchesExactValues()
+        {
+            var original = new BenchCheckpointSyncPacket
+            {
+                Header = new PacketHeader(PacketType.BenchCheckpointSync, 0, 10, 5000),
+                SceneName = "Bonebottom_01",
+                RespawnMarker = "RestBench_01",
+                FacingDirection = 1,
+                AtBench = true
+            };
+
+            Span<byte> buffer = stackalloc byte[128];
+            var writer = new PacketWriter(buffer);
+            original.Serialize(ref writer);
+
+            var reader = new PacketReader(writer.WrittenSpan);
+            var deserialized = BenchCheckpointSyncPacket.Deserialize(ref reader);
+
+            Assert.Equal(original.Header.PacketId, deserialized.Header.PacketId);
+            Assert.Equal(original.SceneName, deserialized.SceneName);
+            Assert.Equal(original.RespawnMarker, deserialized.RespawnMarker);
+            Assert.Equal(original.FacingDirection, deserialized.FacingDirection);
+            Assert.Equal(original.AtBench, deserialized.AtBench);
+        }
+
+        [Fact]
+        public void SceneTransitionPacket_SerializationRoundtrip_MatchesExactValues()
+        {
+            var original = new SceneTransitionPacket
+            {
+                Header = new PacketHeader(PacketType.SceneTransition, 0, 11, 5500),
+                TargetScene = "MossGrotto_03",
+                EntryGate = "Gate_Left",
+                SceneNameHash = 98765,
+                TransitionPhase = 1
+            };
+
+            Span<byte> buffer = stackalloc byte[128];
+            var writer = new PacketWriter(buffer);
+            original.Serialize(ref writer);
+
+            var reader = new PacketReader(writer.WrittenSpan);
+            var deserialized = SceneTransitionPacket.Deserialize(ref reader);
+
+            Assert.Equal(original.Header.PacketId, deserialized.Header.PacketId);
+            Assert.Equal(original.TargetScene, deserialized.TargetScene);
+            Assert.Equal(original.EntryGate, deserialized.EntryGate);
+            Assert.Equal(original.SceneNameHash, deserialized.SceneNameHash);
+            Assert.Equal(original.TransitionPhase, deserialized.TransitionPhase);
         }
 
         [Fact]
