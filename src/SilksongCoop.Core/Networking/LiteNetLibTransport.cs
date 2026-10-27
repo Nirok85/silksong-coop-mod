@@ -633,8 +633,12 @@ namespace SilksongCoop.Core.Networking
                     {
                         var next = node.Next;
                         var item = node.Value;
-                        // Exponential backoff: 100ms, 200ms, 400ms, 800ms, capped at 2000ms
-                        int backoffMs = Math.Min(100 * (1 << Math.Min(item.Retries, 4)), 2000);
+                        // Exponential backoff: base = max(100, RTT), doubled per retry, capped at 2000ms.
+                        // BUG-N16: the fixed 100 ms base starved the first retry on WAN links whose
+                        // RTT alone exceeds 100 ms, so a single lost packet took 100 ms + 200 ms + ...
+                        // before the first retransmission even had a chance to land.
+                        int baseBackoffMs = Math.Max(100, _rttMs);
+                        int backoffMs = Math.Min(baseBackoffMs * (1 << Math.Min(item.Retries, 4)), 2000);
                         if (now - item.LastSentTimeMs > backoffMs)
                         {
                             if (item.Retries >= 10)
