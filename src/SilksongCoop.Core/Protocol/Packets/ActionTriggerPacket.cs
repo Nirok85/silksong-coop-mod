@@ -2,6 +2,9 @@ using System;
 
 namespace SilksongCoop.Core.Protocol.Packets
 {
+    /// <summary>
+    /// Identifies the type of player action in an action trigger packet.
+    /// </summary>
     public enum ActionType : byte
     {
         SlashNormal = 0,
@@ -17,6 +20,9 @@ namespace SilksongCoop.Core.Protocol.Packets
         WallJump = 10
     }
 
+    /// <summary>
+    /// Network packet representing a player action trigger.
+    /// </summary>
     public struct ActionTriggerPacket
     {
         public PacketHeader Header;
@@ -28,6 +34,10 @@ namespace SilksongCoop.Core.Protocol.Packets
         public float DirectionY;
         public int Parameter;
 
+        /// <summary>
+        /// Serializes this packet to the specified writer.
+        /// </summary>
+        /// <param name="writer">The packet writer to serialize to.</param>
         public void Serialize(ref PacketWriter writer)
         {
             writer.WriteHeader(Header);
@@ -40,6 +50,11 @@ namespace SilksongCoop.Core.Protocol.Packets
             writer.WriteInt32(Parameter);
         }
 
+        /// <summary>
+        /// Deserializes an action trigger packet from the specified reader.
+        /// </summary>
+        /// <param name="reader">The packet reader to deserialize from.</param>
+        /// <returns>The deserialized action trigger packet.</returns>
         public static ActionTriggerPacket Deserialize(ref PacketReader reader)
         {
             return new ActionTriggerPacket

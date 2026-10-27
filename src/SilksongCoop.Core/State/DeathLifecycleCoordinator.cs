@@ -5,8 +5,13 @@ using SilksongCoop.Core.Protocol.Packets;
 
 namespace SilksongCoop.Core.State
 {
+    /// <summary>
+    /// Coordinates the death lifecycle, spectator mode, and revive mechanics for co-op players.
+    /// </summary>
     public class DeathLifecycleCoordinator : IDeathLifecycleCoordinator
     {
+        private static void Log(string msg) => System.Diagnostics.Debug.WriteLine(msg);
+
         private readonly object _lock = new object();
 
         private DeathState _currentState = DeathState.Alive;
@@ -33,6 +38,9 @@ namespace SilksongCoop.Core.State
         public float ReviveCooldownDuration { get; set; } = 20.0f; // Configurable between 15-30s
 
         private (float X, float Y) _lastPartnerPosition = (0f, 0f);
+        /// <summary>
+        /// Gets or sets the last known position of the remote partner for revive targeting.
+        /// </summary>
         public (float X, float Y) LastPartnerPosition
         {
             get { lock (_lock) { return _lastPartnerPosition; } }
@@ -54,6 +62,12 @@ namespace SilksongCoop.Core.State
         public event Action<float, float>? OnReviveAtPartnerRequested;
         public event Action<DeathLifecyclePacket>? OnOutgoingDeathPacket;
 
+        /// <summary>
+        /// Handles local player death, determining whether to enter spectator mode or trigger team wipe.
+        /// </summary>
+        /// <param name="deathX">X coordinate where the player died.</param>
+        /// <param name="deathY">Y coordinate where the player died.</param>
+        /// <returns>True if death should be suppressed (spectator mode); false to allow bench reload.</returns>
         public bool OnLocalPlayerDied(float deathX, float deathY)
         {
             try
@@ -109,11 +123,16 @@ namespace SilksongCoop.Core.State
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[DeathLifecycleCoordinator] OnLocalPlayerDied error: {ex.Message}");
+                Log($"[DeathLifecycleCoordinator] OnLocalPlayerDied error: {ex.Message}");
                 return false; // Allow bench reload on error
             }
         }
 
+        /// <summary>
+        /// Handles remote partner death, potentially triggering team wipe if both players are dead.
+        /// </summary>
+        /// <param name="partnerDeathX">X coordinate where the partner died.</param>
+        /// <param name="partnerDeathY">Y coordinate where the partner died.</param>
         public void OnRemotePartnerDied(float partnerDeathX, float partnerDeathY)
         {
             try
@@ -140,10 +159,15 @@ namespace SilksongCoop.Core.State
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[DeathLifecycleCoordinator] OnRemotePartnerDied error: {ex.Message}");
+                Log($"[DeathLifecycleCoordinator] OnRemotePartnerDied error: {ex.Message}");
             }
         }
 
+        /// <summary>
+        /// Handles remote partner revival, marking them as alive and updating their position.
+        /// </summary>
+        /// <param name="partnerX">X coordinate of the revived partner.</param>
+        /// <param name="partnerY">Y coordinate of the revived partner.</param>
         public void OnRemotePartnerRevived(float partnerX, float partnerY)
         {
             if (CurrentState == DeathState.TeamWipe)
@@ -155,6 +179,10 @@ namespace SilksongCoop.Core.State
             LastPartnerPosition = (partnerX, partnerY);
         }
 
+        /// <summary>
+        /// Updates the spectator countdown and handles revive logic when timer expires.
+        /// </summary>
+        /// <param name="deltaTime">Time elapsed since last update in seconds.</param>
         public void UpdateTick(float deltaTime)
         {
             try
@@ -201,10 +229,13 @@ namespace SilksongCoop.Core.State
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[DeathLifecycleCoordinator] UpdateTick error: {ex.Message}");
+                Log($"[DeathLifecycleCoordinator] UpdateTick error: {ex.Message}");
             }
         }
 
+        /// <summary>
+        /// Completes the revive process and returns the player to alive state.
+        /// </summary>
         public void CompleteRevival()
         {
             CurrentState = DeathState.Alive;
@@ -212,6 +243,11 @@ namespace SilksongCoop.Core.State
             _postBenchRespawnTimer = 0f;
         }
 
+        /// <summary>
+        /// Handles incoming death lifecycle packets from the remote peer.
+        /// </summary>
+        /// <param name="sender">The peer that sent the packet.</param>
+        /// <param name="packet">The death lifecycle packet to process.</param>
         public void HandleDeathPacket(NetworkPeerId sender, DeathLifecyclePacket packet)
         {
             try
@@ -265,10 +301,13 @@ namespace SilksongCoop.Core.State
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[DeathLifecycleCoordinator] HandleDeathPacket error: {ex.Message}");
+                Log($"[DeathLifecycleCoordinator] HandleDeathPacket error: {ex.Message}");
             }
         }
 
+        /// <summary>
+        /// Forces a bench respawn by triggering team wipe state.
+        /// </summary>
         public void ForceBenchRespawn()
         {
             _isPostBenchRespawn = false;
@@ -290,6 +329,9 @@ namespace SilksongCoop.Core.State
             OnOutgoingDeathPacket?.Invoke(packet);
         }
 
+        /// <summary>
+        /// Resets the coordinator state after a bench respawn, advancing the epoch.
+        /// </summary>
         public void ResetAfterBenchRespawn()
         {
             CurrentState = DeathState.Alive;

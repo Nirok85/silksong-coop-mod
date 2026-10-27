@@ -10,6 +10,9 @@ namespace SilksongCoop.Core.Networking
     /// </summary>
     public class MockNetworkTransport : INetworkTransport
     {
+        /// <summary>
+        /// Represents a packet queued for delivery in the mock transport.
+        /// </summary>
         public struct QueuedPacket
         {
             public long DeliveryTimeTicks;
@@ -44,12 +47,27 @@ namespace SilksongCoop.Core.Networking
         public long CurrentVirtualTimeMs { get; set; }
         public bool UseVirtualTime { get; set; }
 
+        /// <summary>
+        /// Initializes a new mock transport instance for testing.
+        /// </summary>
+        /// <param name="peerId">Numeric peer identifier.</param>
+        /// <param name="displayName">Optional display name for the peer.</param>
+        /// <param name="seed">Random seed for deterministic packet loss simulation.</param>
         public MockNetworkTransport(ulong peerId, string displayName = "Peer", int seed = 1337)
         {
             LocalPeerId = new NetworkPeerId(peerId, displayName);
             _random = new Random(seed);
         }
 
+        /// <summary>
+        /// Creates a paired host and client mock transport with configurable network conditions.
+        /// </summary>
+        /// <param name="latencyMs">Simulated one-way latency in milliseconds.</param>
+        /// <param name="jitterMs">Simulated jitter range in milliseconds.</param>
+        /// <param name="lossRate">Packet loss rate for unreliable/sequenced packets (0-1).</param>
+        /// <param name="useVirtualTime">Whether to use virtual time for deterministic tests.</param>
+        /// <param name="seed">Random seed for reproducibility.</param>
+        /// <returns>A tuple of connected host and client transports.</returns>
         public static (MockNetworkTransport Host, MockNetworkTransport Client) CreatePair(
             int latencyMs = 0,
             int jitterMs = 0,
@@ -81,16 +99,28 @@ namespace SilksongCoop.Core.Networking
             return (host, client);
         }
 
+        /// <summary>
+        /// Sets the paired mock transport for simulating network communication.
+        /// </summary>
+        /// <param name="peer">The peer transport to communicate with.</param>
         public void SetPeer(MockNetworkTransport peer)
         {
             _peer = peer;
         }
 
+        /// <summary>
+        /// Starts the transport in host mode.
+        /// </summary>
+        /// <param name="port">Unused in mock transport.</param>
         public void StartHost(int port = 7777)
         {
             IsHost = true;
         }
 
+        /// <summary>
+        /// Connects to the paired mock transport.
+        /// </summary>
+        /// <param name="addressOrCode">Unused in mock transport; connection is via paired peer.</param>
         public void Connect(string addressOrCode)
         {
             if (_peer == null)
@@ -103,6 +133,9 @@ namespace SilksongCoop.Core.Networking
             _peer.OnPeerConnected?.Invoke(LocalPeerId);
         }
 
+        /// <summary>
+        /// Disconnects from the paired mock transport.
+        /// </summary>
         public void Disconnect()
         {
             if (!IsConnected) return;
@@ -117,6 +150,15 @@ namespace SilksongCoop.Core.Networking
             OnPeerDisconnected?.Invoke(peer != null ? peer.LocalPeerId : new NetworkPeerId(0), DisconnectReason.GracefulDisconnect);
         }
 
+        /// <summary>
+        /// Sends data to a target peer through the paired transport.
+        /// </summary>
+        /// <param name="target">Target peer identifier.</param>
+        /// <param name="data">Data buffer to send.</param>
+        /// <param name="offset">Offset within the buffer.</param>
+        /// <param name="length">Number of bytes to send.</param>
+        /// <param name="method">Delivery method (reliable, unreliable, or sequenced).</param>
+        /// <param name="channel">Channel index for ordering.</param>
         public void Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
             if (!IsConnected || _peer == null) return;
@@ -161,6 +203,10 @@ namespace SilksongCoop.Core.Networking
             _peer.EnqueueIncoming(packet);
         }
 
+        /// <summary>
+        /// Enqueues an incoming packet for delivery processing.
+        /// </summary>
+        /// <param name="packet">The packet to enqueue.</param>
         public void EnqueueIncoming(QueuedPacket packet)
         {
             lock (_lock)
@@ -169,6 +215,9 @@ namespace SilksongCoop.Core.Networking
             }
         }
 
+        /// <summary>
+        /// Processes queued incoming packets that are ready for delivery.
+        /// </summary>
         public void PollEvents()
         {
             if (!IsConnected) return;
@@ -253,6 +302,10 @@ namespace SilksongCoop.Core.Networking
             OnDataReceived?.Invoke(packet.Sender, packet.Data, 0, packet.Data.Length);
         }
 
+        /// <summary>
+        /// Advances virtual time for deterministic testing.
+        /// </summary>
+        /// <param name="ms">Milliseconds to advance.</param>
         public void AdvanceVirtualTime(long ms)
         {
             CurrentVirtualTimeMs += ms;
@@ -266,6 +319,9 @@ namespace SilksongCoop.Core.Networking
             return DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
         }
 
+        /// <summary>
+        /// Disposes the transport, releasing resources and disconnecting.
+        /// </summary>
         public void Dispose()
         {
             Disconnect();

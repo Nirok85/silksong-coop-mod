@@ -4,6 +4,9 @@ using SilksongCoop.Core.Protocol.Packets;
 
 namespace SilksongCoop.Core.State
 {
+    /// <summary>
+    /// Defines the current death state of the local player in the co-op lifecycle.
+    /// </summary>
     public enum DeathState
     {
         Alive,
@@ -12,6 +15,9 @@ namespace SilksongCoop.Core.State
         TeamWipe
     }
 
+    /// <summary>
+    /// Coordinates the death, spectator, and revive lifecycle for co-op players.
+    /// </summary>
     public interface IDeathLifecycleCoordinator
     {
         DeathState CurrentState { get; }

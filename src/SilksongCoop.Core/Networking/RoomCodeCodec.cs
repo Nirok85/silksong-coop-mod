@@ -14,6 +14,12 @@ namespace SilksongCoop.Core.Networking
         private const string CrockfordAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
         private const string Prefix = "SK-";
 
+        /// <summary>
+        /// Encodes an IP address and port into a room code string.
+        /// </summary>
+        /// <param name="ip">The IPv4 address to encode.</param>
+        /// <param name="port">The port number (0-65535).</param>
+        /// <returns>A room code string in the format "SK-XXXX-XXXX-XXXX".</returns>
         public static string Encode(IPAddress ip, int port)
         {
             if (ip == null) throw new ArgumentNullException(nameof(ip));
@@ -43,6 +49,12 @@ namespace SilksongCoop.Core.Networking
             return sb.ToString();
         }
 
+        /// <summary>
+        /// Encodes an IP address string and port into a room code string.
+        /// </summary>
+        /// <param name="ipAddress">The IPv4 address as a string.</param>
+        /// <param name="port">The port number (0-65535).</param>
+        /// <returns>A room code string in the format "SK-XXXX-XXXX-XXXX".</returns>
         public static string Encode(string ipAddress, int port)
         {
             if (!IPAddress.TryParse(ipAddress, out var ip))
@@ -50,6 +62,13 @@ namespace SilksongCoop.Core.Networking
             return Encode(ip, port);
         }
 
+        /// <summary>
+        /// Attempts to decode a room code string into an IP address and port.
+        /// </summary>
+        /// <param name="code">The room code to decode.</param>
+        /// <param name="ip">When this method returns, contains the decoded IP address if successful.</param>
+        /// <param name="port">When this method returns, contains the decoded port if successful.</param>
+        /// <returns>True if the code was successfully decoded; otherwise, false.</returns>
         public static bool TryDecode(string? code, out IPAddress ip, out int port)
         {
             ip = IPAddress.None;
@@ -97,6 +116,13 @@ namespace SilksongCoop.Core.Networking
             return false;
         }
 
+        /// <summary>
+        /// Attempts to decode a room code string into IP address and port strings.
+        /// </summary>
+        /// <param name="code">The room code to decode.</param>
+        /// <param name="ipAddress">When this method returns, contains the decoded IP address string if successful.</param>
+        /// <param name="port">When this method returns, contains the decoded port if successful.</param>
+        /// <returns>True if the code was successfully decoded; otherwise, false.</returns>
         public static bool TryDecodeToString(string? code, out string ipAddress, out int port)
         {
             if (TryDecode(code, out IPAddress ip, out port))
@@ -141,6 +167,11 @@ namespace SilksongCoop.Core.Networking
             return TryDecode(code, out ip, out port);
         }
 
+        /// <summary>
+        /// Computes an 8-bit CRC checksum for the specified data.
+        /// </summary>
+        /// <param name="data">The data to compute the checksum for.</param>
+        /// <returns>The 8-bit CRC checksum value.</returns>
         public static byte ComputeCrc8(ReadOnlySpan<byte> data)
         {
             byte crc = 0x00;

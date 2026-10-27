@@ -1,6 +1,7 @@
 using System;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.State;
+using SilksongCoop.Mod;
 using SilksongCoop.Mod.Networking;
 using SilksongCoop.Mod.Settings;
 using UnityEngine;
@@ -61,16 +62,29 @@ namespace SilksongCoop.Mod.UI
         public NetworkDiagnostics Diagnostics => _diagnostics;
         public ConnectionHistory History => _history;
 
+        /// <summary>
+        /// Initializes a new instance of the CoopMenuUI class.
+        /// </summary>
         public CoopMenuUI()
         {
             _windowId = 9842;
         }
+
+        #region Unity Lifecycle
 
         private void Awake()
         {
             _windowId = 9842 + UnityEngine.Random.Range(0, 1000);
         }
 
+        /// <summary>
+        /// Initializes the menu UI with session state and transport references.
+        /// </summary>
+        /// <param name="sessionState">The co-op session state manager.</param>
+        /// <param name="steamTransport">Steam P2P transport (can be null).</param>
+        /// <param name="udpTransport">UDP transport (can be null).</param>
+        /// <param name="keybinds">Keybind manager (optional).</param>
+        /// <param name="qualityPresets">Quality preset manager (optional).</param>
         public void Initialize(CoopSessionState sessionState, SteamP2PTransport? steamTransport, LiteNetLibTransport? udpTransport, KeybindManager? keybinds = null, QualityPresetManager? qualityPresets = null)
         {
             _sessionState = sessionState;
@@ -81,6 +95,10 @@ namespace SilksongCoop.Mod.UI
             _diagnosticsOverlay = new DiagnosticsOverlay(_diagnostics);
         }
 
+        /// <summary>
+        /// Sets a status message to be displayed as an info toast.
+        /// </summary>
+        /// <param name="message">The message to display.</param>
         public void SetStatusMessage(string message)
         {
             _toasts.ShowInfo(message);
@@ -213,6 +231,10 @@ namespace SilksongCoop.Mod.UI
 
             _windowRect = GUI.Window(_windowId, _windowRect, DrawWindowContents, "");
         }
+
+        #endregion // Unity Lifecycle
+
+        #region HUD and Overlay Drawing
 
         // ─── Watermark ────────────────────────────────────────────────────────
         private void DrawWatermark()
@@ -413,6 +435,10 @@ namespace SilksongCoop.Mod.UI
             GUI.color = Color.white;
         }
 
+        #endregion // HUD and Overlay Drawing
+
+        #region Main Window and Tab Drawing
+
         // ─── Main window ──────────────────────────────────────────────────────
         private void DrawWindowContents(int windowId)
         {
@@ -493,7 +519,7 @@ namespace SilksongCoop.Mod.UI
                     GUILayout.Label("<color=#999999><i>Note: Direct UDP works via LAN or VPN (Radmin/Hamachi). For Internet, use Steam Host.</i></color>");
                 }
 
-                if (_sessionState!.SteamLobbyId.HasValue)
+                if (_sessionState != null && _sessionState.SteamLobbyId.HasValue)
                 {
                     GUILayout.Space(4);
                     GUILayout.BeginHorizontal();
@@ -503,7 +529,7 @@ namespace SilksongCoop.Mod.UI
                     GUILayout.EndHorizontal();
                 }
 
-                if (_steamTransport != null && _sessionState.SteamLobbyId.HasValue)
+                if (_steamTransport != null && _sessionState != null && _sessionState.SteamLobbyId.HasValue)
                 {
                     GUILayout.Space(8);
                     if (GUILayout.Button("Invite Steam Friends...", GUILayout.Height(28)))
@@ -687,7 +713,8 @@ namespace SilksongCoop.Mod.UI
             GUILayout.Space(4);
 
             // Role
-            string role = _sessionState!.Role == SessionRole.Host ? "Player 1 (Host)" : "Player 2 (Client)";
+            if (_sessionState == null) return;
+            string role = _sessionState.Role == SessionRole.Host ? "Player 1 (Host)" : "Player 2 (Client)";
             GUILayout.Label($"<b>Role:</b>  {role}");
 
             // Peer
@@ -855,6 +882,10 @@ namespace SilksongCoop.Mod.UI
             GUILayout.Label($"<color=#998877>Silksong Co-op Mod v{SilksongCoopPlugin.PluginVersion}</color>", _styleSubtitle ?? Skin.label);
         }
 
+        #endregion // Main Window and Tab Drawing
+
+        #region UI Helper Methods
+
         // ─── Disconnect ───────────────────────────────────────────────────────
         private void DrawDisconnectButton()
         {
@@ -983,6 +1014,10 @@ namespace SilksongCoop.Mod.UI
             return $"{sec}s";
         }
 
+        #endregion // UI Helper Methods
+
+        #region Session Connection Actions
+
         // ─── Session actions ──────────────────────────────────────────────────
 
         private void HostUdpSession()
@@ -1054,7 +1089,7 @@ namespace SilksongCoop.Mod.UI
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Failed to detect local IP: {ex.Message}");
+                SilksongCoopPlugin.LogWarn($"Failed to detect local IP: {ex.Message}");
             }
             return "127.0.0.1";
         }
@@ -1206,6 +1241,8 @@ namespace SilksongCoop.Mod.UI
                 SilksongCoopPlugin.LogWarn($"[Coop] DisconnectSession error: {ex.Message}");
             }
         }
+
+        #endregion // Session Connection Actions
 
         // Backing field for disconnect convenience
         private INetworkTransport? _currentTransport

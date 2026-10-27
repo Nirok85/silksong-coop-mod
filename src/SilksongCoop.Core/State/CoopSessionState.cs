@@ -3,6 +3,9 @@ using SilksongCoop.Core.Networking;
 
 namespace SilksongCoop.Core.State
 {
+    /// <summary>
+    /// Defines the role of a peer in the co-op session.
+    /// </summary>
     public enum SessionRole
     {
         None,
@@ -10,6 +13,9 @@ namespace SilksongCoop.Core.State
         Client
     }
 
+    /// <summary>
+    /// Defines the current status of the co-op session connection.
+    /// </summary>
     public enum SessionStatus
     {
         Disconnected,
@@ -130,6 +136,11 @@ namespace SilksongCoop.Core.State
             }
         }
 
+        /// <summary>
+        /// Transitions the session to hosting state with the specified local peer and room code.
+        /// </summary>
+        /// <param name="localId">The local peer identifier.</param>
+        /// <param name="roomCode">The room code for the session.</param>
         public void SetHosting(NetworkPeerId localId, string roomCode)
         {
             SessionStatus old;
@@ -144,6 +155,11 @@ namespace SilksongCoop.Core.State
             OnStatusChanged?.Invoke(old, Status);
         }
 
+        /// <summary>
+        /// Transitions the session to connecting state with the specified local peer and target code.
+        /// </summary>
+        /// <param name="localId">The local peer identifier.</param>
+        /// <param name="targetCode">The target room code to connect to.</param>
         public void SetConnecting(NetworkPeerId localId, string targetCode)
         {
             SessionStatus old;
@@ -158,6 +174,10 @@ namespace SilksongCoop.Core.State
             OnStatusChanged?.Invoke(old, Status);
         }
 
+        /// <summary>
+        /// Transitions the session to connected state and registers the remote peer.
+        /// </summary>
+        /// <param name="remoteId">The remote peer identifier.</param>
         public void SetConnected(NetworkPeerId remoteId)
         {
             SessionStatus old;
@@ -171,6 +191,9 @@ namespace SilksongCoop.Core.State
             OnPeerJoined?.Invoke(remoteId);
         }
 
+        /// <summary>
+        /// Transitions the session to spectating state (typically after death).
+        /// </summary>
         public void SetSpectating()
         {
             SessionStatus old;
@@ -185,6 +208,9 @@ namespace SilksongCoop.Core.State
             OnStatusChanged?.Invoke(old, newStatus);
         }
 
+        /// <summary>
+        /// Transitions the session to team wipe state.
+        /// </summary>
         public void SetTeamWipe()
         {
             SessionStatus old;
@@ -199,6 +225,9 @@ namespace SilksongCoop.Core.State
             OnStatusChanged?.Invoke(old, newStatus);
         }
 
+        /// <summary>
+        /// Returns the session to active connected state from spectating or team wipe.
+        /// </summary>
         public void ReturnToActive()
         {
             SessionStatus old;
@@ -213,6 +242,10 @@ namespace SilksongCoop.Core.State
             OnStatusChanged?.Invoke(old, newStatus);
         }
 
+        /// <summary>
+        /// Transitions the session to disconnected state and clears peer information.
+        /// </summary>
+        /// <param name="reason">The reason for disconnection.</param>
         public void SetDisconnected(DisconnectReason reason = DisconnectReason.GracefulDisconnect)
         {
             SessionStatus old;
@@ -236,6 +269,10 @@ namespace SilksongCoop.Core.State
             }
         }
 
+        /// <summary>
+        /// Records a sent packet for statistics tracking.
+        /// </summary>
+        /// <param name="byteCount">The number of bytes sent.</param>
         public void RecordSent(int byteCount)
         {
             lock (_lock)
@@ -245,6 +282,10 @@ namespace SilksongCoop.Core.State
             }
         }
 
+        /// <summary>
+        /// Records a received packet for statistics tracking.
+        /// </summary>
+        /// <param name="byteCount">The number of bytes received.</param>
         public void RecordReceived(int byteCount)
         {
             lock (_lock)
@@ -254,6 +295,9 @@ namespace SilksongCoop.Core.State
             }
         }
 
+        /// <summary>
+        /// Advances the current tick counter by one.
+        /// </summary>
         public void AdvanceTick()
         {
             lock (_lock)

@@ -7,6 +7,9 @@ namespace SilksongCoop.Mod.Settings
     /// </summary>
     public class QualityPresetManager
     {
+        /// <summary>
+        /// Quality preset levels for network and visual settings.
+        /// </summary>
         public enum QualityLevel
         {
             Low,
@@ -20,6 +23,10 @@ namespace SilksongCoop.Mod.Settings
 
         public QualityLevel CurrentLevel => _currentLevel;
 
+        /// <summary>
+        /// Initializes a new quality preset manager.
+        /// </summary>
+        /// <param name="plugin">The plugin instance for config persistence.</param>
         public QualityPresetManager(SilksongCoopPlugin plugin)
         {
             _plugin = plugin;
@@ -39,6 +46,10 @@ namespace SilksongCoop.Mod.Settings
             _currentLevel = configEntry.Value;
         }
 
+        /// <summary>
+        /// Applies the specified quality preset and persists it.
+        /// </summary>
+        /// <param name="level">The quality level to apply.</param>
         public void ApplyPreset(QualityLevel level)
         {
             _currentLevel = level;
@@ -106,6 +117,9 @@ namespace SilksongCoop.Mod.Settings
                 _plugin.EnablePlayer2DashTrailConfig.Value = true;
         }
 
+        /// <summary>
+        /// Marks the current preset as custom (user-modified settings).
+        /// </summary>
         public void MarkAsCustom()
         {
             if (_currentLevel != QualityLevel.Custom)

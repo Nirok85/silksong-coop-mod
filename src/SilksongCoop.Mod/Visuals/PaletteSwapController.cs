@@ -56,6 +56,11 @@ namespace SilksongCoop.Mod.Visuals
             ApplyPaletteSwap();
         }
 
+        /// <summary>
+        /// Sets whether this is player 2 and applies the appropriate palette swap.
+        /// </summary>
+        /// <param name="isPlayer2">True if this is player 2, false for player 1.</param>
+        /// <param name="customHueShift">Optional custom hue shift value.</param>
         public void SetPlayer2(bool isPlayer2, float customHueShift = PaletteSwapMath.Player2HueShift)
         {
             try
@@ -71,6 +76,9 @@ namespace SilksongCoop.Mod.Visuals
             }
         }
 
+        /// <summary>
+        /// Applies the palette swap to all sprites and renderers.
+        /// </summary>
         public void ApplyPaletteSwap()
         {
             try
@@ -205,6 +213,10 @@ namespace SilksongCoop.Mod.Visuals
             }
         }
 
+        /// <summary>
+        /// Gets the shader property ID for the hue shift parameter.
+        /// </summary>
+        /// <returns>The property ID.</returns>
         internal static int GetHueShiftPropertyId()
         {
             try

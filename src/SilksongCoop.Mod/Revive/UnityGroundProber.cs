@@ -38,6 +38,14 @@ namespace SilksongCoop.Mod.Revive
         private readonly Collider2D[] _overlapBuffer = new Collider2D[16];
         private readonly ContactFilter2D _contactFilter = new ContactFilter2D { useTriggers = true };
 
+        /// <summary>
+        /// Attempts to find safe ground near the partner's position using raycasting.
+        /// </summary>
+        /// <param name="partnerX">Partner's X position.</param>
+        /// <param name="partnerY">Partner's Y position.</param>
+        /// <param name="safeX">Output X coordinate of safe ground.</param>
+        /// <param name="safeY">Output Y coordinate of safe ground.</param>
+        /// <returns>True if safe ground was found, false otherwise.</returns>
         public bool TryFindSafeGround(float partnerX, float partnerY, out float safeX, out float safeY)
         {
             try
@@ -122,6 +130,11 @@ namespace SilksongCoop.Mod.Revive
             }
         }
 
+        /// <summary>
+        /// Calculates the health value to restore on revive.
+        /// </summary>
+        /// <param name="maxHealth">Maximum health value.</param>
+        /// <returns>Health value to restore (typically 50% of max).</returns>
         public int CalculateReviveHealth(int maxHealth)
         {
             return SafeGroundSolver.CalculateReviveHealth(maxHealth);

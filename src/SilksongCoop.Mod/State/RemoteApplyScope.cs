@@ -16,12 +16,19 @@ namespace SilksongCoop.Mod.State
 
         private RemoteApplyScope() { }
 
+        /// <summary>
+        /// Begins a new remote apply scope to prevent sync feedback loops.
+        /// </summary>
+        /// <returns>A disposable scope object that ends the scope when disposed.</returns>
         public static RemoteApplyScope Begin()
         {
             _depth.Value++;
             return new RemoteApplyScope();
         }
 
+        /// <summary>
+        /// Ends the remote apply scope.
+        /// </summary>
         public void Dispose()
         {
             if (_depth.Value > 0)

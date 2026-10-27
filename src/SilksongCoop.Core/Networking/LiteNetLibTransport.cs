@@ -79,6 +79,11 @@ namespace SilksongCoop.Core.Networking
         public int RoundTripTimeMs => _rttMs;
         public int BoundPort => _boundPort;
 
+        /// <summary>
+        /// Initializes a new instance of the LiteNetLibTransport class.
+        /// </summary>
+        /// <param name="peerId">The unique identifier for this peer.</param>
+        /// <param name="displayName">Optional display name for this peer.</param>
         public LiteNetLibTransport(ulong peerId = 1, string displayName = "Player")
         {
             _localPeerId = new NetworkPeerId(peerId, displayName);
@@ -117,6 +122,10 @@ namespace SilksongCoop.Core.Networking
             _connectionAttemptStartMs = 0;
         }
 
+        /// <summary>
+        /// Starts hosting a game session on the specified port.
+        /// </summary>
+        /// <param name="port">The UDP port to bind to.</param>
         public void StartHost(int port = 7777)
         {
             lock (_lock)
@@ -150,6 +159,10 @@ namespace SilksongCoop.Core.Networking
             }
         }
 
+        /// <summary>
+        /// Connects to a remote host using the specified address or room code.
+        /// </summary>
+        /// <param name="addressOrCode">The IP address:port or room code to connect to.</param>
         public void Connect(string addressOrCode)
         {
             IPAddress targetIp;
@@ -237,8 +250,15 @@ namespace SilksongCoop.Core.Networking
             }
         }
 
+        /// <summary>
+        /// Disconnects gracefully from the current session.
+        /// </summary>
         public void Disconnect() => Disconnect(DisconnectReason.GracefulDisconnect);
 
+        /// <summary>
+        /// Disconnects from the current session with the specified reason.
+        /// </summary>
+        /// <param name="reason">The reason for disconnection.</param>
         public void Disconnect(DisconnectReason reason)
         {
             lock (_lock)
@@ -279,6 +299,15 @@ namespace SilksongCoop.Core.Networking
             }
         }
 
+        /// <summary>
+        /// Sends data to the specified target peer.
+        /// </summary>
+        /// <param name="target">The target peer to send to.</param>
+        /// <param name="data">The data buffer to send.</param>
+        /// <param name="offset">The offset within the buffer to start from.</param>
+        /// <param name="length">The number of bytes to send.</param>
+        /// <param name="method">The delivery method to use.</param>
+        /// <param name="channel">The channel to send on.</param>
         public void Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
             lock (_lock)
@@ -329,6 +358,9 @@ namespace SilksongCoop.Core.Networking
             }
         }
 
+        /// <summary>
+        /// Polls for incoming network events and processes them.
+        /// </summary>
         public void PollEvents()
         {
             lock (_lock)
@@ -848,6 +880,9 @@ namespace SilksongCoop.Core.Networking
             _boundPort = 0;
         }
 
+        /// <summary>
+        /// Disposes the transport and releases all resources.
+        /// </summary>
         public void Dispose()
         {
             Disconnect();

@@ -58,6 +58,11 @@ namespace SilksongCoop.Mod.Clones
             _dashTrail = GetComponent<DashTrailController>();
         }
 
+        /// <summary>
+        /// Initializes the remote player controller with peer and player index information.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
+        /// <param name="isPlayer2">True if this is player 2, false for player 1.</param>
         public void Initialize(NetworkPeerId peerId, bool isPlayer2)
         {
             _peerId = peerId;
@@ -72,6 +77,10 @@ namespace SilksongCoop.Mod.Clones
             SetVisibility(true);
         }
 
+        /// <summary>
+        /// Sets the visibility of all renderers in the remote player hierarchy.
+        /// </summary>
+        /// <param name="visible">True to show, false to hide.</param>
         public void SetVisibility(bool visible)
         {
             var renderers = GetComponentsInChildren<Renderer>(includeInactive: true);
@@ -81,6 +90,10 @@ namespace SilksongCoop.Mod.Clones
             }
         }
 
+        /// <summary>
+        /// Binds the animation library for clip hash lookup and playback.
+        /// </summary>
+        /// <param name="library">The tk2d sprite animation library.</param>
         public void SetAnimationLibrary(tk2dSpriteAnimation library)
         {
             if (library == null || library.clips == null) return;
@@ -109,6 +122,19 @@ namespace SilksongCoop.Mod.Clones
             }
         }
 
+        /// <summary>
+        /// Updates the remote player's transform, velocity, animation, and state.
+        /// </summary>
+        /// <param name="posX">X position.</param>
+        /// <param name="posY">Y position.</param>
+        /// <param name="velX">X velocity.</param>
+        /// <param name="velY">Y velocity.</param>
+        /// <param name="facingDirection">Facing direction (0 = left, 1 = right).</param>
+        /// <param name="stateFlags">State flags (grounded, dashing, etc.).</param>
+        /// <param name="animClipHash">Animation clip hash.</param>
+        /// <param name="normalizedTime">Normalized animation time.</param>
+        /// <param name="timestampMs">Packet timestamp in milliseconds.</param>
+        /// <param name="isSameScene">True if the remote player is in the same scene.</param>
         public void UpdateTransform(
             float posX, float posY,
             float velX, float velY,
@@ -201,6 +227,11 @@ namespace SilksongCoop.Mod.Clones
             }
         }
 
+        /// <summary>
+        /// Triggers a remote action (dash, attack, etc.) on the remote player.
+        /// </summary>
+        /// <param name="action">The action type to trigger.</param>
+        /// <param name="variant">Action variant or parameter.</param>
         public void TriggerAction(ActionType action, byte variant)
         {
             if (action == ActionType.AirDash || action == ActionType.HarpoonDash)
@@ -281,6 +312,11 @@ namespace SilksongCoop.Mod.Clones
             }
         }
 
+        /// <summary>
+        /// Synchronizes animation state (clip and normalized time).
+        /// </summary>
+        /// <param name="clipHash">Animation clip hash.</param>
+        /// <param name="normalizedTime">Normalized animation time.</param>
         public void SyncAnimation(int clipHash, ushort normalizedTime)
         {
             _currentClipHash = clipHash;
@@ -288,17 +324,29 @@ namespace SilksongCoop.Mod.Clones
             SyncClip(clipHash, normalizedTime);
         }
 
+        /// <summary>
+        /// Sets the facing direction of the remote player.
+        /// </summary>
+        /// <param name="facingRight">True if facing right, false if facing left.</param>
         public void SetFacingDirection(bool facingRight)
         {
             _facingRight = facingRight;
             transform.localScale = new Vector3(facingRight ? 1f : -1f, 1f, 1f);
         }
 
+        /// <summary>
+        /// Triggers the dash visual effect on the remote player.
+        /// </summary>
+        /// <param name="isAirDash">True if this is an air dash, false for ground dash.</param>
         public void TriggerDashEffect(bool isAirDash)
         {
             _dashTrail?.TriggerDash(isAirDash);
         }
 
+        /// <summary>
+        /// Retrieves the current state of the remote player clone.
+        /// </summary>
+        /// <returns>The remote clone state.</returns>
         public RemoteCloneState GetState()
         {
             return new RemoteCloneState

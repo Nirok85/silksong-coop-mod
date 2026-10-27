@@ -12,6 +12,10 @@ namespace SilksongCoop.Core.Protocol
         private readonly ReadOnlySpan<byte> _buffer;
         private int _position;
 
+        /// <summary>
+        /// Initializes a packet reader over the specified buffer.
+        /// </summary>
+        /// <param name="buffer">The buffer to read from.</param>
         public PacketReader(ReadOnlySpan<byte> buffer)
         {
             _buffer = buffer;
@@ -22,6 +26,10 @@ namespace SilksongCoop.Core.Protocol
         public int Length => _buffer.Length;
         public int Remaining => _buffer.Length - _position;
 
+        /// <summary>
+        /// Reads and advances past a packet header.
+        /// </summary>
+        /// <returns>The parsed packet header.</returns>
         public PacketHeader ReadHeader()
         {
             EnsureAvailable(PacketHeader.HeaderSize);
@@ -30,6 +38,11 @@ namespace SilksongCoop.Core.Protocol
             return header;
         }
 
+        /// <summary>
+        /// Attempts to read a packet header if enough bytes remain.
+        /// </summary>
+        /// <param name="header">Output header if successful.</param>
+        /// <returns>True if a valid header was read; otherwise, false.</returns>
         public bool TryReadHeader(out PacketHeader header)
         {
             header = default;
@@ -44,12 +57,20 @@ namespace SilksongCoop.Core.Protocol
             return false;
         }
 
+        /// <summary>
+        /// Reads a single byte from the buffer.
+        /// </summary>
+        /// <returns>The byte value.</returns>
         public byte ReadByte()
         {
             EnsureAvailable(1);
             return _buffer[_position++];
         }
 
+        /// <summary>
+        /// Reads a 16-bit signed integer from the buffer.
+        /// </summary>
+        /// <returns>The Int16 value.</returns>
         public short ReadInt16()
         {
             EnsureAvailable(2);
@@ -58,6 +79,10 @@ namespace SilksongCoop.Core.Protocol
             return val;
         }
 
+        /// <summary>
+        /// Reads a 16-bit unsigned integer from the buffer.
+        /// </summary>
+        /// <returns>The UInt16 value.</returns>
         public ushort ReadUInt16()
         {
             EnsureAvailable(2);
@@ -66,6 +91,10 @@ namespace SilksongCoop.Core.Protocol
             return val;
         }
 
+        /// <summary>
+        /// Reads a 32-bit signed integer from the buffer.
+        /// </summary>
+        /// <returns>The Int32 value.</returns>
         public int ReadInt32()
         {
             EnsureAvailable(4);
@@ -74,6 +103,10 @@ namespace SilksongCoop.Core.Protocol
             return val;
         }
 
+        /// <summary>
+        /// Reads a 32-bit unsigned integer from the buffer.
+        /// </summary>
+        /// <returns>The UInt32 value.</returns>
         public uint ReadUInt32()
         {
             EnsureAvailable(4);
@@ -82,6 +115,10 @@ namespace SilksongCoop.Core.Protocol
             return val;
         }
 
+        /// <summary>
+        /// Reads a 64-bit signed integer from the buffer.
+        /// </summary>
+        /// <returns>The Int64 value.</returns>
         public long ReadInt64()
         {
             EnsureAvailable(8);
@@ -90,6 +127,10 @@ namespace SilksongCoop.Core.Protocol
             return val;
         }
 
+        /// <summary>
+        /// Reads a 64-bit unsigned integer from the buffer.
+        /// </summary>
+        /// <returns>The UInt64 value.</returns>
         public ulong ReadUInt64()
         {
             EnsureAvailable(8);
@@ -98,6 +139,10 @@ namespace SilksongCoop.Core.Protocol
             return val;
         }
 
+        /// <summary>
+        /// Reads a 32-bit floating point value from the buffer.
+        /// </summary>
+        /// <returns>The float value.</returns>
         public float ReadFloat()
         {
             EnsureAvailable(4);
@@ -106,6 +151,10 @@ namespace SilksongCoop.Core.Protocol
             return BitConverter.Int32BitsToSingle(intVal);
         }
 
+        /// <summary>
+        /// Reads a 64-bit floating point value from the buffer.
+        /// </summary>
+        /// <returns>The double value.</returns>
         public double ReadDouble()
         {
             EnsureAvailable(8);
@@ -114,11 +163,20 @@ namespace SilksongCoop.Core.Protocol
             return BitConverter.Int64BitsToDouble(longVal);
         }
 
+        /// <summary>
+        /// Reads a boolean value from the buffer.
+        /// </summary>
+        /// <returns>True if the byte is non-zero; otherwise, false.</returns>
         public bool ReadBool()
         {
             return ReadByte() != 0;
         }
 
+        /// <summary>
+        /// Reads a specified number of bytes from the buffer.
+        /// </summary>
+        /// <param name="count">Number of bytes to read.</param>
+        /// <returns>A span containing the bytes read.</returns>
         public ReadOnlySpan<byte> ReadBytes(int count)
         {
             EnsureAvailable(count);
@@ -127,6 +185,10 @@ namespace SilksongCoop.Core.Protocol
             return slice;
         }
 
+        /// <summary>
+        /// Reads a UTF-8 string from the buffer.
+        /// </summary>
+        /// <returns>The string value, or null if the length prefix is negative.</returns>
         public string? ReadString()
         {
             short byteCount = ReadInt16();
@@ -139,6 +201,10 @@ namespace SilksongCoop.Core.Protocol
             return str;
         }
 
+        /// <summary>
+        /// Reads a 128-bit GUID from the buffer.
+        /// </summary>
+        /// <returns>The GUID value.</returns>
         public Guid ReadGuid()
         {
             EnsureAvailable(16);

@@ -2,6 +2,9 @@ using System;
 
 namespace SilksongCoop.Core.Networking
 {
+    /// <summary>
+    /// Abstraction for network transport layer supporting host/client communication.
+    /// </summary>
     public interface INetworkTransport : IDisposable
     {
         event Action<NetworkPeerId> OnPeerConnected;

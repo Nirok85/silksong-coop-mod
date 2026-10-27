@@ -35,12 +35,20 @@ namespace SilksongCoop.Mod.Visuals
             SetupRimLight();
         }
 
+        /// <summary>
+        /// Initializes the dash trail controller for the specified player.
+        /// </summary>
+        /// <param name="isPlayer2">True if this is player 2, false for player 1.</param>
         public void Initialize(bool isPlayer2)
         {
             _isPlayer2 = isPlayer2;
             UpdateRimLightColor();
         }
 
+        /// <summary>
+        /// Triggers the dash visual effect.
+        /// </summary>
+        /// <param name="isAirDash">True if this is an air dash, false for ground dash.</param>
         public void TriggerDash(bool isAirDash)
         {
             if (!_lifecycle.CanTriggerDash) return;
@@ -56,11 +64,20 @@ namespace SilksongCoop.Mod.Visuals
             }
         }
 
+        /// <summary>
+        /// Interrupts an active dash effect.
+        /// </summary>
         public void InterruptDash()
         {
             _lifecycle.InterruptDash();
         }
 
+        /// <summary>
+        /// Updates the dash trail lifecycle and emits ghost after-images.
+        /// </summary>
+        /// <param name="deltaTime">Time elapsed since last update.</param>
+        /// <param name="isGrounded">True if the player is grounded.</param>
+        /// <param name="isWallSliding">True if the player is wall sliding.</param>
         public void UpdateLifecycle(float deltaTime, bool isGrounded, bool isWallSliding)
         {
             _lastUpdateFrame = Time.frameCount;
@@ -233,6 +250,12 @@ namespace SilksongCoop.Mod.Visuals
             private float _elapsed;
             private bool _isActive;
 
+            /// <summary>
+            /// Initializes the ghost instance with sprite and fade settings.
+            /// </summary>
+            /// <param name="sprite">The sprite to use for the ghost.</param>
+            /// <param name="initialColor">Initial color of the ghost.</param>
+            /// <param name="duration">Fade duration in seconds.</param>
             public void Initialize(tk2dSprite? sprite, Color initialColor, float duration)
             {
                 _sprite = sprite;
@@ -242,6 +265,12 @@ namespace SilksongCoop.Mod.Visuals
                 _isActive = true;
             }
 
+            /// <summary>
+            /// Resets the ghost instance with new sprite and fade settings.
+            /// </summary>
+            /// <param name="sprite">The sprite to use for the ghost.</param>
+            /// <param name="initialColor">Initial color of the ghost.</param>
+            /// <param name="duration">Fade duration in seconds.</param>
             public void Reset(tk2dSprite? sprite, Color initialColor, float duration)
             {
                 _sprite = sprite;

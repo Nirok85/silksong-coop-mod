@@ -5,11 +5,18 @@ using SilksongCoop.Mod.State;
 
 namespace SilksongCoop.Mod.Hooks
 {
+    /// <summary>
+    /// Harmony hooks for synchronizing hero vitals (health, silk, needle upgrades) and actions.
+    /// </summary>
     [HarmonyPatch]
     public static class HeroVitalsHooks
     {
         private static int _lastNailUpgradeLevel = -1;
 
+        /// <summary>
+        /// Hook that fires after max health is increased.
+        /// </summary>
+        /// <param name="amount">The amount of health added to max.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(HeroController), nameof(HeroController.AddToMaxHealth))]
         public static void PostfixAddToMaxHealth(int amount)
@@ -29,6 +36,10 @@ namespace SilksongCoop.Mod.Hooks
             }
         }
 
+        /// <summary>
+        /// Hook that fires after max silk is increased.
+        /// </summary>
+        /// <param name="amount">The amount of silk added to max.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(HeroController), nameof(HeroController.AddToMaxSilk))]
         public static void PostfixAddToMaxSilk(int amount)
@@ -48,6 +59,10 @@ namespace SilksongCoop.Mod.Hooks
             }
         }
 
+        /// <summary>
+        /// Hook that fires after the hero takes damage.
+        /// </summary>
+        /// <param name="damageAmount">The amount of damage taken.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(HeroController), nameof(HeroController.TakeDamage))]
         public static void PostfixTakeDamage(int damageAmount)
@@ -65,6 +80,11 @@ namespace SilksongCoop.Mod.Hooks
             }
         }
 
+        /// <summary>
+        /// Hook that fires after silk is consumed.
+        /// </summary>
+        /// <param name="amount">The amount of silk used.</param>
+        /// <param name="source">The source of the silk consumption.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(HeroController), nameof(HeroController.TakeSilk), new Type[] { typeof(int), typeof(SilkSpool.SilkTakeSource) })]
         public static void PostfixTakeSilk(int amount, SilkSpool.SilkTakeSource source)
@@ -82,6 +102,10 @@ namespace SilksongCoop.Mod.Hooks
             }
         }
 
+        /// <summary>
+        /// Hook that fires after health is restored.
+        /// </summary>
+        /// <param name="amount">The amount of health restored.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(HeroController), nameof(HeroController.AddHealth))]
         public static void PostfixAddHealth(int amount)
@@ -99,6 +123,10 @@ namespace SilksongCoop.Mod.Hooks
             }
         }
 
+        /// <summary>
+        /// Hook that fires after the hero performs an attack.
+        /// </summary>
+        /// <param name="__instance">The HeroController instance.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(HeroController), "DoAttack")]
         public static void PostfixDoAttack(HeroController __instance)
@@ -116,6 +144,9 @@ namespace SilksongCoop.Mod.Hooks
             }
         }
 
+        /// <summary>
+        /// Hook that fires after the hero performs a down attack.
+        /// </summary>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(HeroController), "DownAttack")]
         public static void PostfixDownAttack()
@@ -132,6 +163,10 @@ namespace SilksongCoop.Mod.Hooks
             }
         }
 
+        /// <summary>
+        /// Hook that fires after the hero performs a dash.
+        /// </summary>
+        /// <param name="__instance">The HeroController instance.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(HeroController), "HeroDash")]
         public static void PostfixHeroDash(HeroController __instance)
@@ -149,6 +184,11 @@ namespace SilksongCoop.Mod.Hooks
             }
         }
 
+        /// <summary>
+        /// Hook that fires after an integer value is set in PlayerData.
+        /// </summary>
+        /// <param name="intName">The name of the integer field.</param>
+        /// <param name="value">The new value.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(PlayerData), nameof(PlayerData.SetInt))]
         public static void PostfixSetInt(string intName, int value)
@@ -182,6 +222,11 @@ namespace SilksongCoop.Mod.Hooks
             }
         }
 
+        /// <summary>
+        /// Hook that fires after an integer value is incremented in PlayerData.
+        /// </summary>
+        /// <param name="intName">The name of the integer field.</param>
+        /// <param name="amount">The amount to add.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(PlayerData), nameof(PlayerData.IntAdd))]
         public static void PostfixIntAdd(string intName, int amount)

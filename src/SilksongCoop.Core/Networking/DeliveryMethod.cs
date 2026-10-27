@@ -1,5 +1,8 @@
 namespace SilksongCoop.Core.Networking
 {
+    /// <summary>
+    /// Specifies the reliability and ordering guarantees for network packet delivery.
+    /// </summary>
     public enum DeliveryMethod : byte
     {
         Unreliable = 0,

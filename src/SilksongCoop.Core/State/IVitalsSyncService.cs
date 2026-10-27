@@ -4,6 +4,9 @@ using SilksongCoop.Core.Protocol.Packets;
 
 namespace SilksongCoop.Core.State
 {
+    /// <summary>
+    /// Synchronizes player vitals (health, silk, upgrades, currency) between co-op peers.
+    /// </summary>
     public interface IVitalsSyncService
     {
         // Local Player State

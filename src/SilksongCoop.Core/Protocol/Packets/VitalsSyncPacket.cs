@@ -2,6 +2,9 @@ using System;
 
 namespace SilksongCoop.Core.Protocol.Packets
 {
+    /// <summary>
+    /// Network packet representing vitals synchronization (health, silk, upgrades).
+    /// </summary>
     public struct VitalsSyncPacket
     {
         public PacketHeader Header;
@@ -11,6 +14,10 @@ namespace SilksongCoop.Core.Protocol.Packets
         public byte MaxSilkSpools;
         public byte NeedleUpgradeLevel;
 
+        /// <summary>
+        /// Serializes this packet to the specified writer.
+        /// </summary>
+        /// <param name="writer">The packet writer to serialize to.</param>
         public void Serialize(ref PacketWriter writer)
         {
             writer.WriteHeader(Header);
@@ -21,6 +28,11 @@ namespace SilksongCoop.Core.Protocol.Packets
             writer.WriteByte(NeedleUpgradeLevel);
         }
 
+        /// <summary>
+        /// Deserializes a vitals sync packet from the specified reader.
+        /// </summary>
+        /// <param name="reader">The packet reader to deserialize from.</param>
+        /// <returns>The deserialized vitals sync packet.</returns>
         public static VitalsSyncPacket Deserialize(ref PacketReader reader)
         {
             return new VitalsSyncPacket

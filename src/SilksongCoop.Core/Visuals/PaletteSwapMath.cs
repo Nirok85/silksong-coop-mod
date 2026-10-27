@@ -14,6 +14,12 @@ namespace SilksongCoop.Core.Visuals
         public const string ShaderPropertyHueShift = "_HueShift";
 
         public const float Player1HueShift = 0.00f; // Default Hornet red
+        /// <summary>
+        /// Hue shift value for Player 2's cloak (azure blue, approximately 208.8 degree rotation).
+        /// </summary>
+        /// <summary>
+        /// Hue shift value for Player 2 (azure blue, approximately 208.8 degrees).
+        /// </summary>
         public const float Player2HueShift = 0.58f; // Azure blue (~208.8° rotation)
         public const float AchromaticTolerance = 1e-4f;
 

@@ -1,3 +1,9 @@
+// ============================================================================
+// SilksongCoopPlugin.cs - Main BepInEx plugin entry point for Silksong Co-op.
+// Coordinates session state, networking transports, vitals and inventory
+// synchronization, spectator & death lifecycle, and remote player cloning.
+// ============================================================================
+
 using System;
 using System.Collections;
 using BepInEx;
@@ -21,25 +27,45 @@ using UnityEngine;
 
 namespace SilksongCoop.Mod
 {
+    /// <summary>
+    /// Main BepInEx plugin entry point for Silksong Co-op multiplayer.
+    /// Coordinates session state, networking, vitals sync, death lifecycle, and remote player management.
+    /// </summary>
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public class SilksongCoopPlugin : BaseUnityPlugin
     {
+        #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
         public const string PluginVersion = "2.0.5";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
+        /// <summary>
+        /// Logs an informational message using the plugin's logger.
+        /// </summary>
+        /// <param name="message">The message to log.</param>
         public static void LogInfo(string message) => Instance?.Logger.LogInfo(message);
+        /// <summary>
+        /// Logs a warning message using the plugin's logger.
+        /// </summary>
+        /// <param name="message">The message to log.</param>
         public static void LogWarn(string message) => Instance?.Logger.LogWarning(message);
+        #endregion
 
+        #region Public Properties
         public CoopSessionState SessionState { get; private set; } = null!;
         public VitalsSyncService VitalsSync { get; private set; } = null!;
         public DeathLifecycleCoordinator DeathCoordinator { get; private set; } = null!;
         public InventorySyncService InventorySync { get; private set; } = null!;
+        
+        /// <summary>
+        /// Ground prober for finding safe spawn locations during revive.
+        /// </summary>
         public IGroundProber GroundProber { get; set; } = new UnityGroundProber();
         public KeybindManager Keybinds { get; private set; } = null!;
         public QualityPresetManager QualityPresets { get; private set; } = null!;
 
+        #region BepInEx Configuration
         // BepInEx Config entries
         public BepInEx.Configuration.ConfigEntry<float>? ReviveCooldownConfig;
         public BepInEx.Configuration.ConfigEntry<float>? ReviveHealthPercentConfig;
@@ -50,13 +76,16 @@ namespace SilksongCoop.Mod
         public BepInEx.Configuration.ConfigEntry<int>? TickRateHzConfig;
         public BepInEx.Configuration.ConfigEntry<bool>? AutoReconnectConfig;
         public BepInEx.Configuration.ConfigEntry<int>? MaxReconnectAttemptsConfig;
+        #endregion
 
         public INetworkTransport? ActiveTransport { get; private set; }
         public SteamP2PTransport? SteamTransport { get; private set; }
         public LiteNetLibTransport? UdpTransport { get; private set; }
         public CoopMenuUI MenuUI { get; private set; } = null!;
         public RemoteHornetSpawner CloneSpawner { get; private set; } = null!;
+        #endregion
 
+        #region Private Fields
         private Harmony? _harmony;
         private volatile bool _isTeamWipeInProgress;
         private ulong? _pendingSteamLobbyJoin;
@@ -72,7 +101,9 @@ namespace SilksongCoop.Mod
         private int _reconnectAttempts;
         private bool _reconnectIsSteam;
         private string? _reconnectAddress;
+        #endregion
 
+        #region Unity Lifecycle
         private void Awake()
         {
             Instance = this;
@@ -311,7 +342,12 @@ namespace SilksongCoop.Mod
 
             Logger.LogInfo("Silksong Co-op initialization complete. Press F10 in game for Co-op menu.");
         }
+        #endregion
 
+        #region Connection Management
+        /// <summary>
+        /// Cancels any pending auto-reconnect attempt.
+        /// </summary>
         public void CancelReconnect()
         {
             _reconnectPending = false;
@@ -345,6 +381,10 @@ namespace SilksongCoop.Mod
             }
         }
 
+        /// <summary>
+        /// Sets the active network transport (Steam P2P or UDP).
+        /// </summary>
+        /// <param name="transport">The transport to use for network communication.</param>
         public void SetActiveTransport(INetworkTransport transport)
         {
             if (transport == null)
@@ -360,6 +400,10 @@ namespace SilksongCoop.Mod
             Logger.LogInfo($"[Coop] Active transport changed from {(oldTransport == null ? "null" : (oldTransport is SteamP2PTransport ? "Steam" : "UDP"))} to {transportType}");
         }
 
+        /// <summary>
+        /// Refreshes local player visuals based on player index (palette swap and dash trail).
+        /// </summary>
+        /// <param name="isPlayer2">True if this is player 2, false for player 1.</param>
         public void RefreshLocalVisuals(bool isPlayer2)
         {
             try
@@ -380,7 +424,12 @@ namespace SilksongCoop.Mod
                 Logger.LogError($"[Coop] Failed to refresh local visuals: {ex.Message}\n{ex.StackTrace}");
             }
         }
+        #endregion
 
+        #region Spectator and Death Handling
+        /// <summary>
+        /// Enters spectator mode after local player death, hiding the hero and disabling physics.
+        /// </summary>
         public void EnterSpectatorMode()
         {
             try
@@ -421,6 +470,9 @@ namespace SilksongCoop.Mod
             }
         }
 
+        /// <summary>
+        /// Exits spectator mode and restores control to the local player.
+        /// </summary>
         public void ExitSpectatorMode()
         {
             try
@@ -458,6 +510,11 @@ namespace SilksongCoop.Mod
             }
         }
 
+        /// <summary>
+        /// Revives the local player at the remote partner's position with partial health.
+        /// </summary>
+        /// <param name="x">X coordinate of the partner's position.</param>
+        /// <param name="y">Y coordinate of the partner's position.</param>
         public void ReviveAtPartner(float x, float y)
         {
             try
@@ -588,6 +645,9 @@ namespace SilksongCoop.Mod
             hero.SetDamageMode(GlobalEnums.DamageMode.FULL_DAMAGE);
         }
 
+        /// <summary>
+        /// Triggers a team wipe, forcing both players to respawn at a bench.
+        /// </summary>
         public void TriggerTeamWipe()
         {
             if (_isTeamWipeInProgress) return;
@@ -614,6 +674,9 @@ namespace SilksongCoop.Mod
             }
         }
 
+        /// <summary>
+        /// Called after a bench respawn completes, resetting death state and restoring visuals.
+        /// </summary>
         public void OnBenchRespawnCompleted()
         {
             try
@@ -646,9 +709,16 @@ namespace SilksongCoop.Mod
                 Logger.LogError($"[Coop] Failed on bench respawn completed: {ex.Message}\n{ex.StackTrace}");
             }
         }
+        #endregion
 
+        #region Network Broadcasting
         private uint _actionTick;
 
+        /// <summary>
+        /// Broadcasts a player action trigger to the remote peer.
+        /// </summary>
+        /// <param name="action">The action type to broadcast.</param>
+        /// <param name="parameter">Optional action parameter.</param>
         public void BroadcastActionTrigger(ActionType action, byte parameter = 0)
         {
             try
@@ -688,6 +758,13 @@ namespace SilksongCoop.Mod
             }
         }
 
+        /// <summary>
+        /// Broadcasts the local player's bench checkpoint to the remote peer.
+        /// </summary>
+        /// <param name="sceneName">Name of the scene where the bench is located.</param>
+        /// <param name="respawnMarker">Spawn marker identifier for the bench.</param>
+        /// <param name="spawnType">Type of spawn point.</param>
+        /// <param name="facingRight">True if facing right at the bench.</param>
         public void BroadcastBenchCheckpoint(string sceneName, string respawnMarker, int spawnType, bool facingRight)
         {
             try
@@ -720,6 +797,13 @@ namespace SilksongCoop.Mod
             }
         }
 
+        /// <summary>
+        /// Applies a remote bench checkpoint to the local player's data.
+        /// </summary>
+        /// <param name="sceneName">Name of the scene where the bench is located.</param>
+        /// <param name="respawnMarker">Spawn marker identifier for the bench.</param>
+        /// <param name="spawnType">Type of spawn point.</param>
+        /// <param name="facingRight">True if facing right at the bench.</param>
         public void ApplyRemoteBenchCheckpoint(string sceneName, string respawnMarker, int spawnType, bool facingRight)
         {
             try
@@ -740,6 +824,10 @@ namespace SilksongCoop.Mod
             }
         }
 
+        /// <summary>
+        /// Broadcasts collected heart pieces count to the remote peer.
+        /// </summary>
+        /// <param name="count">Number of heart pieces collected.</param>
         public void BroadcastHeartPieces(int count)
         {
             try
@@ -753,6 +841,10 @@ namespace SilksongCoop.Mod
             }
         }
 
+        /// <summary>
+        /// Broadcasts collected silk parts count to the remote peer.
+        /// </summary>
+        /// <param name="count">Number of silk parts collected.</param>
         public void BroadcastSilkParts(int count)
         {
             try
@@ -766,6 +858,10 @@ namespace SilksongCoop.Mod
             }
         }
 
+        /// <summary>
+        /// Broadcasts the local player's initial inventory state to a newly connected peer.
+        /// </summary>
+        /// <param name="peer">The peer identifier to send inventory to.</param>
         public void BroadcastInitialInventory(NetworkPeerId peer)
         {
             try
@@ -823,7 +919,14 @@ namespace SilksongCoop.Mod
                 Logger.LogWarning($"[Coop] Failed broadcasting initial inventory: {ex.Message}");
             }
         }
+        #endregion
 
+        #region Inventory and Item Sync
+        /// <summary>
+        /// Applies a remote item unlock to the local player's inventory.
+        /// </summary>
+        /// <param name="itemId">The identifier of the item to unlock.</param>
+        /// <param name="category">The category of the item.</param>
         public void ApplyRemoteItemUnlock(string itemId, ItemCategory category)
         {
             if (string.IsNullOrEmpty(itemId))
@@ -954,7 +1057,9 @@ namespace SilksongCoop.Mod
                 Logger.LogError($"[Coop] Failed applying remote item unlock for {itemId} ({category}): {ex.Message}");
             }
         }
+        #endregion
 
+        #region Transport Event Wiring
         private void BindTransportEvents(INetworkTransport? transport)
         {
             if (transport == null) return;
@@ -1148,7 +1253,9 @@ namespace SilksongCoop.Mod
                 }
             };
         }
+        #endregion
 
+        #region Network Broadcasting
         /// <summary>
         /// Broadcasts the local hero's authoritative position, velocity, state flags and
         /// animation state to the remote peer at the configured tick rate.
@@ -1385,5 +1492,6 @@ namespace SilksongCoop.Mod
                 Instance = null;
             }
         }
+        #endregion
     }
 }

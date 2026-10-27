@@ -5,11 +5,23 @@ using SilksongCoop.Mod.State;
 
 namespace SilksongCoop.Mod.Hooks
 {
+    /// <summary>
+    /// Harmony hooks for synchronizing currency changes (geo and shell shards) between co-op players.
+    /// </summary>
     [HarmonyPatch]
     public static class CurrencyHooks
     {
+        /// <summary>
+        /// Flag indicating whether a remote currency change is being applied locally.
+        /// </summary>
         public static bool IsApplyingRemoteCurrency = false;
 
+        /// <summary>
+        /// Hook that fires after currency changes to broadcast the update to the remote player.
+        /// </summary>
+        /// <param name="amount">The amount of currency changed (positive or negative).</param>
+        /// <param name="type">The type of currency (Money or ShellShards).</param>
+        /// <param name="showCounter">Whether to show the UI counter animation.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(CurrencyManager), nameof(CurrencyManager.ChangeCurrency))]
         public static void PostfixChangeCurrency(int amount, CurrencyType type, bool showCounter)

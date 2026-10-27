@@ -2,25 +2,26 @@ using System;
 
 namespace SilksongCoop.Core.Protocol.Packets
 {
+    /// <summary>
+    /// Network packet representing a transform synchronization event.
+    /// </summary>
     public struct TransformSyncPacket
     {
-        public const ushort FlagGrounded     = 0x0001;
-        public const ushort FlagDashing      = 0x0002;
-        public const ushort FlagWallSliding  = 0x0004;
-        public const ushort FlagJumping      = 0x0008;
-        public const ushort FlagFalling      = 0x0010;
-        public const ushort FlagAttacking    = 0x0020;
-        public const ushort FlagHealing      = 0x0040;
-        public const ushort FlagInvulnerable = 0x0080;
-        public const ushort FlagSwimming     = 0x0100;
-        public const ushort FlagCrouching    = 0x0200;
+        public const ushort FlagGrounded = 1 << 0;
+        public const ushort FlagDashing = 1 << 1;
+        public const ushort FlagWallSliding = 1 << 2;
+        public const ushort FlagJumping = 1 << 3;
+        public const ushort FlagFalling = 1 << 4;
+        public const ushort FlagAttacking = 1 << 5;
+        public const ushort FlagInvulnerable = 1 << 6;
+        public const ushort FlagSwimming = 1 << 7;
 
         public PacketHeader Header;
         public float PositionX;
         public float PositionY;
         public float VelocityX;
         public float VelocityY;
-        public byte FacingDirection; // 0 = Left, 1 = Right
+        public byte FacingDirection;
         public ushort StateFlags;
         public int AnimationClipHash;
         public ushort NormalizedTime;
@@ -30,6 +31,10 @@ namespace SilksongCoop.Core.Protocol.Packets
         public bool IsGrounded => (StateFlags & FlagGrounded) != 0;
         public bool IsDashing => (StateFlags & FlagDashing) != 0;
 
+        /// <summary>
+        /// Serializes this packet to the specified writer.
+        /// </summary>
+        /// <param name="writer">The packet writer to serialize to.</param>
         public void Serialize(ref PacketWriter writer)
         {
             writer.WriteHeader(Header);
@@ -44,6 +49,11 @@ namespace SilksongCoop.Core.Protocol.Packets
             writer.WriteInt32(SceneNameHash);
         }
 
+        /// <summary>
+        /// Deserializes a transform sync packet from the specified reader.
+        /// </summary>
+        /// <param name="reader">The packet reader to deserialize from.</param>
+        /// <returns>The deserialized transform sync packet.</returns>
         public static TransformSyncPacket Deserialize(ref PacketReader reader)
         {
             var packet = new TransformSyncPacket

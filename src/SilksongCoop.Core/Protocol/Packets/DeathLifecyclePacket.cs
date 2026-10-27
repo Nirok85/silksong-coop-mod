@@ -2,6 +2,9 @@ using System;
 
 namespace SilksongCoop.Core.Protocol.Packets
 {
+    /// <summary>
+    /// Identifies the type of death event in a death lifecycle packet.
+    /// </summary>
     public enum DeathEventType : byte
     {
         SoloDeathOccurred = 0,
@@ -11,6 +14,9 @@ namespace SilksongCoop.Core.Protocol.Packets
         BenchCheckpointUpdate = 4
     }
 
+    /// <summary>
+    /// Network packet representing a death lifecycle event.
+    /// </summary>
     public struct DeathLifecyclePacket
     {
         public PacketHeader Header;
@@ -22,6 +28,10 @@ namespace SilksongCoop.Core.Protocol.Packets
         public ushort BenchSceneHash;
         public uint Epoch;
 
+        /// <summary>
+        /// Serializes this packet to the specified writer.
+        /// </summary>
+        /// <param name="writer">The packet writer to serialize to.</param>
         public void Serialize(ref PacketWriter writer)
         {
             writer.WriteHeader(Header);
@@ -34,6 +44,11 @@ namespace SilksongCoop.Core.Protocol.Packets
             writer.WriteUInt32(Epoch);
         }
 
+        /// <summary>
+        /// Deserializes a death lifecycle packet from the specified reader.
+        /// </summary>
+        /// <param name="reader">The packet reader to deserialize from.</param>
+        /// <returns>The deserialized death lifecycle packet.</returns>
         public static DeathLifecyclePacket Deserialize(ref PacketReader reader)
         {
             return new DeathLifecyclePacket

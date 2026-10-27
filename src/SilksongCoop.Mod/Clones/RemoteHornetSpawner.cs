@@ -34,6 +34,11 @@ namespace SilksongCoop.Mod.Clones
             }
         }
 
+        /// <summary>
+        /// Spawns a remote player clone for the specified peer.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
+        /// <param name="isPlayer2">True if this is player 2, false for player 1.</param>
         public void SpawnRemotePlayer(NetworkPeerId peerId, bool isPlayer2)
         {
             try
@@ -140,6 +145,10 @@ namespace SilksongCoop.Mod.Clones
             }
         }
 
+        /// <summary>
+        /// Despawns and destroys the remote player clone for the specified peer.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
         public void DespawnRemotePlayer(NetworkPeerId peerId)
         {
             try
@@ -160,6 +169,19 @@ namespace SilksongCoop.Mod.Clones
             }
         }
 
+        /// <summary>
+        /// Updates the remote player's transform with interpolation and animation sync.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
+        /// <param name="posX">X position.</param>
+        /// <param name="posY">Y position.</param>
+        /// <param name="velX">X velocity.</param>
+        /// <param name="velY">Y velocity.</param>
+        /// <param name="facingDirection">Facing direction (0 = left, 1 = right).</param>
+        /// <param name="stateFlags">State flags (grounded, dashing, etc.).</param>
+        /// <param name="animClipHash">Animation clip hash.</param>
+        /// <param name="normalizedTime">Normalized animation time.</param>
+        /// <param name="timestampMs">Packet timestamp in milliseconds.</param>
         public void UpdateRemoteTransform(
             NetworkPeerId peerId,
             float posX, float posY,
@@ -173,6 +195,20 @@ namespace SilksongCoop.Mod.Clones
             UpdateRemoteTransform(peerId, posX, posY, velX, velY, facingDirection, stateFlags, animClipHash, normalizedTime, timestampMs, true);
         }
 
+        /// <summary>
+        /// Updates the remote player's transform with interpolation and animation sync.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
+        /// <param name="posX">X position.</param>
+        /// <param name="posY">Y position.</param>
+        /// <param name="velX">X velocity.</param>
+        /// <param name="velY">Y velocity.</param>
+        /// <param name="facingDirection">Facing direction (0 = left, 1 = right).</param>
+        /// <param name="stateFlags">State flags (grounded, dashing, etc.).</param>
+        /// <param name="animClipHash">Animation clip hash.</param>
+        /// <param name="normalizedTime">Normalized animation time.</param>
+        /// <param name="timestampMs">Packet timestamp in milliseconds.</param>
+        /// <param name="isSameScene">True if the remote player is in the same scene.</param>
         public void UpdateRemoteTransform(
             NetworkPeerId peerId,
             float posX, float posY,
@@ -205,6 +241,12 @@ namespace SilksongCoop.Mod.Clones
             }
         }
 
+        /// <summary>
+        /// Triggers a remote action (dash, attack, etc.) on the remote player clone.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
+        /// <param name="action">The action type to trigger.</param>
+        /// <param name="variant">Action variant or parameter.</param>
         public void TriggerRemoteAction(NetworkPeerId peerId, ActionType action, byte variant)
         {
             try
@@ -220,6 +262,12 @@ namespace SilksongCoop.Mod.Clones
             }
         }
 
+        /// <summary>
+        /// Synchronizes animation state for the remote player clone.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
+        /// <param name="clipHash">Animation clip hash.</param>
+        /// <param name="normalizedTime">Normalized animation time.</param>
         public void SyncAnimation(NetworkPeerId peerId, int clipHash, ushort normalizedTime)
         {
             try
@@ -235,6 +283,11 @@ namespace SilksongCoop.Mod.Clones
             }
         }
 
+        /// <summary>
+        /// Sets the facing direction for the remote player clone.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
+        /// <param name="facingRight">True if facing right, false if facing left.</param>
         public void SetFacingDirection(NetworkPeerId peerId, bool facingRight)
         {
             try
@@ -250,6 +303,11 @@ namespace SilksongCoop.Mod.Clones
             }
         }
 
+        /// <summary>
+        /// Triggers the dash visual effect on the remote player clone.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
+        /// <param name="isAirDash">True if this is an air dash, false for ground dash.</param>
         public void TriggerDashEffect(NetworkPeerId peerId, bool isAirDash)
         {
             try
@@ -265,6 +323,13 @@ namespace SilksongCoop.Mod.Clones
             }
         }
 
+        /// <summary>
+        /// Attempts to retrieve the current position of a remote player clone.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
+        /// <param name="posX">Output X position.</param>
+        /// <param name="posY">Output Y position.</param>
+        /// <returns>True if the position was retrieved, false otherwise.</returns>
         public bool TryGetRemotePosition(NetworkPeerId peerId, out float posX, out float posY)
         {
             posX = 0f;
@@ -288,6 +353,12 @@ namespace SilksongCoop.Mod.Clones
             return false;
         }
 
+        /// <summary>
+        /// Attempts to retrieve the full state of a remote player clone.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
+        /// <param name="state">Output remote clone state.</param>
+        /// <returns>True if the state was retrieved, false otherwise.</returns>
         public bool TryGetRemoteState(NetworkPeerId peerId, out RemoteCloneState state)
         {
             state = default;
@@ -308,16 +379,28 @@ namespace SilksongCoop.Mod.Clones
             return false;
         }
 
+        /// <summary>
+        /// Checks if a remote player clone exists for the specified peer.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
+        /// <returns>True if a clone exists, false otherwise.</returns>
         public bool IsPlayerSpawned(NetworkPeerId peerId)
         {
             return _activeClones.ContainsKey(peerId);
         }
 
+        /// <summary>
+        /// Updates interpolation for all remote clones (no-op for Unity components).
+        /// </summary>
+        /// <param name="currentLocalTimeMs">Current local time in milliseconds.</param>
         public void UpdateInterpolation(double currentLocalTimeMs)
         {
             // Unity components update automatically via Update() pass
         }
 
+        /// <summary>
+        /// Despawns and destroys all remote player clones.
+        /// </summary>
         public void ResetAllClones()
         {
             foreach (var kvp in _activeClones)

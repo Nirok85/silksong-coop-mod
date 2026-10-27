@@ -1,5 +1,8 @@
 namespace SilksongCoop.Core.Protocol
 {
+    /// <summary>
+    /// Identifies the type of network packet in the co-op protocol.
+    /// </summary>
     public enum PacketType : byte
     {
         // System & Handshake (0x01 - 0x0F)

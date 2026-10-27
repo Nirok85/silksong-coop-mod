@@ -5,6 +5,9 @@ using SilksongCoop.Core.Protocol.Packets;
 
 namespace SilksongCoop.Core.State
 {
+    /// <summary>
+    /// Synchronizes inventory unlocks and equipped loadouts between co-op peers.
+    /// </summary>
     public interface IInventorySyncService
     {
         IReadOnlyCollection<string> UnlockedItems { get; }

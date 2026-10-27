@@ -12,25 +12,74 @@ namespace SilksongCoop.Mod.UI
     {
         // ── Palette ────────────────────────────────────────────────────────────
         // Backgrounds (darkest → lightest)
+        /// <summary>
+        /// Darkest background color for window backgrounds.
+        /// </summary>
         public static readonly Color BgDeepest   = new Color(0.035f, 0.030f, 0.065f, 0.96f); // #09081A window bg
+        
+        /// <summary>
+        /// Panel background color for sections.
+        /// </summary>
         public static readonly Color BgPanel     = new Color(0.055f, 0.050f, 0.095f, 0.92f); // #0E0D18 section
+        
+        /// <summary>
+        /// Input field background color.
+        /// </summary>
         public static readonly Color BgField     = new Color(0.080f, 0.070f, 0.130f, 0.95f); // input field bg
+        
+        /// <summary>
+        /// Subtle background color for hover highlights.
+        /// </summary>
         public static readonly Color BgSubtle    = new Color(0.110f, 0.100f, 0.170f, 0.70f); // hover highlight
 
-        // Accents
+        /// <summary>
+        /// Primary accent color (gold).
+        /// </summary>
         public static readonly Color Gold        = new Color(0.831f, 0.659f, 0.263f, 1.00f); // #D4A843 primary accent
+        
+        /// <summary>
+        /// Bright gold color for hover states.
+        /// </summary>
         public static readonly Color GoldBright  = new Color(0.950f, 0.800f, 0.350f, 1.00f); // hover accent
+        
+        /// <summary>
+        /// Dimmed gold color for pressed or disabled states.
+        /// </summary>
         public static readonly Color GoldDim     = new Color(0.550f, 0.430f, 0.180f, 1.00f); // pressed / disabled
 
-        // Text
+        /// <summary>
+        /// Cream color for body text.
+        /// </summary>
         public static readonly Color TextCream   = new Color(0.910f, 0.863f, 0.784f, 1.00f); // #E8DCC8 body text
+        
+        /// <summary>
+        /// Muted color for captions and secondary text.
+        /// </summary>
         public static readonly Color TextMuted   = new Color(0.620f, 0.600f, 0.560f, 1.00f); // captions
+        
+        /// <summary>
+        /// Title color for section headers.
+        /// </summary>
         public static readonly Color TextTitle   = new Color(0.970f, 0.830f, 0.400f, 1.00f); // section headers
 
-        // Semantic
+        /// <summary>
+        /// Green color for success/OK states.
+        /// </summary>
         public static readonly Color GreenOk     = new Color(0.400f, 0.850f, 0.450f, 1.00f);
+        
+        /// <summary>
+        /// Yellow color for warning states.
+        /// </summary>
         public static readonly Color YellowWarn  = new Color(0.950f, 0.800f, 0.300f, 1.00f);
+        
+        /// <summary>
+        /// Red color for error states.
+        /// </summary>
         public static readonly Color RedError    = new Color(0.900f, 0.350f, 0.350f, 1.00f);
+        
+        /// <summary>
+        /// Blue color for informational messages.
+        /// </summary>
         public static readonly Color BlueInfo    = new Color(0.400f, 0.700f, 0.950f, 1.00f);
 
         // ── Cached skin (built once) ───────────────────────────────────────────
@@ -39,6 +88,9 @@ namespace SilksongCoop.Mod.UI
         private static Texture2D? _texGold, _texGoldBright, _texGoldDim;
         private static Texture2D? _texWhite; // 1x1 pure white for DrawTexture bars
 
+        /// <summary>
+        /// Gets a 1x1 white texture used for drawing solid color bars and backgrounds.
+        /// </summary>
         public static Texture2D WhitePixel => _texWhite ??= MakeTex(Color.white);
 
         /// <summary>Returns the cached Silksong skin (created on first call).</summary>

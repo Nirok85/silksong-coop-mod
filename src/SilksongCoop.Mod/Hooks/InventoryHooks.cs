@@ -6,11 +6,15 @@ using SilksongCoop.Mod.State;
 
 namespace SilksongCoop.Mod.Hooks
 {
+    /// <summary>
+    /// Harmony hooks for synchronizing inventory unlocks (tools, crests, abilities) between co-op players.
+    /// </summary>
     [HarmonyPatch]
     public static class InventoryHooks
     {
-        // Guard flag replaced by RemoteApplyScope.IsActive
-
+        /// <summary>
+        /// Set of ability boolean flags that should be synchronized between players.
+        /// </summary>
         public static readonly HashSet<string> SharedAbilityBools = new HashSet<string>(StringComparer.Ordinal)
         {
             "hasDash",
@@ -32,6 +36,10 @@ namespace SilksongCoop.Mod.Hooks
             "hasQuill"
         };
 
+        /// <summary>
+        /// Hook that fires after a crest is unlocked.
+        /// </summary>
+        /// <param name="__instance">The ToolCrest instance that was unlocked.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(ToolCrest), nameof(ToolCrest.Unlock))]
         public static void PostfixToolCrestUnlock(ToolCrest __instance)
@@ -53,6 +61,10 @@ namespace SilksongCoop.Mod.Hooks
             }
         }
 
+        /// <summary>
+        /// Hook that fires after a tool or skill is unlocked.
+        /// </summary>
+        /// <param name="__instance">The ToolItem instance that was unlocked.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(ToolItem), nameof(ToolItem.Unlock))]
         public static void PostfixToolItemUnlock(ToolItem __instance)
@@ -75,6 +87,11 @@ namespace SilksongCoop.Mod.Hooks
             }
         }
 
+        /// <summary>
+        /// Hook that fires after a boolean value is set in PlayerData.
+        /// </summary>
+        /// <param name="boolName">The name of the boolean field.</param>
+        /// <param name="value">The new value.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(PlayerData), nameof(PlayerData.SetBool))]
         public static void PostfixSetBool(string boolName, bool value)

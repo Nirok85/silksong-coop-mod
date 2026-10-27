@@ -11,6 +11,9 @@ namespace SilksongCoop.Mod.UI
     /// </summary>
     public class ToastNotifier
     {
+        /// <summary>
+        /// Types of toast notifications.
+        /// </summary>
         public enum ToastKind
         {
             Info,
@@ -66,9 +69,29 @@ namespace SilksongCoop.Mod.UI
             }
         }
 
+        /// <summary>
+        /// Shows a success toast message.
+        /// </summary>
+        /// <param name="message">The message to display.</param>
+        /// <param name="holdSeconds">How long to hold the toast (default 2.5s).</param>
         public void ShowSuccess(string message, float holdSeconds = 2.5f) => Show(message, ToastKind.Success, holdSeconds);
+        /// <summary>
+        /// Shows a warning toast message.
+        /// </summary>
+        /// <param name="message">The message to display.</param>
+        /// <param name="holdSeconds">How long to hold the toast (default 3.5s).</param>
         public void ShowWarning(string message, float holdSeconds = 3.5f) => Show(message, ToastKind.Warning, holdSeconds);
+        /// <summary>
+        /// Shows an error toast message.
+        /// </summary>
+        /// <param name="message">The message to display.</param>
+        /// <param name="holdSeconds">How long to hold the toast (default 4.0s).</param>
         public void ShowError(string message, float holdSeconds = 4.0f)   => Show(message, ToastKind.Error, holdSeconds);
+        /// <summary>
+        /// Shows an info toast message.
+        /// </summary>
+        /// <param name="message">The message to display.</param>
+        /// <param name="holdSeconds">How long to hold the toast (default 2.5s).</param>
         public void ShowInfo(string message, float holdSeconds = 2.5f)    => Show(message, ToastKind.Info, holdSeconds);
 
         /// <summary>

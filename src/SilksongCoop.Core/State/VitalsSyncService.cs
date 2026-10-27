@@ -6,8 +6,13 @@ using SilksongCoop.Core.Protocol.Packets;
 
 namespace SilksongCoop.Core.State
 {
+    /// <summary>
+    /// Synchronizes player vitals (health, silk, upgrades) and currency between co-op peers.
+    /// </summary>
     public class VitalsSyncService : IVitalsSyncService
     {
+        private static void Log(string msg) => System.Diagnostics.Debug.WriteLine(msg);
+
         private readonly HashSet<Guid> _processedTransactions = new HashSet<Guid>();
         private readonly Queue<Guid> _transactionOrder = new Queue<Guid>();
         private readonly object _transactionLock = new object();
@@ -67,6 +72,16 @@ namespace SilksongCoop.Core.State
         public event Action<VitalsSyncPacket>? OnOutgoingVitalsBroadcast;
         public event Action<CurrencySyncPacket>? OnOutgoingCurrencyBroadcast;
 
+        /// <summary>
+        /// Initializes the local player's vitals and currency state.
+        /// </summary>
+        /// <param name="initialHealth">Initial health value.</param>
+        /// <param name="initialMaxHealth">Initial maximum health value.</param>
+        /// <param name="initialSilk">Initial silk value.</param>
+        /// <param name="initialMaxSilkSpools">Initial maximum silk spools.</param>
+        /// <param name="needleLevel">Initial needle upgrade level.</param>
+        /// <param name="initialRosaries">Initial rosaries currency.</param>
+        /// <param name="initialShards">Initial shell shards currency.</param>
         public void InitializeState(int initialHealth, int initialMaxHealth, int initialSilk, int initialMaxSilkSpools, int needleLevel, int initialRosaries, int initialShards)
         {
             lock (_stateLock)
@@ -84,6 +99,11 @@ namespace SilksongCoop.Core.State
             }
         }
 
+        /// <summary>
+        /// Handles local player taking damage.
+        /// </summary>
+        /// <param name="damageAmount">Amount of damage taken.</param>
+        /// <param name="newHealth">New health value after damage.</param>
         public void OnLocalDamageTaken(int damageAmount, int newHealth)
         {
             lock (_stateLock) { LocalHealth = Math.Max(0, Math.Min(SharedMaxHealth > 0 ? SharedMaxHealth : int.MaxValue, newHealth)); }
@@ -92,6 +112,11 @@ namespace SilksongCoop.Core.State
             BroadcastCurrentVitals();
         }
 
+        /// <summary>
+        /// Handles local player using silk.
+        /// </summary>
+        /// <param name="silkUsed">Amount of silk used.</param>
+        /// <param name="newSilk">New silk value after use.</param>
         public void OnLocalSilkUsed(int silkUsed, int newSilk)
         {
             lock (_stateLock) { LocalSilk = Math.Max(0, newSilk); }
@@ -99,6 +124,11 @@ namespace SilksongCoop.Core.State
             BroadcastCurrentVitals();
         }
 
+        /// <summary>
+        /// Handles local player gaining health.
+        /// </summary>
+        /// <param name="healAmount">Amount of health gained.</param>
+        /// <param name="newHealth">New health value after healing.</param>
         public void OnLocalHealthGained(int healAmount, int newHealth)
         {
             lock (_stateLock)
@@ -108,6 +138,11 @@ namespace SilksongCoop.Core.State
             BroadcastCurrentVitals();
         }
 
+        /// <summary>
+        /// Handles local player gaining silk.
+        /// </summary>
+        /// <param name="silkGain">Amount of silk gained.</param>
+        /// <param name="newSilk">New silk value after gain.</param>
         public void OnLocalSilkGained(int silkGain, int newSilk)
         {
             lock (_stateLock)
@@ -117,6 +152,10 @@ namespace SilksongCoop.Core.State
             BroadcastCurrentVitals();
         }
 
+        /// <summary>
+        /// Handles local player's max health being upgraded.
+        /// </summary>
+        /// <param name="newMaxHealth">New maximum health value.</param>
         public void OnLocalMaxHealthUpgrade(int newMaxHealth)
         {
             bool changed;
@@ -139,6 +178,10 @@ namespace SilksongCoop.Core.State
             }
         }
 
+        /// <summary>
+        /// Handles local player's max silk being upgraded.
+        /// </summary>
+        /// <param name="newMaxSilk">New maximum silk spools value.</param>
         public void OnLocalMaxSilkUpgrade(int newMaxSilk)
         {
             bool changed;
@@ -161,6 +204,10 @@ namespace SilksongCoop.Core.State
             }
         }
 
+        /// <summary>
+        /// Handles local player's needle being upgraded.
+        /// </summary>
+        /// <param name="newNeedleLevel">New needle upgrade level.</param>
         public void OnLocalNeedleUpgrade(int newNeedleLevel)
         {
             bool changed;
@@ -183,6 +230,13 @@ namespace SilksongCoop.Core.State
             }
         }
 
+        /// <summary>
+        /// Handles local player's currency changing.
+        /// </summary>
+        /// <param name="currency">Type of currency that changed.</param>
+        /// <param name="deltaAmount">Amount of currency gained or lost.</param>
+        /// <param name="newTotal">New total amount of currency.</param>
+        /// <param name="transactionId">Unique transaction identifier for deduplication.</param>
         public void OnLocalCurrencyChanged(CurrencyType currency, int deltaAmount, int newTotal, Guid transactionId)
         {
             if (deltaAmount == 0) return;
@@ -222,6 +276,11 @@ namespace SilksongCoop.Core.State
             OnOutgoingCurrencyBroadcast?.Invoke(packet);
         }
 
+        /// <summary>
+        /// Handles an incoming vitals sync packet from a remote peer.
+        /// </summary>
+        /// <param name="sender">The peer that sent the packet.</param>
+        /// <param name="packet">The vitals sync packet to process.</param>
         public void HandleVitalsPacket(NetworkPeerId sender, VitalsSyncPacket packet)
         {
             try
@@ -260,10 +319,15 @@ namespace SilksongCoop.Core.State
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[VitalsSyncService] HandleVitalsPacket error: {ex.Message}");
+                Log($"[VitalsSyncService] HandleVitalsPacket error: {ex.Message}");
             }
         }
 
+        /// <summary>
+        /// Handles an incoming currency sync packet from a remote peer.
+        /// </summary>
+        /// <param name="sender">The peer that sent the packet.</param>
+        /// <param name="packet">The currency sync packet to process.</param>
         public void HandleCurrencyPacket(NetworkPeerId sender, CurrencySyncPacket packet)
         {
             try
@@ -313,10 +377,13 @@ namespace SilksongCoop.Core.State
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[VitalsSyncService] HandleCurrencyPacket error: {ex.Message}");
+                Log($"[VitalsSyncService] HandleCurrencyPacket error: {ex.Message}");
             }
         }
 
+        /// <summary>
+        /// Broadcasts the current local player's vitals to the remote peer.
+        /// </summary>
         public void BroadcastCurrentVitals()
         {
             try
@@ -344,10 +411,13 @@ namespace SilksongCoop.Core.State
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[VitalsSyncService] BroadcastCurrentVitals error: {ex.Message}");
+                Log($"[VitalsSyncService] BroadcastCurrentVitals error: {ex.Message}");
             }
         }
 
+        /// <summary>
+        /// Broadcasts the current local player's currency to the remote peer.
+        /// </summary>
         public void BroadcastCurrentCurrency()
         {
             try
@@ -404,7 +474,7 @@ namespace SilksongCoop.Core.State
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[VitalsSyncService] BroadcastCurrentCurrency error: {ex.Message}");
+                Log($"[VitalsSyncService] BroadcastCurrentCurrency error: {ex.Message}");
             }
         }
 

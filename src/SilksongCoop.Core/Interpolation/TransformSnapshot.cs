@@ -2,6 +2,9 @@ using System;
 
 namespace SilksongCoop.Core.Interpolation
 {
+    /// <summary>
+    /// Immutable snapshot of a transform state at a point in time for interpolation.
+    /// </summary>
     public struct TransformSnapshot : IEquatable<TransformSnapshot>
     {
         public uint Tick;
@@ -14,6 +17,11 @@ namespace SilksongCoop.Core.Interpolation
         public ushort Flags;
         public int AnimHash;
 
+        /// <summary>
+        /// Determines whether this snapshot is equal to another within tolerance.
+        /// </summary>
+        /// <param name="other">The other snapshot to compare.</param>
+        /// <returns>True if the snapshots are equal within tolerance, false otherwise.</returns>
         public bool Equals(TransformSnapshot other) =>
             Tick == other.Tick &&
             Math.Abs(TimestampMs - other.TimestampMs) < 0.001 &&

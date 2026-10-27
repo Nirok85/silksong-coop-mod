@@ -7,9 +7,19 @@ using UnityEngine;
 
 namespace SilksongCoop.Mod.Hooks
 {
+    /// <summary>
+    /// Harmony hooks for handling death, spectator mode, and bench respawn synchronization.
+    /// </summary>
     [HarmonyPatch]
     public static class DeathHooks
     {
+        /// <summary>
+        /// Hook that intercepts player death to implement co-op spectator mode.
+        /// </summary>
+        /// <param name="__instance">GameManager instance.</param>
+        /// <param name="waitTime">Time to wait before respawn.</param>
+        /// <param name="__result">Result coroutine reference.</param>
+        /// <returns>True to run original method, false to suppress.</returns>
         [HarmonyPrefix]
         [HarmonyPatch(typeof(GameManager), nameof(GameManager.PlayerDead))]
         public static bool PrefixPlayerDead(GameManager __instance, float waitTime, ref IEnumerator __result)
@@ -60,6 +70,9 @@ namespace SilksongCoop.Mod.Hooks
             yield break;
         }
 
+        /// <summary>
+        /// Hook that fires after the player is ready for respawn at a bench.
+        /// </summary>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(GameManager), nameof(GameManager.ReadyForRespawn))]
         public static void PostfixReadyForRespawn()
@@ -72,6 +85,13 @@ namespace SilksongCoop.Mod.Hooks
             SilksongCoopPlugin.Instance.OnBenchRespawnCompleted();
         }
 
+        /// <summary>
+        /// Hook that fires after setting a bench respawn point with full parameters.
+        /// </summary>
+        /// <param name="spawnMarker">The spawn marker name.</param>
+        /// <param name="sceneName">The scene name.</param>
+        /// <param name="spawnType">The spawn type identifier.</param>
+        /// <param name="facingRight">Whether the player is facing right.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(PlayerData), nameof(PlayerData.SetBenchRespawn), new Type[] { typeof(string), typeof(string), typeof(int), typeof(bool) })]
         public static void PostfixSetBenchRespawnFull(string spawnMarker, string sceneName, int spawnType, bool facingRight)
@@ -88,6 +108,12 @@ namespace SilksongCoop.Mod.Hooks
             }
         }
 
+        /// <summary>
+        /// Hook that fires after setting a bench respawn point with simplified parameters.
+        /// </summary>
+        /// <param name="spawnMarker">The spawn marker name.</param>
+        /// <param name="sceneName">The scene name.</param>
+        /// <param name="facingRight">Whether the player is facing right.</param>
         [HarmonyPostfix]
         [HarmonyPatch(typeof(PlayerData), nameof(PlayerData.SetBenchRespawn), new Type[] { typeof(string), typeof(string), typeof(bool) })]
         public static void PostfixSetBenchRespawnSimple(string spawnMarker, string sceneName, bool facingRight)

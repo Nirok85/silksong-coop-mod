@@ -31,6 +31,10 @@ namespace SilksongCoop.Mod.UI
             set => _isVisible = value;
         }
 
+        /// <summary>
+        /// Initializes a new instance of the DiagnosticsOverlay class.
+        /// </summary>
+        /// <param name="diagnostics">The network diagnostics data source.</param>
         public DiagnosticsOverlay(NetworkDiagnostics diagnostics)
         {
             _diagnostics = diagnostics;
@@ -52,6 +56,9 @@ namespace SilksongCoop.Mod.UI
             if (_gridTex == null) _gridTex = GetSolidTexture(new Color(1f, 1f, 1f, 0.15f));
         }
 
+        /// <summary>
+        /// Renders the diagnostics overlay GUI. Call from OnGUI when visible.
+        /// </summary>
         public void OnGUI()
         {
             if (!_isVisible) return;

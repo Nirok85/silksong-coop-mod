@@ -7,8 +7,13 @@ using SilksongCoop.Core.Protocol.Packets;
 
 namespace SilksongCoop.Core.State
 {
+    /// <summary>
+    /// Synchronizes item unlocks, crests, and tool loadouts between co-op peers with duplicate detection.
+    /// </summary>
     public class InventorySyncService : IInventorySyncService
     {
+        private static void Log(string msg) => System.Diagnostics.Debug.WriteLine(msg);
+
         private readonly HashSet<string> _unlockedItems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<Guid> _processedTransactions = new HashSet<Guid>();
         private readonly Queue<Guid> _transactionOrder = new Queue<Guid>();
@@ -63,11 +68,23 @@ namespace SilksongCoop.Core.State
         public event Action<string, ItemCategory>? OnItemUnlocked;
         public event Action<ItemUnlockPacket>? OnOutgoingItemUnlockPacket;
 
+        /// <summary>
+        /// Handles a local item discovery by numeric ID.
+        /// </summary>
+        /// <param name="itemNumericId">Numeric item identifier.</param>
+        /// <param name="category">Item category.</param>
+        /// <param name="transactionId">Optional transaction ID for deduplication.</param>
         public void OnLocalItemDiscovered(int itemNumericId, ItemCategory category, Guid? transactionId = null)
         {
             OnLocalItemDiscovered(itemNumericId.ToString(), category, transactionId);
         }
 
+        /// <summary>
+        /// Handles a local item discovery by string ID.
+        /// </summary>
+        /// <param name="itemId">String item identifier.</param>
+        /// <param name="category">Item category.</param>
+        /// <param name="transactionId">Optional transaction ID for deduplication.</param>
         public void OnLocalItemDiscovered(string itemId, ItemCategory category, Guid? transactionId = null)
         {
             try
@@ -105,10 +122,15 @@ namespace SilksongCoop.Core.State
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[InventorySyncService] OnLocalItemDiscovered error: {ex.Message}");
+                Log($"[InventorySyncService] OnLocalItemDiscovered error: {ex.Message}");
             }
         }
 
+        /// <summary>
+        /// Handles an incoming item unlock packet from a remote peer.
+        /// </summary>
+        /// <param name="sender">The peer that sent the packet.</param>
+        /// <param name="packet">The item unlock packet to process.</param>
         public void HandleItemUnlockPacket(NetworkPeerId sender, ItemUnlockPacket packet)
         {
             try
@@ -137,10 +159,14 @@ namespace SilksongCoop.Core.State
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[InventorySyncService] HandleItemUnlockPacket error: {ex.Message}");
+                Log($"[InventorySyncService] HandleItemUnlockPacket error: {ex.Message}");
             }
         }
 
+        /// <summary>
+        /// Sets the local player's equipped crest.
+        /// </summary>
+        /// <param name="crestId">The crest identifier to equip.</param>
         public void SetLocalEquippedCrest(string crestId)
         {
             lock (_syncLock)
@@ -149,6 +175,10 @@ namespace SilksongCoop.Core.State
             }
         }
 
+        /// <summary>
+        /// Sets the local player's equipped tools.
+        /// </summary>
+        /// <param name="toolIds">Collection of tool identifiers to equip.</param>
         public void SetLocalEquippedTools(IEnumerable<string> toolIds)
         {
             lock (_syncLock)
@@ -161,6 +191,11 @@ namespace SilksongCoop.Core.State
             }
         }
 
+        /// <summary>
+        /// Checks whether the specified item has been unlocked.
+        /// </summary>
+        /// <param name="itemId">The item identifier to check.</param>
+        /// <returns>True if the item is unlocked; otherwise, false.</returns>
         public bool IsItemUnlocked(string itemId)
         {
             if (string.IsNullOrWhiteSpace(itemId)) return false;
@@ -170,6 +205,11 @@ namespace SilksongCoop.Core.State
             }
         }
 
+        /// <summary>
+        /// Checks whether the specified transaction has already been processed.
+        /// </summary>
+        /// <param name="transactionId">The transaction identifier to check.</param>
+        /// <returns>True if the transaction has been processed; otherwise, false.</returns>
         public bool IsTransactionProcessed(Guid transactionId)
         {
             if (transactionId == Guid.Empty) return false;
@@ -198,7 +238,7 @@ namespace SilksongCoop.Core.State
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[InventorySyncService] RecordTransactionOrder error: {ex.Message}");
+                Log($"[InventorySyncService] RecordTransactionOrder error: {ex.Message}");
             }
         }
     }

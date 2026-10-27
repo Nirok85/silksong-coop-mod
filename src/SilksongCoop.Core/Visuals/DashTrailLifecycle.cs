@@ -2,6 +2,9 @@ using System;
 
 namespace SilksongCoop.Core.Visuals
 {
+    /// <summary>
+    /// Phases of the dash trail visual effect lifecycle.
+    /// </summary>
     public enum DashTrailPhase : byte
     {
         Idle = 0,
@@ -9,6 +12,9 @@ namespace SilksongCoop.Core.Visuals
         Cooldown = 2
     }
 
+    /// <summary>
+    /// Controls the lifecycle and rendering of dash trail visual effects for co-op players.
+    /// </summary>
     public interface IDashTrailController
     {
         DashTrailPhase CurrentPhase { get; }
@@ -23,6 +29,9 @@ namespace SilksongCoop.Core.Visuals
         void GetTrailColor(bool isPlayer2, out float r, out float g, out float b, out float a);
     }
 
+    /// <summary>
+    /// Manages dash trail visual effect timing and color for co-op players.
+    /// </summary>
     public class DashTrailLifecycle : IDashTrailController
     {
         public const float DefaultDashTime = 0.25f;
@@ -37,6 +46,11 @@ namespace SilksongCoop.Core.Visuals
         public float CooldownTimeRemaining => _cooldownTime;
         public bool CanTriggerDash => _phase == DashTrailPhase.Idle;
 
+        /// <summary>
+        /// Triggers a dash visual effect for the specified player.
+        /// </summary>
+        /// <param name="isAirDash">True if this is an air dash, false for ground dash.</param>
+        /// <param name="isPlayer2">True for player 2, false for player 1.</param>
         public void TriggerDash(bool isAirDash, bool isPlayer2)
         {
             if (!CanTriggerDash) return;
@@ -45,6 +59,12 @@ namespace SilksongCoop.Core.Visuals
             _cooldownTime = DefaultDashCooldown;
         }
 
+        /// <summary>
+        /// Updates the dash trail lifecycle state based on elapsed time and player state.
+        /// </summary>
+        /// <param name="deltaTime">Time elapsed since last update in seconds.</param>
+        /// <param name="isGrounded">True if the player is on the ground.</param>
+        /// <param name="isWallSliding">True if the player is wall sliding.</param>
         public void Update(float deltaTime, bool isGrounded, bool isWallSliding)
         {
             if (isGrounded || isWallSliding)
@@ -76,6 +96,9 @@ namespace SilksongCoop.Core.Visuals
             }
         }
 
+        /// <summary>
+        /// Interrupts an active dash, transitioning to cooldown phase.
+        /// </summary>
         public void InterruptDash()
         {
             if (_phase == DashTrailPhase.Active)
@@ -85,6 +108,9 @@ namespace SilksongCoop.Core.Visuals
             }
         }
 
+        /// <summary>
+        /// Resets the dash trail to idle state, clearing all timers.
+        /// </summary>
         public void Reset()
         {
             _phase = DashTrailPhase.Idle;
@@ -92,6 +118,14 @@ namespace SilksongCoop.Core.Visuals
             _cooldownTime = 0f;
         }
 
+        /// <summary>
+        /// Gets the trail color for the specified player.
+        /// </summary>
+        /// <param name="isPlayer2">True for player 2 (cyan), false for player 1 (crimson).</param>
+        /// <param name="r">Output red component [0, 1].</param>
+        /// <param name="g">Output green component [0, 1].</param>
+        /// <param name="b">Output blue component [0, 1].</param>
+        /// <param name="a">Output alpha component [0, 1].</param>
         public void GetTrailColor(bool isPlayer2, out float r, out float g, out float b, out float a)
         {
             if (isPlayer2)

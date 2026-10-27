@@ -20,6 +20,13 @@ namespace SilksongCoop.Core.Protocol
         public uint TickSequence { get; }
         public uint Timestamp { get; }
 
+        /// <summary>
+        /// Initializes a packet header with the expected magic value.
+        /// </summary>
+        /// <param name="packetId">The type of packet.</param>
+        /// <param name="channelId">The channel identifier for ordering.</param>
+        /// <param name="tickSequence">The sequence number for this channel.</param>
+        /// <param name="timestamp">The packet timestamp in milliseconds.</param>
         public PacketHeader(PacketType packetId, byte channelId, uint tickSequence, uint timestamp)
         {
             Magic = ExpectedMagic;
@@ -29,6 +36,14 @@ namespace SilksongCoop.Core.Protocol
             Timestamp = timestamp;
         }
 
+        /// <summary>
+        /// Initializes a packet header with a specified magic value for validation.
+        /// </summary>
+        /// <param name="magic">The magic value to use.</param>
+        /// <param name="packetId">The type of packet.</param>
+        /// <param name="channelId">The channel identifier.</param>
+        /// <param name="tickSequence">The sequence number.</param>
+        /// <param name="timestamp">The timestamp in milliseconds.</param>
         public PacketHeader(ushort magic, PacketType packetId, byte channelId, uint tickSequence, uint timestamp)
         {
             Magic = magic;
@@ -40,8 +55,15 @@ namespace SilksongCoop.Core.Protocol
 
         public bool IsValidMagic => Magic == ExpectedMagic;
 
+        /// <summary>
+        /// Checks whether the packet ID is a defined <see cref="PacketType"/> value.
+        /// </summary>
         public bool IsValidPacketType => Enum.IsDefined(typeof(PacketType), PacketId);
 
+        /// <summary>
+        /// Writes the header to the destination span in little-endian format.
+        /// </summary>
+        /// <param name="destination">Span to write the 12-byte header into.</param>
         public void WriteTo(Span<byte> destination)
         {
             if (destination.Length < HeaderSize)
@@ -55,6 +77,12 @@ namespace SilksongCoop.Core.Protocol
             BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(8, 4), Timestamp);
         }
 
+        /// <summary>
+        /// Attempts to read a packet header from the source span.
+        /// </summary>
+        /// <param name="source">Span containing the header bytes.</param>
+        /// <param name="header">Output header if successful.</param>
+        /// <returns>True if a valid header was read; otherwise, false.</returns>
         public static bool TryReadFrom(ReadOnlySpan<byte> source, out PacketHeader header)
         {
             header = default;
@@ -74,6 +102,11 @@ namespace SilksongCoop.Core.Protocol
             return true;
         }
 
+        /// <summary>
+        /// Reads a packet header from the source span, throwing if invalid.
+        /// </summary>
+        /// <param name="source">Span containing the header bytes.</param>
+        /// <returns>The parsed packet header.</returns>
         public static PacketHeader ReadFrom(ReadOnlySpan<byte> source)
         {
             if (!TryReadFrom(source, out var header))
@@ -81,6 +114,11 @@ namespace SilksongCoop.Core.Protocol
             return header;
         }
 
+        /// <summary>
+        /// Determines whether this header equals another header.
+        /// </summary>
+        /// <param name="other">The other header to compare.</param>
+        /// <returns>True if all header fields are equal.</returns>
         public bool Equals(PacketHeader other) =>
             Magic == other.Magic &&
             PacketId == other.PacketId &&
@@ -91,7 +129,14 @@ namespace SilksongCoop.Core.Protocol
         public override bool Equals(object? obj) => obj is PacketHeader other && Equals(other);
         public override int GetHashCode() => HashCode.Combine(Magic, PacketId, ChannelId, TickSequence, Timestamp);
 
+        /// <summary>
+        /// Determines whether two packet headers are equal.
+        /// </summary>
         public static bool operator ==(PacketHeader left, PacketHeader right) => left.Equals(right);
+        
+        /// <summary>
+        /// Determines whether two packet headers are not equal.
+        /// </summary>
         public static bool operator !=(PacketHeader left, PacketHeader right) => !left.Equals(right);
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SilksongCoop.Mod;
 
 namespace SilksongCoop.Mod.UI
 {
@@ -81,7 +82,7 @@ namespace SilksongCoop.Mod.UI
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[ConnectionHistory] Failed to load: {ex.Message}");
+                SilksongCoopPlugin.LogWarn($"[ConnectionHistory] Failed to load: {ex.Message}");
             }
         }
 
@@ -95,7 +96,7 @@ namespace SilksongCoop.Mod.UI
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[ConnectionHistory] Failed to save: {ex.Message}");
+                SilksongCoopPlugin.LogWarn($"[ConnectionHistory] Failed to save: {ex.Message}");
             }
         }
     }

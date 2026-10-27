@@ -2,14 +2,21 @@ using System;
 
 namespace SilksongCoop.Core.Protocol.Packets
 {
+    /// <summary>
+    /// Network packet representing a scene transition event.
+    /// </summary>
     public struct SceneTransitionPacket
     {
         public PacketHeader Header;
         public string TargetScene;
         public string EntryGate;
         public int SceneNameHash;
-        public byte TransitionPhase; // 0 = Started, 1 = Loaded, 2 = Ready
+        public byte TransitionPhase;
 
+        /// <summary>
+        /// Serializes this packet to the specified writer.
+        /// </summary>
+        /// <param name="writer">The packet writer to serialize to.</param>
         public void Serialize(ref PacketWriter writer)
         {
             writer.WriteHeader(Header);
@@ -19,6 +26,11 @@ namespace SilksongCoop.Core.Protocol.Packets
             writer.WriteByte(TransitionPhase);
         }
 
+        /// <summary>
+        /// Deserializes a scene transition packet from the specified reader.
+        /// </summary>
+        /// <param name="reader">The packet reader to deserialize from.</param>
+        /// <returns>The deserialized scene transition packet.</returns>
         public static SceneTransitionPacket Deserialize(ref PacketReader reader)
         {
             return new SceneTransitionPacket

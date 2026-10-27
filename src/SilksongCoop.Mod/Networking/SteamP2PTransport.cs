@@ -1,3 +1,5 @@
+// SteamP2PTransport.cs — Steamworks.NET P2P network transport using lobbies and SteamNetworking.
+// Handles lobby creation/joining, friend invites, P2P packet streaming, and connection lifecycle.
 using System;
 using SilksongCoop.Core.Networking;
 using Steamworks;
@@ -10,6 +12,8 @@ namespace SilksongCoop.Mod.Networking
     /// </summary>
     public class SteamP2PTransport : INetworkTransport
     {
+        #region Fields and State
+
         private CSteamID _lobbyId = CSteamID.Nil;
         private CSteamID _remoteSteamId = CSteamID.Nil;
         private long _connectionAttemptStartMs;
@@ -30,6 +34,10 @@ namespace SilksongCoop.Mod.Networking
         // Guards against firing OnPeerConnected more than once when both the lobby
         // membership callback and the P2P session/packet paths observe the same peer.
         private bool _peerConnectNotified;
+
+        #endregion // Fields and State
+
+        #region Events and Properties
 
         public event Action<NetworkPeerId>? OnPeerConnected;
         public event Action<NetworkPeerId, DisconnectReason>? OnPeerDisconnected;
@@ -57,6 +65,13 @@ namespace SilksongCoop.Mod.Networking
             }
         }
 
+        #endregion // Events and Properties
+
+        #region Construction
+
+        /// <summary>
+        /// Initializes a new Steam P2P transport instance.
+        /// </summary>
         public SteamP2PTransport()
         {
             ulong localId = 0;
@@ -85,6 +100,14 @@ namespace SilksongCoop.Mod.Networking
             _lobbyChatUpdateCallback = Callback<LobbyChatUpdate_t>.Create(OnLobbyChatUpdate);
         }
 
+        #endregion // Construction
+
+        #region Connection Management
+
+        /// <summary>
+        /// Starts hosting a Steam lobby for other players to join.
+        /// </summary>
+        /// <param name="port">Unused for Steam transport (lobbies are identified by Steam ID).</param>
         public void StartHost(int port = 7777)
         {
             if (!IsSteamAvailable)
@@ -97,6 +120,10 @@ namespace SilksongCoop.Mod.Networking
             SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, 2);
         }
 
+        /// <summary>
+        /// Connects to a Steam lobby using the provided lobby ID.
+        /// </summary>
+        /// <param name="addressOrCode">64-bit Steam Lobby ID as a string.</param>
         public void Connect(string addressOrCode)
         {
             if (!IsSteamAvailable)
@@ -119,6 +146,9 @@ namespace SilksongCoop.Mod.Networking
             }
         }
 
+        /// <summary>
+        /// Opens the Steam overlay invite dialog for the current lobby.
+        /// </summary>
         public void OpenInviteDialog()
         {
             if (IsSteamAvailable && _lobbyId != CSteamID.Nil)
@@ -127,6 +157,9 @@ namespace SilksongCoop.Mod.Networking
             }
         }
 
+        /// <summary>
+        /// Disconnects from the current Steam lobby and closes all P2P sessions.
+        /// </summary>
         public void Disconnect()
         {
             if (_lobbyId != CSteamID.Nil)
@@ -162,6 +195,10 @@ namespace SilksongCoop.Mod.Networking
                 _peerConnectNotified = false;
             }
         }
+
+        #endregion // Connection Management
+
+        #region Connection Notification Helpers
 
         /// <summary>
         /// Raises OnPeerConnected exactly once per session. Both the lobby-membership
@@ -210,6 +247,19 @@ namespace SilksongCoop.Mod.Networking
             }
         }
 
+        #endregion // Connection Notification Helpers
+
+        #region Data Transmission
+
+        /// <summary>
+        /// Sends data to a remote peer via Steam P2P.
+        /// </summary>
+        /// <param name="target">Target peer (ignored for Steam; sends to current remote peer).</param>
+        /// <param name="data">Data buffer to send.</param>
+        /// <param name="offset">Offset within the buffer.</param>
+        /// <param name="length">Number of bytes to send.</param>
+        /// <param name="method">Delivery method (reliable or unreliable).</param>
+        /// <param name="channel">Channel index (0-4).</param>
         public void Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
             if (!IsSteamAvailable || _remoteSteamId == CSteamID.Nil) return;
@@ -244,6 +294,13 @@ namespace SilksongCoop.Mod.Networking
             }
         }
 
+        #endregion // Data Transmission
+
+        #region Event Processing
+
+        /// <summary>
+        /// Processes Steam callbacks and polls for incoming P2P packets.
+        /// </summary>
         public void PollEvents()
         {
             if (!IsSteamAvailable) return;
@@ -314,6 +371,10 @@ namespace SilksongCoop.Mod.Networking
                 }
             }
         }
+
+        #endregion // Event Processing
+
+        #region Steam Callback Handlers
 
         private void OnLobbyCreated(LobbyCreated_t callback)
         {
@@ -461,9 +522,14 @@ namespace SilksongCoop.Mod.Networking
             }
         }
 
+        /// <summary>
+        /// Disposes the transport, disconnecting and cleaning up resources.
+        /// </summary>
         public void Dispose()
         {
             Disconnect();
         }
+
+        #endregion // Steam Callback Handlers
     }
 }

@@ -12,6 +12,10 @@ namespace SilksongCoop.Core.Protocol
         private readonly Span<byte> _buffer;
         private int _position;
 
+        /// <summary>
+        /// Initializes a new packet writer with the specified buffer.
+        /// </summary>
+        /// <param name="buffer">The buffer to write packet data into.</param>
         public PacketWriter(Span<byte> buffer)
         {
             _buffer = buffer;
@@ -21,20 +25,36 @@ namespace SilksongCoop.Core.Protocol
         public int Position => _position;
         public int Capacity => _buffer.Length;
         public int Remaining => _buffer.Length - _position;
+        
+        /// <summary>
+        /// Gets a read-only span over the bytes that have been written so far.
+        /// </summary>
         public ReadOnlySpan<byte> WrittenSpan => _buffer.Slice(0, _position);
 
+        /// <summary>
+        /// Writes a packet header to the buffer.
+        /// </summary>
+        /// <param name="header">The packet header to write.</param>
         public void WriteHeader(PacketHeader header)
         {
             header.WriteTo(_buffer.Slice(_position));
             _position += PacketHeader.HeaderSize;
         }
 
+        /// <summary>
+        /// Writes a single byte to the buffer.
+        /// </summary>
+        /// <param name="value">The byte value to write.</param>
         public void WriteByte(byte value)
         {
             EnsureCapacity(1);
             _buffer[_position++] = value;
         }
 
+        /// <summary>
+        /// Writes a 16-bit signed integer to the buffer.
+        /// </summary>
+        /// <param name="value">The Int16 value to write.</param>
         public void WriteInt16(short value)
         {
             EnsureCapacity(2);
@@ -42,6 +62,10 @@ namespace SilksongCoop.Core.Protocol
             _position += 2;
         }
 
+        /// <summary>
+        /// Writes a 16-bit unsigned integer to the buffer.
+        /// </summary>
+        /// <param name="value">The UInt16 value to write.</param>
         public void WriteUInt16(ushort value)
         {
             EnsureCapacity(2);
@@ -49,6 +73,10 @@ namespace SilksongCoop.Core.Protocol
             _position += 2;
         }
 
+        /// <summary>
+        /// Writes a 32-bit signed integer to the buffer.
+        /// </summary>
+        /// <param name="value">The Int32 value to write.</param>
         public void WriteInt32(int value)
         {
             EnsureCapacity(4);
@@ -56,6 +84,10 @@ namespace SilksongCoop.Core.Protocol
             _position += 4;
         }
 
+        /// <summary>
+        /// Writes a 32-bit unsigned integer to the buffer.
+        /// </summary>
+        /// <param name="value">The UInt32 value to write.</param>
         public void WriteUInt32(uint value)
         {
             EnsureCapacity(4);
@@ -63,6 +95,10 @@ namespace SilksongCoop.Core.Protocol
             _position += 4;
         }
 
+        /// <summary>
+        /// Writes a 64-bit signed integer to the buffer.
+        /// </summary>
+        /// <param name="value">The Int64 value to write.</param>
         public void WriteInt64(long value)
         {
             EnsureCapacity(8);
@@ -70,6 +106,10 @@ namespace SilksongCoop.Core.Protocol
             _position += 8;
         }
 
+        /// <summary>
+        /// Writes a 64-bit unsigned integer to the buffer.
+        /// </summary>
+        /// <param name="value">The UInt64 value to write.</param>
         public void WriteUInt64(ulong value)
         {
             EnsureCapacity(8);
@@ -77,6 +117,10 @@ namespace SilksongCoop.Core.Protocol
             _position += 8;
         }
 
+        /// <summary>
+        /// Writes a 32-bit floating-point value to the buffer.
+        /// </summary>
+        /// <param name="value">The float value to write.</param>
         public void WriteFloat(float value)
         {
             EnsureCapacity(4);
@@ -85,6 +129,10 @@ namespace SilksongCoop.Core.Protocol
             _position += 4;
         }
 
+        /// <summary>
+        /// Writes a 64-bit floating-point value to the buffer.
+        /// </summary>
+        /// <param name="value">The double value to write.</param>
         public void WriteDouble(double value)
         {
             EnsureCapacity(8);
@@ -93,11 +141,19 @@ namespace SilksongCoop.Core.Protocol
             _position += 8;
         }
 
+        /// <summary>
+        /// Writes a boolean value to the buffer as a single byte.
+        /// </summary>
+        /// <param name="value">The boolean value to write.</param>
         public void WriteBool(bool value)
         {
             WriteByte(value ? (byte)1 : (byte)0);
         }
 
+        /// <summary>
+        /// Writes a sequence of bytes to the buffer.
+        /// </summary>
+        /// <param name="bytes">The bytes to write.</param>
         public void WriteBytes(ReadOnlySpan<byte> bytes)
         {
             EnsureCapacity(bytes.Length);
@@ -105,6 +161,10 @@ namespace SilksongCoop.Core.Protocol
             _position += bytes.Length;
         }
 
+        /// <summary>
+        /// Writes a UTF-8 encoded string to the buffer with a length prefix.
+        /// </summary>
+        /// <param name="value">The string to write.</param>
         public void WriteString(string value)
         {
             if (value == null)
@@ -123,6 +183,10 @@ namespace SilksongCoop.Core.Protocol
             _position += byteCount;
         }
 
+        /// <summary>
+        /// Writes a 128-bit GUID to the buffer.
+        /// </summary>
+        /// <param name="guid">The GUID value to write.</param>
         public void WriteGuid(Guid guid)
         {
             EnsureCapacity(16);

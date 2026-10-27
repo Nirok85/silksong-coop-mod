@@ -18,6 +18,10 @@ namespace SilksongCoop.Mod.Settings
         public const string ToggleSpectatorCamera = "ToggleSpectatorCamera";
         public const string ToggleDiagnostics = "ToggleDiagnostics";
 
+        /// <summary>
+        /// Initializes a new keybind manager with default bindings.
+        /// </summary>
+        /// <param name="plugin">The plugin instance for config persistence.</param>
         public KeybindManager(SilksongCoopPlugin plugin)
         {
             _plugin = plugin;
@@ -50,11 +54,21 @@ namespace SilksongCoop.Mod.Settings
             }
         }
 
+        /// <summary>
+        /// Gets the keybind for the specified action.
+        /// </summary>
+        /// <param name="action">The action name.</param>
+        /// <returns>The bound key, or None if not found.</returns>
         public KeyCode GetKeybind(string action)
         {
             return _keybinds.TryGetValue(action, out var key) ? key : KeyCode.None;
         }
 
+        /// <summary>
+        /// Sets the keybind for the specified action and persists it to config.
+        /// </summary>
+        /// <param name="action">The action name.</param>
+        /// <param name="key">The key to bind.</param>
         public void SetKeybind(string action, KeyCode key)
         {
             _keybinds[action] = key;
@@ -72,12 +86,22 @@ namespace SilksongCoop.Mod.Settings
             }
         }
 
+        /// <summary>
+        /// Checks if the key for the specified action is currently pressed.
+        /// </summary>
+        /// <param name="action">The action name.</param>
+        /// <returns>True if the key is pressed, false otherwise.</returns>
         public bool IsKeyDown(string action)
         {
             var key = GetKeybind(action);
             return IsKeyTriggered(key);
         }
 
+        /// <summary>
+        /// Checks if the specified key was triggered this frame (supports both Legacy and New Input).
+        /// </summary>
+        /// <param name="key">The key to check.</param>
+        /// <returns>True if the key was triggered, false otherwise.</returns>
         public static bool IsKeyTriggered(KeyCode key)
         {
             if (key == KeyCode.None) return false;
@@ -194,11 +218,18 @@ namespace SilksongCoop.Mod.Settings
         private static bool _keyboardCurrentLogged = false;
         private static bool _newInputExceptionLogged = false;
 
+        /// <summary>
+        /// Gets a copy of all keybinds.
+        /// </summary>
+        /// <returns>Dictionary of action names to their bound keys.</returns>
         public Dictionary<string, KeyCode> GetAllKeybinds()
         {
             return new Dictionary<string, KeyCode>(_keybinds);
         }
 
+        /// <summary>
+        /// Resets all keybinds to their default values and persists them.
+        /// </summary>
         public void ResetToDefaults()
         {
             InitializeDefaults();

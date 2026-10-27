@@ -17,6 +17,10 @@ namespace SilksongCoop.Core.Interpolation
         public int Capacity => _buffer.Length;
         public int Count => _count;
 
+        /// <summary>
+        /// Initializes a new snapshot buffer with the specified capacity.
+        /// </summary>
+        /// <param name="capacity">Maximum number of snapshots to store.</param>
         public SnapshotBuffer(int capacity = DefaultCapacity)
         {
             if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
@@ -25,12 +29,20 @@ namespace SilksongCoop.Core.Interpolation
             _head = 0;
         }
 
+        /// <summary>
+        /// Clears all snapshots from the buffer.
+        /// </summary>
         public void Clear()
         {
             _count = 0;
             _head = 0;
         }
 
+        /// <summary>
+        /// Adds a snapshot to the buffer, maintaining chronological order.
+        /// Drops out-of-order or duplicate packets unless clock wrap is detected.
+        /// </summary>
+        /// <param name="snapshot">The snapshot to add.</param>
         public void AddSnapshot(TransformSnapshot snapshot)
         {
             if (_count > 0)
@@ -61,6 +73,11 @@ namespace SilksongCoop.Core.Interpolation
             }
         }
 
+        /// <summary>
+        /// Attempts to retrieve the most recent snapshot.
+        /// </summary>
+        /// <param name="latest">Output parameter for the latest snapshot.</param>
+        /// <returns>True if a snapshot was retrieved, false if buffer is empty.</returns>
         public bool TryGetLatest(out TransformSnapshot latest)
         {
             if (_count == 0)
@@ -74,6 +91,11 @@ namespace SilksongCoop.Core.Interpolation
             return true;
         }
 
+        /// <summary>
+        /// Attempts to retrieve the oldest snapshot in the buffer.
+        /// </summary>
+        /// <param name="oldest">Output parameter for the oldest snapshot.</param>
+        /// <returns>True if a snapshot was retrieved, false if buffer is empty.</returns>
         public bool TryGetOldest(out TransformSnapshot oldest)
         {
             if (_count == 0)
@@ -87,6 +109,11 @@ namespace SilksongCoop.Core.Interpolation
             return true;
         }
 
+        /// <summary>
+        /// Retrieves a snapshot by its chronological index (0 = oldest).
+        /// </summary>
+        /// <param name="chronologicalIndex">Zero-based index in chronological order.</param>
+        /// <returns>The snapshot at the specified index.</returns>
         public TransformSnapshot GetSnapshotAt(int chronologicalIndex)
         {
             if (chronologicalIndex < 0 || chronologicalIndex >= _count)
