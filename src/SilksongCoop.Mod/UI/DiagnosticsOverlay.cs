@@ -31,6 +31,22 @@ namespace SilksongCoop.Mod.UI
         private static Texture2D? _bgTex;
         private static Texture2D? _gridTex;
 
+        // P2: cached GUIStyles (created once — OnGUI runs several times per frame)
+        private GUIStyle? _titleStyle;
+        private GUIStyle? _summaryStyle;
+        private GUIStyle? _labelStyle;
+        private GUIStyle? _valueStyle;
+
+        private GUIStyle CreateOverlayStyle(int fontSize, FontStyle style, Color textColor)
+        {
+            return new GUIStyle(GUI.skin.label)
+            {
+                fontSize = fontSize,
+                fontStyle = style,
+                normal = { textColor = textColor }
+            };
+        }
+
         #endregion
 
         #region Properties
@@ -102,12 +118,9 @@ namespace SilksongCoop.Mod.UI
                 GUI.DrawTexture(new Rect(x, y, TotalWidth, TotalHeight), _bgTex);
 
                 // Title
-                var titleStyle = new GUIStyle(GUI.skin.label)
-                {
-                    fontSize = 13,
-                    fontStyle = FontStyle.Bold,
-                    normal = { textColor = new Color(0.95f, 0.85f, 0.55f) }
-                };
+                // P2: cached styles — the old code allocated 8 new GUIStyle objects on
+                // EVERY OnGUI call (2-4 per frame) inside the overlay's draw path.
+                var titleStyle = _titleStyle ??= CreateOverlayStyle(13, FontStyle.Bold, new Color(0.95f, 0.85f, 0.55f));
                 GUI.Label(new Rect(x + Padding, y + 6, TotalWidth - Padding * 2, 18),
                     "Network Diagnostics [F11]", titleStyle);
 
@@ -135,11 +148,7 @@ namespace SilksongCoop.Mod.UI
                 cursorY += GraphHeight + RowSpacing;
 
                 // Summary line
-                var summaryStyle = new GUIStyle(GUI.skin.label)
-                {
-                    fontSize = 11,
-                    normal = { textColor = Color.white }
-                };
+                var summaryStyle = _summaryStyle ??= CreateOverlayStyle(11, FontStyle.Normal, Color.white);
                 GUI.Label(new Rect(x + Padding, cursorY, TotalWidth - Padding * 2, 20),
                     $"Session: {_diagnostics.SessionDuration:F0}s  |  Pkt out: {_diagnostics.PacketsOutPerSecond}/s  in: {_diagnostics.PacketsInPerSecond}/s",
                     summaryStyle);
@@ -164,19 +173,20 @@ namespace SilksongCoop.Mod.UI
             if (_whiteTex == null || _gridTex == null) return;
 
             // Row label + current value
-            var labelStyle = new GUIStyle(GUI.skin.label)
+            // P2: cached styles; the per-graph color is applied via GUI.color (multiplied
+            // into the label tint) instead of a fresh GUIStyle per call.
+            var labelStyle = _labelStyle ??= CreateOverlayStyle(11, FontStyle.Normal, Color.white);
+            if (_valueStyle == null)
             {
-                fontSize = 11,
-                normal = { textColor = lineColor }
-            };
-            GUI.Label(new Rect(x, y - 2, 40, 14), label, labelStyle);
+                _valueStyle = CreateOverlayStyle(11, FontStyle.Normal, Color.white);
+                _valueStyle.alignment = TextAnchor.UpperRight;
+            }
+            var valueStyle = _valueStyle;
 
-            var valueStyle = new GUIStyle(GUI.skin.label)
-            {
-                fontSize = 11,
-                alignment = TextAnchor.UpperRight,
-                normal = { textColor = Color.white }
-            };
+            GUI.color = lineColor;
+            GUI.Label(new Rect(x, y - 2, 40, 14), label, labelStyle);
+            GUI.color = Color.white;
+
             GUI.Label(new Rect(x + GraphWidth - 60, y - 2, 60, 14),
                 $"{currentValue:F1}{unit}", valueStyle);
 

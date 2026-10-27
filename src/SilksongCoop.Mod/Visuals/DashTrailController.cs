@@ -115,7 +115,10 @@ namespace SilksongCoop.Mod.Visuals
 
         private void Awake()
         {
-            _sourceSprite = GetComponent<tk2dSprite>();
+            // BUG-B8: Hornet's tk2dSprite lives on the animator's child object, not on the
+            // hero root this component is attached to — a plain GetComponent() returned
+            // null and the dash ghost trail silently never emitted.
+            _sourceSprite = GetComponent<tk2dSprite>() ?? GetComponentInChildren<tk2dSprite>();
             SetupRimLight();
         }
 

@@ -17,6 +17,17 @@ namespace SilksongCoop.Core.Protocol
         /// </summary>
         public static bool ValidateTransformSync(TransformSyncPacket packet)
         {
+            // BUG-C2: reject NaN / Infinity — Math.Abs(NaN) > limit evaluates to false,
+            // so a corrupted packet could poison the Transform matrix and break Unity's
+            // 2D physics for the session.
+            if (float.IsNaN(packet.PositionX) || float.IsInfinity(packet.PositionX) ||
+                float.IsNaN(packet.PositionY) || float.IsInfinity(packet.PositionY) ||
+                float.IsNaN(packet.VelocityX) || float.IsInfinity(packet.VelocityX) ||
+                float.IsNaN(packet.VelocityY) || float.IsInfinity(packet.VelocityY))
+            {
+                return false;
+            }
+
             // Validate position is within reasonable game bounds
             if (Math.Abs(packet.PositionX) > MaxPositionValue || Math.Abs(packet.PositionY) > MaxPositionValue)
             {

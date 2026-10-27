@@ -135,6 +135,61 @@ namespace SilksongCoop.Core.State
         }
 
         /// <summary>
+        /// BUG-B5: handles a repeating counter pseudo-item (heart pieces / silk parts).
+        /// Unlike regular unlocks, counter values RECUR across upgrade cycles ("heartPieces:1"
+        /// is reported again after a completed mask reset the count to 0), so the
+        /// once-per-item unlock dedup must not swallow them. Transaction dedup alone
+        /// still protects against retransmit/echo duplicates.
+        /// </summary>
+        public void OnLocalCounterChanged(string itemId, ItemCategory category, Guid? transactionId = null)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(itemId)) return;
+                if (itemId.Length > 256 || Encoding.UTF8.GetByteCount(itemId) > 400) return;
+
+                var tx = transactionId ?? Guid.NewGuid();
+                if (tx == Guid.Empty) return;
+
+                uint seq;
+                uint ts = (uint)Environment.TickCount;
+
+                lock (_syncLock)
+                {
+                    if (_processedTransactions.Contains(tx)) return;
+
+                    RecordTransaction(tx);
+                    seq = ++_sequenceCounter;
+                }
+
+                var packet = new ItemUnlockPacket
+                {
+                    Header = new PacketHeader(PacketType.ItemUnlockSync, 3, seq, ts),
+                    ItemId = itemId,
+                    Category = category,
+                    TransactionId = tx,
+                    Timestamp = ts
+                };
+
+                OnOutgoingItemUnlockPacket?.Invoke(packet);
+            }
+            catch (Exception ex)
+            {
+                Log($"[InventorySyncService] OnLocalCounterChanged error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// BUG-B5: identifies counter pseudo-items whose values repeat across upgrade cycles
+        /// and therefore bypass the once-per-item unlock dedup.
+        /// </summary>
+        private static bool IsCounterItemId(string itemId)
+        {
+            return itemId.StartsWith("heartPieces:", StringComparison.Ordinal)
+                || itemId.StartsWith("silkParts:", StringComparison.Ordinal);
+        }
+
+        /// <summary>
         /// Handles an incoming item unlock packet from a remote peer.
         /// </summary>
         /// <param name="sender">The peer that sent the packet.</param>
@@ -156,7 +211,9 @@ namespace SilksongCoop.Core.State
                     }
 
                     RecordTransactionOrder(packet.TransactionId);
-                    isNewItem = _unlockedItems.Add(packet.ItemId);
+                    // BUG-B5: counter pseudo-items must not be deduplicated by item id —
+                    // the same value recurs legitimately across upgrade cycles.
+                    isNewItem = IsCounterItemId(packet.ItemId) || _unlockedItems.Add(packet.ItemId);
                 }
 
                 if (isNewItem)

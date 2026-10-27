@@ -108,15 +108,10 @@ namespace SilksongCoop.Mod.Revive
                     }
                 }
 
-                // Fallback: PlayerData hazardRespawnLocation
-                var pd = PlayerData.instance;
-                if (pd != null && pd.hazardRespawnLocation != Vector3.zero)
-                {
-                    safeX = pd.hazardRespawnLocation.x;
-                    safeY = pd.hazardRespawnLocation.y;
-                    return true;
-                }
-
+                // BUG-B3: the old hazardRespawnLocation fallback returned TRUE with a stale
+                // hazard marker (possibly from another room entirely). Report failure and
+                // let the caller use the partner's own position — a live partner is standing
+                // there, so it is ground-truth safe.
                 safeX = partnerX;
                 safeY = partnerY + 0.5f;
                 return false;

@@ -263,6 +263,26 @@ namespace SilksongCoop.Core.State
         }
 
         /// <summary>
+        /// BUG-A4: resynchronizes the death epoch for a newly established session. The epoch
+        /// was never transmitted over the wire, so a client reconnecting to a host that had
+        /// already survived bench wipes carried a stale epoch and every incoming death
+        /// packet was silently dropped — both players then waited for a revive that could
+        /// never arrive. Both peers reset to epoch 1 at connect, keeping them in lockstep.
+        /// </summary>
+        public void SynchronizeEpochForNewSession()
+        {
+            lock (_lock)
+            {
+                _currentState = DeathState.Alive;
+                _isPartnerAlive = true;
+                _remainingSpectatorTime = 0f;
+                _currentEpoch = 1;
+                _isPostBenchRespawn = false;
+                _postBenchRespawnTimer = 0f;
+            }
+        }
+
+        /// <summary>
         /// Handles incoming death lifecycle packets from the remote peer.
         /// </summary>
         /// <param name="sender">The peer that sent the packet.</param>
@@ -271,8 +291,15 @@ namespace SilksongCoop.Core.State
         {
             try
             {
-                // Fix: Check epoch to filter stale packets from previous death/revive cycles
-                if (packet.Epoch != CurrentEpoch)
+                // BUG-A4: epochs are compared against our counter, but the peer may have
+                // survived more wipe cycles than we tracked (e.g. we reconnected mid-session).
+                // Adopt a HIGHER epoch so the session resynchronizes instead of silently
+                // dropping every death event; lower epochs remain stale and are ignored.
+                if (packet.Epoch > CurrentEpoch)
+                {
+                    CurrentEpoch = packet.Epoch;
+                }
+                else if (packet.Epoch != CurrentEpoch)
                 {
                     // Stale packet from a different epoch, ignore
                     return;

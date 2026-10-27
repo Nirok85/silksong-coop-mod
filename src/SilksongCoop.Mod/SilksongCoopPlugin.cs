@@ -38,7 +38,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "2.0.7";
+        public const string PluginVersion = "2.0.8";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -98,6 +98,11 @@ namespace SilksongCoop.Mod
         // already runs the original method, so starting it again would reload the bench twice.
         private bool _insidePlayerDeadHook;
 
+        // BUG-A1: true while the mod itself disabled the hero's physics (EnterSpectatorMode).
+        // The game's bench-respawn flow never restores OUR disables, so OnBenchRespawnCompleted
+        // must undo them — otherwise the hero falls through geometry with no input.
+        private bool _spectatorActive;
+
         private ulong? _pendingSteamLobbyJoin;
 
         // Outgoing transform replication. Start above one interval so the first
@@ -152,15 +157,16 @@ namespace SilksongCoop.Mod
             QualityPresets = new QualityPresetManager(this);
             Logger.LogInfo($"[Coop] Settings managers initialized: Quality={QualityPresets.CurrentLevel}");
 
-            // Setup outgoing network callbacks - use stackalloc to avoid heap allocation pressure
+            // Setup outgoing network callbacks
             VitalsSync.OnOutgoingVitalsBroadcast += packet =>
             {
                 if (SessionState.RemotePeerId.HasValue && ActiveTransport != null)
                 {
-                    Span<byte> buffer = stackalloc byte[64];
+                    // P3: heap buffer passed directly (no stackalloc + ToArray copy).
+                    byte[] buffer = new byte[64];
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
-                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer.ToArray(), 0, writer.Position, DeliveryMethod.ReliableOrdered, 2);
+                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, 2);
                     MenuUI?.Diagnostics?.RecordSent(writer.Position);
                 }
             };
@@ -169,10 +175,11 @@ namespace SilksongCoop.Mod
             {
                 if (SessionState.RemotePeerId.HasValue && ActiveTransport != null)
                 {
-                    Span<byte> buffer = stackalloc byte[64];
+                    // P3: heap buffer passed directly (no stackalloc + ToArray copy).
+                    byte[] buffer = new byte[64];
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
-                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer.ToArray(), 0, writer.Position, DeliveryMethod.ReliableOrdered, 3);
+                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, 3);
                     MenuUI?.Diagnostics?.RecordSent(writer.Position);
                 }
             };
@@ -181,10 +188,11 @@ namespace SilksongCoop.Mod
             {
                 if (SessionState.RemotePeerId.HasValue && ActiveTransport != null)
                 {
-                    Span<byte> buffer = stackalloc byte[64];
+                    // P3: heap buffer passed directly (no stackalloc + ToArray copy).
+                    byte[] buffer = new byte[64];
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
-                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer.ToArray(), 0, writer.Position, DeliveryMethod.ReliableOrdered, 4);
+                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, 4);
                     MenuUI?.Diagnostics?.RecordSent(writer.Position);
                 }
             };
@@ -193,10 +201,11 @@ namespace SilksongCoop.Mod
             {
                 if (SessionState.RemotePeerId.HasValue && ActiveTransport != null)
                 {
-                    Span<byte> buffer = stackalloc byte[512];
+                    // P3: heap buffer passed directly (no extra ToArray copy).
+                    byte[] buffer = new byte[512];
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
-                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer.ToArray(), 0, writer.Position, DeliveryMethod.ReliableOrdered, 3);
+                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, 3);
                     MenuUI?.Diagnostics?.RecordSent(writer.Position);
                 }
             };
@@ -466,6 +475,8 @@ namespace SilksongCoop.Mod
                             ren.enabled = false;
                         }
                     }
+
+                    _spectatorActive = true;
                 }
 
                 // Tether CameraTarget to free mode so it can smoothly follow remote partner
@@ -510,6 +521,7 @@ namespace SilksongCoop.Mod
                     }
                 }
 
+                _spectatorActive = false;
                 var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
                 camTarget?.EndFreeMode();
                 GameManager.instance?.cameraCtrl?.PositionToHero(forceDirect: false);
@@ -533,6 +545,20 @@ namespace SilksongCoop.Mod
                 if (hero == null || hero.gameObject == null)
                 {
                     Logger.LogWarning("[Coop] Cannot revive: HeroController or gameObject is null");
+                    return;
+                }
+
+                // BUG-B4: never teleport across scenes — if the partner moved to another room
+                // while we were dead/spectating, their coordinates are meaningless (and
+                // likely wall-embedded) inside our current scene. Fall back to a team-wipe
+                // bench respawn, which always lands on the local scene's bench.
+                if (CloneSpawner != null &&
+                    SessionState?.RemotePeerId != null &&
+                    !CloneSpawner.IsRemoteInSameScene(SessionState.RemotePeerId.Value))
+                {
+                    Logger.LogInfo("[Coop] Partner is in a different scene — falling back to bench respawn");
+                    ExitSpectatorMode();
+                    DeathCoordinator?.ForceBenchRespawn();
                     return;
                 }
 
@@ -709,6 +735,25 @@ namespace SilksongCoop.Mod
             {
                 Interlocked.Exchange(ref _teamWipeInProgress, 0);
 
+                // BUG-A1: if the mod itself disabled the hero's physics while spectating
+                // (gravity off, control relinquished, colliders off), the game's own
+                // bench-respawn flow will NOT undo those — the hero would fall through the
+                // room with no input after a team-wipe bench reload. Restore everything.
+                if (_spectatorActive)
+                {
+                    _spectatorActive = false;
+                    var heroRestore = HeroController.instance;
+                    if (heroRestore != null && heroRestore.gameObject != null)
+                    {
+                        heroRestore.AffectedByGravity(true);
+                        heroRestore.RegainControl(allowInput: true);
+                        foreach (var col in heroRestore.gameObject.GetComponentsInChildren<Collider2D>())
+                        {
+                            if (col != null) col.enabled = true;
+                        }
+                    }
+                }
+
                 var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
                 camTarget?.EndFreeMode();
 
@@ -767,12 +812,13 @@ namespace SilksongCoop.Mod
                     Parameter = parameter
                 };
 
-                Span<byte> buffer = stackalloc byte[64];
+                // P3: heap buffer passed directly (no stackalloc + ToArray copy).
+                byte[] buffer = new byte[64];
                 var writer = new PacketWriter(buffer);
                 packet.Serialize(ref writer);
                 ActiveTransport.Send(
                     SessionState.RemotePeerId.Value,
-                    buffer.ToArray(),
+                    buffer,
                     0,
                     writer.Position,
                     DeliveryMethod.ReliableOrdered,
@@ -806,12 +852,15 @@ namespace SilksongCoop.Mod
                     AtBench = facingRight
                 };
 
-                Span<byte> buffer = stackalloc byte[128];
+                // BUG-C1: scene and marker names can exceed 128 bytes — a stack buffer
+                // threw in EnsureCapacity and silently aborted the sync (P3: heap buffer
+                // passed directly, no extra ToArray copy).
+                byte[] buffer = new byte[512];
                 var writer = new PacketWriter(buffer);
                 packet.Serialize(ref writer);
                 ActiveTransport.Send(
                     SessionState.RemotePeerId.Value,
-                    buffer.ToArray(),
+                    buffer,
                     0,
                     writer.Position,
                     DeliveryMethod.ReliableOrdered,
@@ -859,7 +908,7 @@ namespace SilksongCoop.Mod
             try
             {
                 if (SessionState?.IsConnected != true) return;
-                InventorySync?.OnLocalItemDiscovered($"heartPieces:{count}", ItemCategory.KeyItem);
+                InventorySync?.OnLocalCounterChanged($"heartPieces:{count}", ItemCategory.KeyItem);
             }
             catch (Exception ex)
             {
@@ -876,7 +925,7 @@ namespace SilksongCoop.Mod
             try
             {
                 if (SessionState?.IsConnected != true) return;
-                InventorySync?.OnLocalItemDiscovered($"silkParts:{count}", ItemCategory.KeyItem);
+                InventorySync?.OnLocalCounterChanged($"silkParts:{count}", ItemCategory.KeyItem);
             }
             catch (Exception ex)
             {
@@ -931,15 +980,10 @@ namespace SilksongCoop.Mod
                     InventorySync.OnLocalItemDiscovered(pd.CurrentCrestID, ItemCategory.Crest);
                 }
 
-                // 4. Heart pieces & silk parts
-                if (pd.heartPieces > 0)
-                {
-                    BroadcastHeartPieces(pd.heartPieces);
-                }
-                if (pd.silkParts > 0)
-                {
-                    BroadcastSilkParts(pd.silkParts);
-                }
+                // 4. Heart pieces & silk parts (BUG-B5: counters bypass the unlock dedup —
+                // the same value recurs in every upgrade cycle)
+                BroadcastHeartPieces(pd.heartPieces);
+                BroadcastSilkParts(pd.silkParts);
             }
             catch (Exception ex)
             {
@@ -973,39 +1017,37 @@ namespace SilksongCoop.Mod
                         return;
                     }
 
-                    // MED-02: Partial health and silk fragment synchronizations
-                    if (itemId.StartsWith("heartPieces:"))
+                // MED-02: Partial health and silk fragment synchronizations
+                // BUG-B5: counter values repeat across upgrade cycles (a new mask shard
+                // reports "heartPieces:1" again after the previous cycle reset to 0), so
+                // apply the received count ABSOLUTELY instead of a greater-than guard —
+                // the guard permanently blocked the post-mask reset and stalled upgrades.
+                if (itemId.StartsWith("heartPieces:"))
+                {
+                    if (int.TryParse(itemId.Substring("heartPieces:".Length), out int pieces))
                     {
-                        if (int.TryParse(itemId.Substring("heartPieces:".Length), out int pieces))
+                        playerData.heartPieces = pieces;
+                        if (playerData.heartPieces >= 4)
                         {
-                            if (pieces > playerData.heartPieces)
-                            {
-                                playerData.heartPieces = pieces;
-                                if (playerData.heartPieces >= 4)
-                                {
-                                    HeroController.instance?.AddToMaxHealth(1);
-                                    playerData.heartPieces -= 4;
-                                }
-                            }
+                            HeroController.instance?.AddToMaxHealth(1);
+                            playerData.heartPieces -= 4;
                         }
-                        return;
                     }
-                    if (itemId.StartsWith("silkParts:"))
+                    return;
+                }
+                if (itemId.StartsWith("silkParts:"))
+                {
+                    if (int.TryParse(itemId.Substring("silkParts:".Length), out int parts))
                     {
-                        if (int.TryParse(itemId.Substring("silkParts:".Length), out int parts))
+                        playerData.silkParts = parts;
+                        if (playerData.silkParts >= 3)
                         {
-                            if (parts > playerData.silkParts)
-                            {
-                                playerData.silkParts = parts;
-                                if (playerData.silkParts >= 3)
-                                {
-                                    HeroController.instance?.AddToMaxSilk(1);
-                                    playerData.silkParts -= 3;
-                                }
-                            }
+                            HeroController.instance?.AddToMaxSilk(1);
+                            playerData.silkParts -= 3;
                         }
-                        return;
                     }
+                    return;
+                }
 
                 switch (category)
                 {
@@ -1120,7 +1162,13 @@ namespace SilksongCoop.Mod
 
                     RefreshLocalVisuals(!transport.IsHost);
 
-                    if (transport.IsHost && VitalsSync != null)
+                    // BUG-A2: BOTH sides must initialize and broadcast — previously only the
+                    // host did, so the host never received the client's vitals, currency or
+                    // inventory and its HUD stayed empty with 0-level remote damage.
+                    // BUG-A4: also resync the death epoch at session start.
+                    DeathCoordinator?.SynchronizeEpochForNewSession();
+
+                    if (VitalsSync != null)
                     {
                         var pd = PlayerData.instance;
                         if (pd != null)
@@ -1241,7 +1289,11 @@ namespace SilksongCoop.Mod
                             var trans = TransformSyncPacket.Deserialize(ref reader);
                             if (!PacketValidator.ValidateTransformSync(trans)) return;
                             int localSceneHash = GameManager.instance != null ? GameManager.instance.sceneNameHash : 0;
-                            bool isSameScene = (trans.SceneNameHash == 0 || localSceneHash == 0 || trans.SceneNameHash == localSceneHash);
+                            // BUG-B6: strict equality — while a scene is loading the local hash
+                            // is 0, and the old "either side 0 counts as same scene" rule made
+                            // the clone pop in and flicker on the black loading screen. Hide
+                            // until both hashes are known and equal.
+                            bool isSameScene = trans.SceneNameHash != 0 && trans.SceneNameHash == localSceneHash;
                             CloneSpawner?.UpdateRemoteTransform(
                                 peer,
                                 trans.PositionX, trans.PositionY,
@@ -1402,12 +1454,14 @@ namespace SilksongCoop.Mod
                     SceneNameHash = localSceneHash
                 };
 
-                Span<byte> buffer = stackalloc byte[64];
+                // P3: heap buffer passed directly — the former stackalloc+ToArray pattern
+                // allocated twice per packet (120 allocs/sec on the transform hot path).
+                byte[] buffer = new byte[64];
                 var writer = new PacketWriter(buffer);
                 packet.Serialize(ref writer);
                 ActiveTransport.Send(
                     SessionState.RemotePeerId.Value,
-                    buffer.ToArray(),
+                    buffer,
                     0,
                     writer.Position,
                     DeliveryMethod.Unreliable,
@@ -1444,12 +1498,13 @@ namespace SilksongCoop.Mod
                     TransitionPhase = 0 // 0 = departure (scene left), 1 = arrival
                 };
 
-                Span<byte> buffer = stackalloc byte[128];
+                // P3: heap buffer passed directly (see BroadcastLocalTransform).
+                byte[] buffer = new byte[64];
                 var writer = new PacketWriter(buffer);
                 packet.Serialize(ref writer);
                 ActiveTransport.Send(
                     SessionState.RemotePeerId.Value,
-                    buffer.ToArray(),
+                    buffer,
                     0,
                     writer.Position,
                     DeliveryMethod.ReliableOrdered,
@@ -1570,13 +1625,13 @@ namespace SilksongCoop.Mod
             try
             {
                 StopAllCoroutines();
-                // Disconnect both transports
+                // BUG-C3: disconnect BOTH transports — previously only the active one was
+                // disconnected, so a Steam session leaked the UDP socket and held port
+                // 7777 until the game process exited.
+                UdpTransport?.Disconnect();
+                SteamTransport?.Disconnect();
                 ActiveTransport?.Disconnect();
                 CancelReconnect();
-                if (SteamTransport != null && ActiveTransport != SteamTransport)
-                {
-                    SteamTransport.Disconnect();
-                }
                 
                 _harmony?.UnpatchSelf();
             }

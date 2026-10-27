@@ -23,6 +23,10 @@ namespace SilksongCoop.Mod.Visuals
         private float _lastAppliedHueShift = -1f;
         private bool _needsUpdate = true;
 
+        // P1: frame throttle for the periodic LateUpdate re-assertion
+        private const int EnforceIntervalFrames = 30;
+        private int _lastEnforceFrame = -1000;
+
         public bool IsPlayer2 => _isPlayer2;
         public float HueShift => _hueShift;
 
@@ -66,14 +70,14 @@ namespace SilksongCoop.Mod.Visuals
         {
             try
             {
-                // Enforce palette swap in LateUpdate after all animations and state changes
-                if (_isPlayer2)
+                // P1: apply immediately when flagged, and re-assert the palette only every
+                // 30 frames. The old code re-applied EVERY frame, whose `ren.materials`
+                // getter allocates managed arrays (and instances materials) 60+ times per
+                // second — heavy GC churn / native memory pressure during long sessions.
+                if (_needsUpdate || Time.frameCount - _lastEnforceFrame >= EnforceIntervalFrames)
                 {
                     ApplyPaletteSwap();
-                }
-                else if (_needsUpdate)
-                {
-                    ApplyPaletteSwap();
+                    _lastEnforceFrame = Time.frameCount;
                 }
             }
             catch (Exception ex)

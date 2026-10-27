@@ -67,6 +67,7 @@ namespace SilksongCoop.Mod.UI
         private GUIStyle? _spectSubStyle;
         private GUIStyle? _wipeTitleStyle;
         private GUIStyle? _wipeSubStyle;
+        private GUIStyle? _placeholderStyle;
 
         public ToastNotifier Toasts => _toasts;
         public NetworkDiagnostics Diagnostics => _diagnostics;
@@ -332,7 +333,7 @@ namespace SilksongCoop.Mod.UI
         /// </summary>
         private void EnsureHudStyles()
         {
-            if (_hudNameStyle != null && _barLabelStyle != null) return;
+            if (_hudNameStyle != null && _barLabelStyle != null && _placeholderStyle != null) return;
             var title = _styleTitle ?? Skin.label;
             var label = Skin.label;
             _hudNameStyle = new GUIStyle(title) { fontSize = 11 };
@@ -341,6 +342,10 @@ namespace SilksongCoop.Mod.UI
             _spectSubStyle = new GUIStyle(label) { fontSize = 13, alignment = TextAnchor.MiddleCenter };
             _wipeTitleStyle = new GUIStyle(title) { fontSize = 15, alignment = TextAnchor.MiddleCenter };
             _wipeSubStyle = new GUIStyle(label) { fontSize = 12, alignment = TextAnchor.MiddleCenter };
+            _placeholderStyle = new GUIStyle(Skin.textField)
+            {
+                normal = { textColor = SilksongSkin.TextMuted }
+            };
         }
 
         private void DrawSpectatorOverlay()
@@ -558,29 +563,19 @@ namespace SilksongCoop.Mod.UI
             GUILayout.BeginHorizontal();
             GUILayout.Label("Address:", GUILayout.Width(60));
 
-            if (string.IsNullOrEmpty(_inputAddressOrCode))
-            {
-                // Draw placeholder overlay
-                var fieldRect = GUILayoutUtility.GetRect(0f, 10000f, 24f, 24f);
+            // BUG-U1: single named TextField for BOTH empty and non-empty states. The old
+            // code switched to an unnamed GUILayout.TextField as soon as the value became
+            // non-empty, which dropped keyboard focus after the first typed character.
+            var fieldRect = GUILayoutUtility.GetRect(0f, 10000f, 24f, 24f);
+            GUI.SetNextControlName("CoopAddrField");
+            _inputAddressOrCode = GUI.TextField(fieldRect, _inputAddressOrCode, Skin.textField);
 
-                // BUG-18: the control must be named BEFORE it is created, otherwise
-                // GetNameOfFocusedControl() can never return "CoopAddrField" and the
-                // placeholder logic never fires.
-                GUI.SetNextControlName("CoopAddrField");
-                _inputAddressOrCode = GUI.TextField(fieldRect, _inputAddressOrCode, Skin.textField);
-
-                if (GUI.GetNameOfFocusedControl() != "CoopAddrField")
-                {
-                    // Draw placeholder text
-                    GUI.color = SilksongSkin.TextMuted;
-                    var phStyle = new GUIStyle(Skin.textField) { normal = { textColor = SilksongSkin.TextMuted } };
-                    GUI.Label(fieldRect, "192.168.1.5:7777 or SK-...", phStyle);
-                    GUI.color = Color.white;
-                }
-            }
-            else
+            if (string.IsNullOrEmpty(_inputAddressOrCode) && GUI.GetNameOfFocusedControl() != "CoopAddrField")
             {
-                _inputAddressOrCode = GUILayout.TextField(_inputAddressOrCode, GUILayout.Height(24));
+                // Draw placeholder text on top of the empty, unfocused field
+                GUI.color = SilksongSkin.TextMuted;
+                GUI.Label(fieldRect, "192.168.1.5:7777 or SK-...", _placeholderStyle ?? Skin.textField);
+                GUI.color = Color.white;
             }
             GUILayout.EndHorizontal();
 
@@ -1009,10 +1004,14 @@ namespace SilksongCoop.Mod.UI
                 }
 
                 int udpPort = plugin.DefaultUdpPortConfig?.Value ?? 7777;
+                string code = RoomCodeCodec.Encode(GetLocalIpAddress(), udpPort);
+
+                // BUG-B2: arm the HMAC challenge-response — without SetRoomCode the host
+                // silently ran in unauthenticated mode and the room code was never verified.
+                _udpTransport.SetRoomCode(code);
                 _udpTransport.StartHost(udpPort);
 
                 _currentHostAddress = $"{GetLocalIpAddress()}:{udpPort}";
-                string code = RoomCodeCodec.Encode(GetLocalIpAddress(), udpPort);
 
                 _sessionState?.SetHosting(_udpTransport.LocalPeerId, code);
                 plugin.SetActiveTransport(_udpTransport);
@@ -1124,10 +1123,17 @@ namespace SilksongCoop.Mod.UI
                 if (_udpTransport == null) { _toasts.ShowError("UDP transport not available"); return; }
 
                 string connectAddress = addressOrCode.Trim();
-                if (!connectAddress.Contains(":") && !connectAddress.StartsWith("SK-"))
+                // BUG-U2: a valid room code may be pasted WITHOUT its "SK-" prefix —
+                // the codec normalizes and decodes it anyway. Only fall back to appending
+                // the default port when the input is NOT a decodable room code; appending
+                // a ":7777" suffix to a bare 12-char code broke Base32 decoding.
+                if (!RoomCodeCodec.TryDecode(connectAddress, out _, out _))
                 {
-                    int defaultPort = plugin.DefaultUdpPortConfig?.Value ?? 7777;
-                    connectAddress = $"{connectAddress}:{defaultPort}";
+                    if (!connectAddress.Contains(":"))
+                    {
+                        int defaultPort = plugin.DefaultUdpPortConfig?.Value ?? 7777;
+                        connectAddress = $"{connectAddress}:{defaultPort}";
+                    }
                 }
 
                 _udpTransport.Connect(connectAddress);

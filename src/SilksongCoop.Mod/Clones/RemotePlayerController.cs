@@ -28,6 +28,12 @@ namespace SilksongCoop.Mod.Clones
         #region Fields and Properties
 
         private const double TargetDelayMs = 50.0; // 50ms adaptive jitter delay window
+        private const double MaxAdaptiveDelayMs = 300.0; // P4: never drift further behind than this
+
+        // P4: current interpolation delay — starts at the 50 ms floor and adapts to the
+        // measured RTT via SnapshotBuffer.ComputeAdaptiveDelay (fixed 50 ms starved the
+        // interpolation window at WAN pings above ~80 ms and forced constant extrapolation).
+        private double _interpolationDelayMs = TargetDelayMs;
 
         private NetworkPeerId _peerId;
         private bool _isPlayer2;
@@ -332,27 +338,33 @@ namespace SilksongCoop.Mod.Clones
                     for (int i = 0; i < colliders.Length; i++)
                     {
                         var col = colliders[i];
-                        if (col == null || col.isTrigger) continue;
+                        if (col == null) continue;
+
+                        // BUG-B7: enemy hurtboxes in Silksong are TRIGGER colliders on
+                        // child objects with a HealthManager — skipping every trigger made
+                        // remote slashes pass through all enemies. A trigger only counts as
+                        // a hit when it belongs to a damageable entity; other triggers
+                        // (volumes, zone markers, own hitboxes) are still ignored.
                         var hm = col.GetComponent<HealthManager>() ?? col.GetComponentInParent<HealthManager>();
-                        if (hm != null && !hm.GetIsDead())
+                        if (hm == null) continue;
+                        if (hm.GetIsDead()) continue;
+
+                        using (RemoteApplyScope.Begin())
                         {
-                            using (RemoteApplyScope.Begin())
+                            var hit = new HitInstance
                             {
-                                var hit = new HitInstance
-                                {
-                                    Source = gameObject,
-                                    DamageDealt = damage,
-                                    AttackType = AttackTypes.Nail,
-                                    MoveAngle = _facingRight ? 0f : 180f,
-                                    MoveDirection = _facingRight,
-                                    Multiplier = 1f,
-                                    MagnitudeMultiplier = 1f,
-                                    CircleDirection = false,
-                                    SpecialType = SpecialTypes.None,
-                                    IsHeroDamage = true
-                                };
-                                hm.Hit(hit);
-                            }
+                                Source = gameObject,
+                                DamageDealt = damage,
+                                AttackType = AttackTypes.Nail,
+                                MoveAngle = _facingRight ? 0f : 180f,
+                                MoveDirection = _facingRight,
+                                Multiplier = 1f,
+                                MagnitudeMultiplier = 1f,
+                                CircleDirection = false,
+                                SpecialType = SpecialTypes.None,
+                                IsHeroDamage = true
+                            };
+                            hm.Hit(hit);
                         }
                     }
                 }
@@ -450,7 +462,19 @@ namespace SilksongCoop.Mod.Clones
 
                 // Evaluate render time for interpolation
                 double currentLocalMs = Time.timeAsDouble * 1000.0;
-                double renderTime = currentLocalMs - TargetDelayMs;
+
+                // P4: adapt the interpolation window to the measured round-trip time.
+                // Delay = RTT/2 + 2*jitter + tickInterval, clamped to [50, 300] ms and
+                // smoothed so a single RTT spike does not jerk the clone.
+                float? rtt = SilksongCoopPlugin.Instance?.MenuUI?.Diagnostics?.CurrentPing;
+                if (rtt is float pingMs && pingMs > 0f)
+                {
+                    double adaptive = SnapshotBuffer.ComputeAdaptiveDelay(pingMs, jitterMs: 15.0, tickIntervalMs: 50.0);
+                    adaptive = Math.Clamp(adaptive, TargetDelayMs, MaxAdaptiveDelayMs);
+                    _interpolationDelayMs += (adaptive - _interpolationDelayMs) * 0.05;
+                }
+
+                double renderTime = currentLocalMs - _interpolationDelayMs;
 
                 bool isGrounded = (_stateFlags & TransformSyncPacket.FlagGrounded) != 0;
                 bool isWallSliding = (_stateFlags & TransformSyncPacket.FlagWallSliding) != 0;

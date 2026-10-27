@@ -176,6 +176,25 @@ namespace SilksongCoop.Mod.Clones
         }
 
         /// <summary>
+        /// BUG-B4: reports whether the remote peer's clone is currently present in the local
+        /// scene. Used by revive logic to refuse cross-scene teleports.
+        /// </summary>
+        public bool IsRemoteInSameScene(NetworkPeerId peerId)
+        {
+            try
+            {
+                return _activeClones.TryGetValue(peerId, out var controller) &&
+                       controller != null &&
+                       controller.IsInSameScene;
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] IsRemoteInSameScene error: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
         /// BUG-20: marks whether the remote peer is present in the local scene. Called on an
         /// explicit SceneTransitionPacket so the clone is hidden the instant the partner
         /// leaves the scene, instead of lingering until the next transform tick.

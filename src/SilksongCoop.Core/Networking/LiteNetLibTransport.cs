@@ -101,6 +101,11 @@ namespace SilksongCoop.Core.Networking
         // (Send / Disconnect / death-state chains) and must not run while it is held.
         private readonly Queue<DeferredEvent> _pendingEvents = new();
 
+        // BUG-A3: last time the client sent its Handshake frame. The initial datagram and
+        // the host's HandshakeAck both travel unreliably, so the client must retransmit
+        // while the handshake is still pending.
+        private long _lastHandshakeSentMs;
+
         // Pre-allocated receive buffer to avoid per-poll GC pressure
         private readonly byte[] _recvBuffer = new byte[2048];
 
@@ -170,6 +175,7 @@ namespace SilksongCoop.Core.Networking
             _unacknowledgedIndex.Clear();
             _lastPingSentMs = 0;
             _lastReceivedMs = 0;
+            _lastHandshakeSentMs = 0;
             _rttMs = 30;
             _connectionAttemptStartMs = 0;
         }
@@ -233,7 +239,10 @@ namespace SilksongCoop.Core.Networking
             {
                 targetIp = decodedIp;
                 targetPort = decodedPort;
-                _roomCode = addressOrCode; // Store for challenge-response authentication
+                // BUG-B2: store the CANONICAL code form — the host HMACs against its own
+                // Encode() output, so both sides must key the challenge-response on the
+                // exact same string (the raw input may differ in case/hyphenation).
+                _roomCode = RoomCodeCodec.Encode(decodedIp, decodedPort);
             }
             else
             {
@@ -296,10 +305,25 @@ namespace SilksongCoop.Core.Networking
                 _isHost = false;
                 _isConnected = false;
                 _connectionAttemptStartMs = GetTimestampMs();
+                _lastHandshakeSentMs = 0;
 
                 // Send initial handshake
-                SendEnvelope(UdpFrameType.Handshake, channel: 0, sequence: 0, method: DeliveryMethod.Unreliable, payload: BitConverter.GetBytes(LocalPeerId.Value));
+                SendEnvelope(UdpFrameType.Handshake, channel: 0, sequence: 0, method: DeliveryMethod.Unreliable, payload: BuildHandshakePayload());
             }
+        }
+
+        /// <summary>
+        /// BUG-B2: builds the Handshake payload — peer id (8 bytes) plus a flag byte telling
+        /// the host whether this client carries a room code for HMAC challenge-response.
+        /// Direct-IP clients (no code) keep the legacy unauthenticated path; the host must
+        /// not challenge a client that cannot answer.
+        /// </summary>
+        private byte[] BuildHandshakePayload()
+        {
+            byte[] payload = new byte[9];
+            Buffer.BlockCopy(BitConverter.GetBytes(LocalPeerId.Value), 0, payload, 0, 8);
+            payload[8] = (byte)(_roomCode != null ? 1 : 0);
+            return payload;
         }
 
         /// <summary>
@@ -501,8 +525,22 @@ namespace SilksongCoop.Core.Networking
                         }
                     }
 
-                    // Host-side heartbeat timeout: detect client disappearance
-                    if (IsHost && IsConnected && _remoteEndPoint != null && _socket != null && _lastReceivedMs > 0)
+                    // BUG-A3: retransmit the handshake every 500 ms while connecting — both
+                    // the client's Handshake and the host's HandshakeAck travel unreliably,
+                    // so losing either one used to stall the handshake until the timeout.
+                    if (!IsHost && !IsConnected && _connectionAttemptStartMs > 0 && _socket != null)
+                    {
+                        if (now - _lastHandshakeSentMs >= 500)
+                        {
+                            _lastHandshakeSentMs = now;
+                            SendEnvelope(UdpFrameType.Handshake, 0, 0, DeliveryMethod.Unreliable, BuildHandshakePayload());
+                        }
+                    }
+
+                    // Heartbeat timeout: detect peer disappearance (host AND client —
+                    // BUG-B1: a client whose host crashed or dropped previously never
+                    // timed out and stayed "Connected" forever)
+                    if (IsConnected && _remoteEndPoint != null && _socket != null && _lastReceivedMs > 0)
                     {
                         if (GetTimestampMs() - _lastReceivedMs > HeartbeatTimeoutMs)
                         {
@@ -616,6 +654,15 @@ namespace SilksongCoop.Core.Networking
                 switch (frameType)
                 {
                     case UdpFrameType.Handshake:
+                        if (IsHost && IsConnected)
+                        {
+                            // BUG-A3: our HandshakeAck travels unreliably and may have been
+                            // lost — the client retried its handshake because it never
+                            // connected. Re-send the ack so the session can complete.
+                            SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
+                            break;
+                        }
+
                         if (IsHost && !IsConnected)
                         {
                             // Validate sender is not ourselves
@@ -642,18 +689,32 @@ namespace SilksongCoop.Core.Networking
                             }
 
                             ulong clientPeerValue = payload.Length >= 8 ? BitConverter.ToUInt64(payload) : 2;
-                            if (payload.Length > 8) clientPeerValue = 2; // Cap oversized payloads
+                            if (payload.Length > 9) clientPeerValue = 2; // Cap oversized payloads
                             _remotePeerId = new NetworkPeerId(clientPeerValue, "Client");
 
-                            // Send challenge instead of immediately connecting
-                            if (_roomCode != null)
+                            // BUG-B2: only challenge clients that announced a room code (flag
+                            // byte in the handshake payload). A direct-IP client has no shared
+                            // secret and could never answer — it keeps the legacy open path.
+                            bool clientHasCode = payload.Length >= 9 && payload[8] != 0;
+                            if (_roomCode != null && clientHasCode)
                             {
-                                byte[] nonce = _authenticator.GenerateNonce();
-                                SendEnvelope(UdpFrameType.Challenge, 0, 0, DeliveryMethod.Unreliable, nonce);
+                                if (_authenticator.TryGetPendingNonce(out byte[]? pendingNonce))
+                                {
+                                    // BUG-A3: duplicate handshake while auth is pending —
+                                    // resend the SAME nonce so the client's retransmitted
+                                    // response stays valid (a fresh nonce would invalidate
+                                    // any response already in flight).
+                                    SendEnvelope(UdpFrameType.Challenge, 0, 0, DeliveryMethod.Unreliable, pendingNonce);
+                                }
+                                else
+                                {
+                                    byte[] nonce = _authenticator.GenerateNonce();
+                                    SendEnvelope(UdpFrameType.Challenge, 0, 0, DeliveryMethod.Unreliable, nonce);
+                                }
                             }
                             else
                             {
-                                // No room code set, fall back to old behavior (no authentication)
+                                // No room code on either side, fall back to old behavior (no authentication)
                                 _isConnected = true;
                                 SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
                                 _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, _remotePeerId.Value));

@@ -81,5 +81,23 @@ namespace SilksongCoop.Core.Networking
             _pendingNonce = null;
             _nonceTimestamp = 0;
         }
+
+        /// <summary>
+        /// BUG-A3: exposes the still-pending nonce (if any) so the transport can re-send
+        /// the SAME challenge on a duplicate handshake instead of generating a fresh one,
+        /// which would invalidate a response already in flight.
+        /// </summary>
+        public bool TryGetPendingNonce(out byte[]? nonce)
+        {
+            if (_pendingNonce != null &&
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - _nonceTimestamp <= NonceExpiryMs)
+            {
+                nonce = _pendingNonce;
+                return true;
+            }
+
+            nonce = null;
+            return false;
+        }
     }
 }
