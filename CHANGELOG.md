@@ -7,12 +7,33 @@
 
 ## [2.0.15] - 2026-10-27
 
-### Улучшения
-- **PacketValidator** расширен: валидация `DeathLifecycle`, `ItemUnlock`, `SceneTransition`, `ActionTrigger`, `BenchCheckpointSync`.
-- **RateLimiter.RemovePeer** вызывается при отключении пира.
-- **ArrayPool<byte>** в Mod broadcast hot-paths.
-- **Max-stats и clone-scene** тесты (6 новых).
-- Итого тестов: 651/651.
+Первый релиз, собранный и проверенный против реальных игровых сборок Silksong
+(Unity 6 Mono x64). Мод-проект теперь компилируется с **0 ошибок / 0 предупреждений**.
+
+### Исправлено
+- **Mod не компилировался**: в `KeybindManager.cs` отсутствовал `using System.Reflection;`
+  и пять полей-флагов логирования (`_legacyInputLogged`, `_newInputLogged`,
+  `_keyboardTypeLogged`, `_keyboardCurrentLogged`, `_newInputExceptionLogged`),
+  на которые ссылались методы проверки ввода. Ошибки CS0246/CS0103 устранены.
+- **RateLimiter.RemovePeer** теперь вызывается и в `Disconnect`, и в `DropPeerForTimeout` —
+  состояние rate-limiter пира не остаётся в памяти после отключения.
+
+### Безопасность и валидация
+- **PacketValidator** расширен: добавлены проверки `DeathLifecycle`, `ItemUnlock`,
+  `SceneTransition`, `ActionTrigger`, `BenchCheckpointSync` (валидность enum-ов,
+  NaN/Infinity, границы координат, длины строк, непустые идентификаторы).
+  Все эти пакеты в обработчике плагина проверяются до применения.
+
+### Производительность
+- **PaletteSwapController** кэширует `Renderer.materials` (свойство аллоцирует массив
+  на каждый вызов) — меньше GC-мусора при смене палитры клона.
+- **ArrayPool&lt;byte&gt;** в broadcast hot-paths мода (`BroadcastLocalTransform`,
+  `BroadcastActionTrigger`, `BroadcastBenchCheckpoint`, `BroadcastSceneTransitionDeparture`).
+
+### Тесты
+- Добавлены `MaxStatsAndCloneSceneTests` (6): распространение max-health/needle/silk
+  между клиентами, защита от понижения максимума, клоны в разных сценах.
+- Итого: **651/651 тестов проходят**.
 
 ## [2.0.14] - 2026-10-27
 

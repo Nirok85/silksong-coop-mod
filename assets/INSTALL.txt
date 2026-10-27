@@ -1,0 +1,26 @@
+Silksong Co-op Mod v__VERSION__ - plugin-only package
+=====================================================
+
+This archive contains ONLY the mod plugin. Use it if you already have
+BepInEx 5.4.x (Mono x64) installed in your game folder, or if you are on
+Linux/macOS and installed BepInEx from the Unix package.
+
+Install
+-------
+1. Copy the "SilksongCoop" folder into:   <game>/BepInEx/plugins/
+   Result: <game>/BepInEx/plugins/SilksongCoop/SilksongCoop.Mod.dll
+                                          /SilksongCoop.Core.dll
+2. (Optional) Copy com.silksong.coop.cfg into <game>/BepInEx/config/
+   The file is generated automatically on first launch with default values.
+3. Launch the game. Verify BepInEx/LogOutput.log contains:
+   "Initializing Silksong Co-op Multiplayer v__VERSION__..."
+
+Linux / macOS
+-------------
+Install BepInEx 5.4.21 for Unix, then follow steps 1-3 above.
+Steam paths:
+  Linux: ~/.local/share/Steam/steamapps/common/Hollow Knight Silksong
+  macOS: ~/Library/Application Support/Steam/steamapps/common/Hollow Knight Silksong
+
+If you have no BepInEx at all, use the full "SilksongCoop_v__VERSION__.zip"
+instead - it bundles BepInEx 5.4.21 x64 for Windows.

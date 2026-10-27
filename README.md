@@ -96,6 +96,10 @@ The `SilksongCoop_v2.0.15.zip` from the [Releases](https://github.com/Nirok85/si
 
 ### Method B — Manual Install (from source build)
 
+If you already have BepInEx 5.4.x installed (any OS, including Linux/macOS), grab
+`SilksongCoop_v2.0.15_plugin-only.zip` from the release page — it contains just the two DLLs,
+a default config and these instructions.
+
 1. Install [BepInEx 5.4.x (x64)](https://github.com/BepInEx/BepInEx/releases) into the game root (so that `BepInEx\` and `winhttp.dll` appear next to the game exe).
 2. Build the mod from source (see [Development & Building](#development--building)) or take the DLLs from the release archive.
 3. Place the two DLLs into the plugins folder (create it if missing):
@@ -359,6 +363,15 @@ dotnet test SilksongCoop.sln -c Release
 ```
 
 The `ManagedDir` in `src/SilksongCoop.Mod/SilksongCoop.Mod.csproj` points to your local Silksong install (overridable via `-p:ManagedDir=...`).
+
+To reproduce the release archives (self-contained Windows zip + plugin-only zip):
+
+```bash
+ManagedDir="/path/to/Hollow Knight Silksong_Data/Managed" ./scripts/package-release.sh
+```
+
+The script builds both projects in Release with warnings-as-errors, bundles BepInEx 5.4.21 x64 and
+writes the packages to `dist/`. The version is taken from `SilksongCoop.Mod.csproj`.
 
 See [CHANGELOG.md](CHANGELOG.md) for version history and [ROADMAP.md](ROADMAP.md) for the improvement plan.
 

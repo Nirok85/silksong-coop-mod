@@ -96,6 +96,9 @@
 
 ### Способ B — Ручная установка (сборка из исходников)
 
+Если BepInEx 5.4.x уже установлен (любая ОС, включая Linux/macOS), возьмите со страницы
+релизов `SilksongCoop_v2.0.15_plugin-only.zip` — там только две DLL, дефолтный конфиг и инструкция.
+
 1. Установите [BepInEx 5.4.x (x64)](https://github.com/BepInEx/BepInEx/releases) в корень игры (чтобы появились `BepInEx\` и `winhttp.dll` рядом с exe).
 2. Соберите мод из исходников (см. [Разработка и сборка](#-разработка-и-сборка)) или возьмите DLL из релизного архива.
 3. Поместите две DLL в папку плагинов (создайте её, если её нет):
@@ -359,6 +362,15 @@ dotnet test SilksongCoop.sln -c Release
 ```
 
 Путь `ManagedDir` в `src/SilksongCoop.Mod/SilksongCoop.Mod.csproj` указывает на локальную установку Silksong (переопределяется через `-p:ManagedDir=...`).
+
+Чтобы воспроизвести релизные архивы (самодостаточный Windows-zip + plugin-only zip):
+
+```bash
+ManagedDir="/path/to/Hollow Knight Silksong_Data/Managed" ./scripts/package-release.sh
+```
+
+Скрипт собирает оба проекта в Release с `TreatWarningsAsErrors`, добавляет BepInEx 5.4.21 x64
+и складывает пакеты в `dist/`. Версия берётся из `SilksongCoop.Mod.csproj`.
 
 История версий — в [CHANGELOG.md](CHANGELOG.md), план улучшений — в [ROADMAP.md](ROADMAP.md).
 

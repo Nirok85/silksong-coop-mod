@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using UnityEngine;
 
 namespace SilksongCoop.Mod.Settings
@@ -23,6 +24,14 @@ namespace SilksongCoop.Mod.Settings
         private static Type? _cachedKeyboardType;
         private static bool _keyboardTypeResolved;
         private static PropertyInfo? _cachedCurrentProp;
+
+        // Log-once guards: Unity's input APIs can throw or be unavailable, and the
+        // checks run every frame for every key — log the diagnostic only once.
+        private static bool _legacyInputLogged;
+        private static bool _newInputLogged;
+        private static bool _keyboardTypeLogged;
+        private static bool _keyboardCurrentLogged;
+        private static bool _newInputExceptionLogged;
 
         #endregion
 
