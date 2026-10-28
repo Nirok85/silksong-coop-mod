@@ -249,7 +249,7 @@ silksong_coop_mod/
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 651 tests
+    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 666 tests
         ├── TestHarness/              # DualClientTestHarness (2-client simulation, no Unity)
         ├── Tier1_FeatureTests/       # Requirement coverage tests (F01–F28)
         ├── Tier2_BoundaryTests/      # Boundary value tests
@@ -271,8 +271,8 @@ dotnet test SilksongCoop.sln -c Release
 Current result:
 
 ```text
-Total tests:   651
-Passed:        651 (100.0%)
+Total tests:   666
+Passed:        666 (100.0%)
 Failed:        0
 Skipped:       0
 Duration:      ~3 s

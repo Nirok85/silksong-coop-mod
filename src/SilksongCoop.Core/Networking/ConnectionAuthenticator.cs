@@ -62,20 +62,28 @@ namespace SilksongCoop.Core.Networking
             // Compute expected signature
             byte[] expectedSignature = ComputeSignature(_pendingNonce, roomCode);
 
-            // Clear pending nonce after validation attempt
-            _pendingNonce = null;
-
             // Constant-time comparison to prevent timing attacks
-            if (receivedSignature.Length != expectedSignature.Length)
-                return false;
-
-            int result = 0;
-            for (int i = 0; i < expectedSignature.Length; i++)
+            bool valid = receivedSignature.Length == expectedSignature.Length;
+            if (valid)
             {
-                result |= receivedSignature[i] ^ expectedSignature[i];
+                int result = 0;
+                for (int i = 0; i < expectedSignature.Length; i++)
+                {
+                    result |= receivedSignature[i] ^ expectedSignature[i];
+                }
+                valid = result == 0;
             }
 
-            return result == 0;
+            // Keep the nonce on a failed attempt: an unauthenticated (possibly spoofed)
+            // response must not invalidate the challenge for the legitimate client that is
+            // still about to answer. Brute force is infeasible because the key carries
+            // 40 random bits and the nonce expires after 10 seconds.
+            if (valid)
+            {
+                _pendingNonce = null;
+            }
+
+            return valid;
         }
 
         /// <summary>

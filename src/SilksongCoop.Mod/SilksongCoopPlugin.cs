@@ -235,7 +235,11 @@ namespace SilksongCoop.Mod
                     {
                         pd.maxHealthBase = newMax;
                         pd.maxHealth = newMax;
-                        HeroController.instance?.MaxHealthKeepBlue();
+                        if (pd.health > newMax) pd.health = newMax;
+                        // Refresh the HUD without MaxHealthKeepBlue(): that method calls
+                        // PlayerData.MaxHealth(), which would fully heal the local player
+                        // every time the partner picks up a mask.
+                        EventRegister.SendEvent(EventRegisterEvents.HealthUpdate);
                     }
                 }
             };
@@ -626,16 +630,20 @@ namespace SilksongCoop.Mod
                 var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
                 camTarget?.EndFreeMode();
 
-                // 4. Calculate and apply 50% max HP
+                // 4. Calculate and apply the configured fraction of max HP.
+                // MaxHealthKeepBlue() calls PlayerData.MaxHealth(), which sets health to the
+                // FULL maximum — so it must run BEFORE we assign the revive HP, otherwise
+                // ReviveHealthPercent is silently overwritten with 100% (issue #1.4).
                 var pd = PlayerData.instance;
                 if (pd != null)
                 {
+                    hero.MaxHealthKeepBlue();
+
                     float reviveHealthPercent = Math.Clamp(ReviveHealthPercentConfig?.Value ?? 0.5f, 0.1f, 1f);
                     int reviveHp = Math.Max(1, Math.Min(pd.maxHealth, (int)Math.Round(pd.maxHealth * reviveHealthPercent)));
                     pd.health = reviveHp;
-                    pd.prevHealth = pd.health;
+                    pd.prevHealth = reviveHp;
                     pd.healthBlue = 0;
-                    hero.MaxHealthKeepBlue();
                     EventRegister.SendEvent(EventRegisterEvents.HeroHealed);
                     EventRegister.SendEvent(EventRegisterEvents.HealthUpdate);
                     VitalsSync?.BroadcastCurrentVitals();
@@ -769,6 +777,9 @@ namespace SilksongCoop.Mod
                 }
                 else
                 {
+                    // Never leave the wipe latch set when no coroutine could be started,
+                    // otherwise every later team wipe no-ops until the game restarts.
+                    Interlocked.Exchange(ref _teamWipeInProgress, 0);
                     Logger.LogWarning("[Coop] GameManager.instance is null during team wipe");
                 }
             }
@@ -1287,7 +1298,10 @@ namespace SilksongCoop.Mod
                     // session. If the old session ended mid-wipe, this flag stayed set until
                     // the game was restarted and every later team wipe silently no-oped.
                     Interlocked.Exchange(ref _teamWipeInProgress, 0);
-                    _spectatorActive = false;
+                    // Clearing the flag without restoring the hero would leave it with
+                    // gravity/colliders/rendering disabled if a reconnect raced the bench
+                    // reload. ExitSpectatorMode performs the actual restore.
+                    if (_spectatorActive) ExitSpectatorMode();
                     _lastHeartPiecesBroadcast = -1;
                     _lastSilkPartsBroadcast = -1;
 
@@ -1362,24 +1376,37 @@ namespace SilksongCoop.Mod
                             : SessionState?.CurrentRoomCode);
 
                     // CRIT-02: If partner disconnected while local player was spectating/pending revive,
-                    // exit spectator mode and trigger bench respawn to prevent perma-softlock!
-                    if (DeathCoordinator?.CurrentState == DeathState.Spectating ||
-                        DeathCoordinator?.CurrentState == DeathState.RespawningAtPartner)
-                    {
-                        Logger.LogWarning("[Coop] Partner disconnected while in spectator mode. Exiting spectator and respawning at bench.");
-                        ExitSpectatorMode();
-                        TriggerTeamWipe();
-                    }
+                    // the local player must fall back to a bench respawn to avoid a perma-softlock.
+                    // The session is torn down FIRST: while still "connected", TriggerTeamWipe's
+                    // PlayerDead coroutine re-enters DeathHooks.PrefixPlayerDead, which sees a
+                    // Spectating coordinator and suppresses the bench reload (entering spectator
+                    // mode again) — leaving the hero without controls/colliders. After
+                    // SetDisconnected the prefix takes the normal "not connected" path.
+                    bool recoveringFromSpectator =
+                        DeathCoordinator?.CurrentState == DeathState.Spectating ||
+                        DeathCoordinator?.CurrentState == DeathState.RespawningAtPartner;
 
                     SessionState?.SetDisconnected(reason);
                     MenuUI?.Diagnostics?.OnSessionEnded();
                     CloneSpawner?.DespawnRemotePlayer(peer);
                     RefreshLocalVisuals(false);
 
+                    // New peer = new inventory session. Clear the once-per-item dedup on
+                    // disconnect (before any packet of the next session can arrive) so the
+                    // next BroadcastInitialInventory is not swallowed.
+                    InventorySync?.ResetSessionState();
+
+                    if (recoveringFromSpectator)
+                    {
+                        Logger.LogWarning("[Coop] Partner disconnected while in spectator mode. Exiting spectator and respawning at bench.");
+                        ExitSpectatorMode();
+                        TriggerTeamWipe();
+                    }
+
                     // Schedule auto-reconnect on unexpected disconnect
                     bool autoReconnect = AutoReconnectConfig?.Value ?? true;
                     int maxAttempts = Math.Clamp(MaxReconnectAttemptsConfig?.Value ?? 5, 1, 10);
-                    if (autoReconnect && !wasHost && reason != DisconnectReason.GracefulDisconnect && reason != DisconnectReason.None)
+                    if (autoReconnect && !wasHost && reason != DisconnectReason.GracefulDisconnect && reason != DisconnectReason.None && reason != DisconnectReason.VersionMismatch)
                     {
                         if (_reconnectAttempts < maxAttempts)
                         {

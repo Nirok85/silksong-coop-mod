@@ -79,6 +79,12 @@ namespace SilksongCoop.Core.Networking
         private Socket? _socket;
         private EndPoint? _remoteEndPoint;
         private NetworkPeerId? _remotePeerId;
+
+        // Identity announced by the last unauthenticated handshake. The endpoint is NOT
+        // committed until the HMAC challenge succeeds: otherwise the first datagram from an
+        // unauthenticated sender permanently owned the single slot and blocked every other
+        // client (issue #1.1).
+        private NetworkPeerId? _pendingPeerId;
         private readonly object _lock = new();
         private readonly RateLimiter _rateLimiter = new RateLimiter(maxTokens: 1000, refillRatePerSecond: 100);
         private readonly ConnectionAuthenticator _authenticator = new ConnectionAuthenticator();
@@ -241,6 +247,7 @@ namespace SilksongCoop.Core.Networking
             _lastHandshakeSentMs = 0;
             _rttMs = 30;
             _connectionAttemptStartMs = 0;
+            _pendingPeerId = null;
             _authenticator.Reset();
         }
 
@@ -818,48 +825,52 @@ namespace SilksongCoop.Core.Networking
                                         break; // Drop handshake from different sender
                                 }
                             }
-                            else
-                            {
-                                _remoteEndPoint = sender;
-                            }
 
                             ulong clientPeerValue = payload.Length >= 8 ? BitConverter.ToUInt64(payload) : 2;
                             if (payload.Length > 9) clientPeerValue = 2; // Cap oversized payloads
-                            _remotePeerId = new NetworkPeerId(clientPeerValue, "Client");
+                            var candidatePeer = new NetworkPeerId(clientPeerValue, "Client");
 
                             // BUG-B2: only challenge clients that announced a room code (flag
                             // byte in the handshake payload). A direct-IP client has no shared
-                            // secret and could never answer — it keeps the legacy open path.
+                            // secret and could never answer.
                             bool clientHasCode = payload.Length >= 9 && payload[8] != 0;
                             if (_roomCode != null && clientHasCode)
                             {
-                                if (_authenticator.TryGetPendingNonce(out byte[]? pendingNonce))
+                                // Do NOT pin _remoteEndPoint/_remotePeerId here. The signature
+                                // is the proof of ownership; pinning on the first datagram
+                                // let an unauthenticated sender take the slot and made the
+                                // host drop the real client's handshake (issue #1.1).
+                                _pendingPeerId = candidatePeer;
+
+                                byte[] nonce;
+                                if (_authenticator.TryGetPendingNonce(out byte[]? pendingNonce) && pendingNonce != null)
                                 {
                                     // BUG-A3: duplicate handshake while auth is pending —
                                     // resend the SAME nonce so the client's retransmitted
-                                    // response stays valid (a fresh nonce would invalidate
-                                    // any response already in flight).
-                                    SendEnvelope(UdpFrameType.Challenge, 0, 0, DeliveryMethod.Unreliable, pendingNonce);
+                                    // response stays valid.
+                                    nonce = pendingNonce;
                                 }
                                 else
                                 {
-                                    byte[] nonce = _authenticator.GenerateNonce();
-                                    SendEnvelope(UdpFrameType.Challenge, 0, 0, DeliveryMethod.Unreliable, nonce);
+                                    nonce = _authenticator.GenerateNonce();
                                 }
+
+                                SendEnvelopeTo(sender, UdpFrameType.Challenge, 0, 0, DeliveryMethod.Unreliable, nonce);
                             }
                             else if (_roomCode != null && _requireRoomCode && !clientHasCode)
                             {
                                 // BUG-N9 (item 9): host requires a room code but the client
-                                // did not announce one — reject the direct-IP join.
-                                _remoteEndPoint = null;
-                                _remotePeerId = null;
+                                // did not announce one — reject the direct-IP join. Leave any
+                                // pending authenticated handshake untouched.
                             }
                             else
                             {
                                 // No room code on either side, fall back to old behavior (no authentication)
+                                _remoteEndPoint = sender;
+                                _remotePeerId = candidatePeer;
                                 _isConnected = true;
                                 SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
-                                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, _remotePeerId.Value));
+                                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, candidatePeer));
                             }
                         }
                         break;
@@ -880,26 +891,23 @@ namespace SilksongCoop.Core.Networking
                     case UdpFrameType.ChallengeResponse:
                         if (IsHost && !IsConnected && _roomCode != null)
                         {
-                            // Validate sender matches expected remote endpoint
-                            if (_remoteEndPoint != null && sender is IPEndPoint remoteEp && _remoteEndPoint is IPEndPoint knownEp)
-                            {
-                                if (!remoteEp.Address.Equals(knownEp.Address) || remoteEp.Port != knownEp.Port)
-                                    break; // Drop response from different sender
-                            }
-
                             // Validate signature
                             if (payload.Length >= 32 && _authenticator.ValidateSignature(payload.Slice(0, 32).ToArray(), _roomCode))
                             {
+                                // The HMAC proves the sender knows the shared secret; only now
+                                // does it own the slot and the endpoint is committed.
+                                _remoteEndPoint = sender;
+                                _remotePeerId = _pendingPeerId ?? new NetworkPeerId(2, "Client");
+                                _pendingPeerId = null;
                                 _isConnected = true;
-                                SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
-                                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, _remotePeerId!.Value));
+                                SendEnvelopeTo(sender, UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
+                                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, _remotePeerId.Value));
                             }
                             else
                             {
-                                // Invalid signature, reset and ignore
-                                _remoteEndPoint = null;
-                                _remotePeerId = null;
-                                _authenticator.Reset();
+                                // Invalid signature: keep the pending nonce (it expires in
+                                // 10 s) so a spoofed response cannot invalidate the real
+                                // client's challenge. Do not pin the sender.
                             }
                         }
                         break;
@@ -931,6 +939,15 @@ namespace SilksongCoop.Core.Networking
                         break;
 
                     case UdpFrameType.Data:
+                        // Never accept game data before the peer is authenticated (or the
+                        // legacy no-code handshake completed). Otherwise an unauthenticated
+                        // datagram could advance the reliable sequence window and cause the
+                        // real client's first packets to be dropped as duplicates.
+                        if (!IsConnected || _remotePeerId == null || _remoteEndPoint == null)
+                        {
+                            break;
+                        }
+
                         // Handle incoming data first
                         bool accepted = HandleIncomingData(channel, method, sequence, payload);
 
@@ -1257,12 +1274,17 @@ namespace SilksongCoop.Core.Networking
 
         private void SendEnvelope(UdpFrameType type, byte channel, uint sequence, DeliveryMethod method, ReadOnlySpan<byte> payload)
         {
-            if (_socket == null || _remoteEndPoint == null) return;
+            SendEnvelopeTo(_remoteEndPoint, type, channel, sequence, method, payload);
+        }
+
+        private void SendEnvelopeTo(EndPoint? target, UdpFrameType type, byte channel, uint sequence, DeliveryMethod method, ReadOnlySpan<byte> payload)
+        {
+            if (_socket == null || target == null) return;
 
             byte[] envelope = BuildEnvelope(type, channel, sequence, method, payload);
             try
             {
-                _socket.SendTo(envelope, _remoteEndPoint);
+                _socket.SendTo(envelope, target);
             }
             catch (SocketException ex) { System.Diagnostics.Debug.WriteLine($"Socket error: {ex.Message}"); }
             catch (ObjectDisposedException ex) { System.Diagnostics.Debug.WriteLine($"Socket disposed: {ex.Message}"); }

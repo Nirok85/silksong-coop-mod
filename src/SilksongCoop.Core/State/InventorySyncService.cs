@@ -240,6 +240,23 @@ namespace SilksongCoop.Core.State
         }
 
         /// <summary>
+        /// Clears per-session deduplication state when a new peer connects. The local
+        /// PlayerData still holds every unlock; without this reset the initial inventory dump
+        /// is swallowed by the once-per-item dedup and a reconnecting partner never receives
+        /// abilities/tools/crests that were synced in an earlier session.
+        /// </summary>
+        public void ResetSessionState()
+        {
+            lock (_syncLock)
+            {
+                _unlockedItems.Clear();
+                _processedTransactions.Clear();
+                _transactionOrder.Clear();
+                _sequenceCounter = 0;
+            }
+        }
+
+        /// <summary>
         /// Sets the local player's equipped crest.
         /// </summary>
         /// <param name="crestId">The crest identifier to equip.</param>

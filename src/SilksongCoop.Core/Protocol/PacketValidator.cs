@@ -65,6 +65,11 @@ namespace SilksongCoop.Core.Protocol
                 return false;
             }
 
+            if (packet.CurrentHealth > packet.MaxHealth)
+            {
+                return false;
+            }
+
             if (packet.CurrentHealth > MaxReasonableMaxHealth)
             {
                 return false;

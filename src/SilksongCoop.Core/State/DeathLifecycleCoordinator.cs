@@ -297,7 +297,10 @@ namespace SilksongCoop.Core.State
                 if (packet.EventType == DeathEventType.SoloBenchRespawn)
                 {
                     IsPartnerAlive = true;
-                    LastPartnerPosition = (packet.CoordinateX, packet.CoordinateY);
+                    // Do NOT overwrite LastPartnerPosition: this packet carries no
+                    // coordinates (the sender is mid-reload), so the old code reset the
+                    // partner's revive target to (0,0). The next transform packet supplies
+                    // the real position.
                     return;
                 }
 
@@ -393,7 +396,10 @@ namespace SilksongCoop.Core.State
             if (CurrentState == DeathState.TeamWipe) return;
 
             CurrentState = DeathState.TeamWipe;
-            IsPartnerAlive = false;
+            // A solo bench fallback leaves the partner alive in another room. Marking it
+            // dead made the next partner death look like a dual wipe and could suppress a
+            // legitimate revive.
+            IsPartnerAlive = !notifyPartner;
             OnTeamWipeTriggered?.Invoke();
 
             var packet = new DeathLifecyclePacket

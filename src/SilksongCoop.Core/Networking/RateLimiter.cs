@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 
 namespace SilksongCoop.Core.Networking
 {
@@ -9,6 +10,9 @@ namespace SilksongCoop.Core.Networking
     /// </summary>
     public class RateLimiter
     {
+        // Monotonic clock: a system-clock adjustment must not freeze or over-fill buckets.
+        private static readonly Stopwatch Clock = Stopwatch.StartNew();
+
         private readonly ConcurrentDictionary<NetworkPeerId, TokenBucket> _buckets = new();
         private readonly int _maxTokens;
         private readonly int _refillRate;
@@ -58,7 +62,7 @@ namespace SilksongCoop.Core.Networking
                 _maxTokens = maxTokens;
                 _refillRatePerSecond = refillRatePerSecond;
                 _tokens = maxTokens;
-                _lastRefillTimestamp = DateTime.UtcNow.Ticks;
+                _lastRefillTimestamp = Clock.ElapsedTicks;
             }
 
             public bool TryConsume()
@@ -79,9 +83,12 @@ namespace SilksongCoop.Core.Networking
 
             private void Refill()
             {
-                long currentTimestamp = DateTime.UtcNow.Ticks;
+                long currentTimestamp = Clock.ElapsedTicks;
                 long elapsedTicks = currentTimestamp - _lastRefillTimestamp;
-                double elapsedSeconds = elapsedTicks / (double)TimeSpan.TicksPerSecond;
+                if (elapsedTicks <= 0)
+                    return;
+
+                double elapsedSeconds = elapsedTicks / (double)Stopwatch.Frequency;
 
                 int tokensToAdd = (int)(elapsedSeconds * _refillRatePerSecond);
 

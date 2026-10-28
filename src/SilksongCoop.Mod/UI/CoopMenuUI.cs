@@ -1072,7 +1072,9 @@ namespace SilksongCoop.Mod.UI
                     return;
                 }
 
-                int udpPort = plugin.DefaultUdpPortConfig?.Value ?? 7777;
+                // A manually edited config can contain 0/privileged/out-of-range values.
+                // StartHost(0) would bind an ephemeral port while the code advertised port 0.
+                int udpPort = Math.Clamp(plugin.DefaultUdpPortConfig?.Value ?? 7777, 1024, 65535);
                 // Issue #1.1: the 12-character code is a deterministic encoding of IP:port,
                 // so it cannot serve as a shared secret. Append 40 random bits; the host
                 // HMACs the challenge against the full string and direct IP joins fail.
@@ -1283,7 +1285,7 @@ namespace SilksongCoop.Mod.UI
                 {
                     if (!connectAddress.Contains(":"))
                     {
-                        int defaultPort = plugin.DefaultUdpPortConfig?.Value ?? 7777;
+                        int defaultPort = Math.Clamp(plugin.DefaultUdpPortConfig?.Value ?? 7777, 1024, 65535);
                         connectAddress = $"{connectAddress}:{defaultPort}";
                     }
                 }

@@ -1,6 +1,7 @@
 // SteamP2PTransport.cs — Steamworks.NET P2P network transport using lobbies and SteamNetworking.
 // Handles lobby creation/joining, friend invites, P2P packet streaming, and connection lifecycle.
 using System;
+using System.Diagnostics;
 using SilksongCoop.Core.Networking;
 using Steamworks;
 
@@ -17,6 +18,11 @@ namespace SilksongCoop.Mod.Networking
         private CSteamID _lobbyId = CSteamID.Nil;
         private CSteamID _remoteSteamId = CSteamID.Nil;
         private long _connectionAttemptStartMs;
+
+        // Monotonic clock: system-clock adjustments must not stretch or collapse the
+        // Steam connection timeout.
+        private static readonly Stopwatch Clock = Stopwatch.StartNew();
+        private static long NowMs() => (long)(Clock.ElapsedTicks * 1000.0 / Stopwatch.Frequency);
         private const long SteamConnectionTimeoutMs = 15000;
         private readonly Callback<LobbyCreated_t> _lobbyCreatedCallback;
         private readonly Callback<LobbyEnter_t> _lobbyEnteredCallback;
@@ -132,6 +138,18 @@ namespace SilksongCoop.Mod.Networking
 
             IsHost = true;
             IsConnected = false;
+
+            // Re-hosting must not leak the previous lobby/P2P session: the fields are
+            // about to be overwritten, so leave/close them explicitly first.
+            if (_lobbyId != CSteamID.Nil)
+            {
+                try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
+            }
+            if (_remoteSteamId != CSteamID.Nil)
+            {
+                try { SteamNetworking.CloseP2PSessionWithUser(_remoteSteamId); } catch { /* best-effort */ }
+            }
+
             _remoteSteamId = CSteamID.Nil;
             _peerConnectNotified = false;
             _lobbyId = CSteamID.Nil;
@@ -149,23 +167,32 @@ namespace SilksongCoop.Mod.Networking
                 throw new InvalidOperationException("Steam is not initialized or offline.");
             }
 
-            IsHost = false;
-            SilksongCoopPlugin.Instance?.SetActiveTransport(this);
-
-            if (ulong.TryParse(addressOrCode, out ulong lobbyIdVal))
-            {
-                CSteamID lobbySteamId = new CSteamID(lobbyIdVal);
-                _remoteSteamId = CSteamID.Nil;
-                _peerConnectNotified = false;
-                _lobbyId = CSteamID.Nil;
-                IsConnected = false;
-                _connectionAttemptStartMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                SteamMatchmaking.JoinLobby(lobbySteamId);
-            }
-            else
+            // Parse BEFORE mutating transport/session state: an invalid lobby id must not
+            // leave the previous session pointed at a half-switched Steam transport.
+            if (!ulong.TryParse(addressOrCode, out ulong lobbyIdVal))
             {
                 throw new ArgumentException("Steam transport requires a valid 64-bit Steam Lobby ID.", nameof(addressOrCode));
             }
+
+            IsHost = false;
+            SilksongCoopPlugin.Instance?.SetActiveTransport(this);
+
+            // Drop the previous lobby/P2P session before joining a new one.
+            if (_lobbyId != CSteamID.Nil)
+            {
+                try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
+            }
+            if (_remoteSteamId != CSteamID.Nil)
+            {
+                try { SteamNetworking.CloseP2PSessionWithUser(_remoteSteamId); } catch { /* best-effort */ }
+            }
+
+            _remoteSteamId = CSteamID.Nil;
+            _peerConnectNotified = false;
+            _lobbyId = CSteamID.Nil;
+            IsConnected = false;
+            _connectionAttemptStartMs = NowMs();
+            SteamMatchmaking.JoinLobby(new CSteamID(lobbyIdVal));
         }
 
         /// <summary>
@@ -195,8 +222,8 @@ namespace SilksongCoop.Mod.Networking
                     Logger?.LogWarning($"Error leaving lobby: {ex.Message}");
                 }
                 _lobbyId = CSteamID.Nil;
-            _connectionAttemptStartMs = 0;
             }
+            _connectionAttemptStartMs = 0;
 
             if (_remoteSteamId != CSteamID.Nil)
             {
@@ -366,12 +393,23 @@ namespace SilksongCoop.Mod.Networking
             // Connection timeout check
             if (!IsConnected && _connectionAttemptStartMs > 0 && !IsHost)
             {
-                long elapsed = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - _connectionAttemptStartMs;
+                long elapsed = NowMs() - _connectionAttemptStartMs;
                 if (elapsed > SteamConnectionTimeoutMs)
                 {
                     _connectionAttemptStartMs = 0;
                     Logger?.LogWarning("[Steam] Connection timeout");
-                    NotifyPeerDisconnected(DisconnectReason.Timeout);
+
+                    // NotifyPeerDisconnected() suppresses the event when no peer was ever
+                    // accepted, which left the UI stuck on "Connecting" forever. A failed
+                    // attempt is a real disconnect for the session.
+                    if (_lobbyId != CSteamID.Nil)
+                    {
+                        try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
+                        _lobbyId = CSteamID.Nil;
+                    }
+                    IsConnected = false;
+                    _peerConnectNotified = false;
+                    OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.Timeout);
                 }
             }
 
@@ -544,8 +582,23 @@ namespace SilksongCoop.Mod.Networking
             Logger?.LogInfo($"[Steam] OnGameLobbyJoinRequested: lobby={callback.m_steamIDLobby.m_SteamID}");
             IsHost = false;
             SilksongCoopPlugin.Instance?.SetActiveTransport(this);
+
+            // Accepting an invite while hosting/connected must not leak the old lobby.
+            if (_lobbyId != CSteamID.Nil && _lobbyId != callback.m_steamIDLobby)
+            {
+                try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
+                _lobbyId = CSteamID.Nil;
+            }
+            if (_remoteSteamId != CSteamID.Nil)
+            {
+                try { SteamNetworking.CloseP2PSessionWithUser(_remoteSteamId); } catch { /* best-effort */ }
+                _remoteSteamId = CSteamID.Nil;
+            }
+            _peerConnectNotified = false;
+            IsConnected = false;
+
             SilksongCoopPlugin.Instance?.SessionState?.SetConnecting(LocalPeerId, callback.m_steamIDLobby.m_SteamID.ToString());
-            _connectionAttemptStartMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            _connectionAttemptStartMs = NowMs();
             SteamMatchmaking.JoinLobby(callback.m_steamIDLobby);
         }
 

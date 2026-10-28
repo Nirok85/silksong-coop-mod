@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Threading;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol;
 using SilksongCoop.Core.Protocol.Packets;
@@ -161,6 +162,123 @@ namespace SilksongCoop.Tests
             byte[] nonce2 = hostAuth2.GenerateNonce();
             byte[] clientSignature = new ConnectionAuthenticator().ComputeSignature(nonce2, canonical);
             Assert.True(hostAuth2.ValidateSignature(clientSignature, withSecret));
+        }
+
+        // Issue #2.1 — the solo fallback must not mark the living partner as dead. The
+        // coordinator's IsPartnerAlive flag gates the next dual-wipe decision.
+        [Fact]
+        public void SoloBenchRespawn_KeepsPartnerAliveLocally()
+        {
+            var coordinator = new DeathLifecycleCoordinator();
+            coordinator.IsPartnerAlive = true;
+
+            coordinator.ForceBenchRespawn(notifyPartner: false);
+
+            Assert.True(coordinator.IsPartnerAlive);
+            Assert.Equal(DeathState.TeamWipe, coordinator.CurrentState);
+        }
+
+        // The SoloBenchRespawn packet carries no coordinates. Receiving it used to reset
+        // LastPartnerPosition to (0,0), so a later revive timer teleported the player to the
+        // world origin. It must keep the last known position and ignore the epoch gap.
+        [Fact]
+        public void SoloBenchRespawn_PreservesLastPartnerPosition_AndIgnoresEpoch()
+        {
+            var receiver = new DeathLifecycleCoordinator();
+            receiver.LastPartnerPosition = (123.5f, -45.25f);
+            receiver.IsPartnerAlive = false;
+
+            receiver.HandleDeathPacket(new NetworkPeerId(2), new DeathLifecyclePacket
+            {
+                Header = new PacketHeader(PacketType.PlayerDeath, 4, 1, 1),
+                EventType = DeathEventType.SoloBenchRespawn,
+                Epoch = receiver.CurrentEpoch + 7,
+                CoordinateX = 0f,
+                CoordinateY = 0f
+            });
+
+            Assert.True(receiver.IsPartnerAlive);
+            Assert.Equal(123.5f, receiver.LastPartnerPosition.X);
+            Assert.Equal(-45.25f, receiver.LastPartnerPosition.Y);
+        }
+
+        // Issue #1.1 — a failed challenge response must not invalidate the pending nonce:
+        // otherwise an unauthenticated (spoofed) reply locks the real client out.
+        [Fact]
+        public void Authenticator_FailedResponse_KeepsChallengeUsable()
+        {
+            var authenticator = new ConnectionAuthenticator();
+            byte[] nonce = authenticator.GenerateNonce();
+
+            byte[] wrong = authenticator.ComputeSignature(nonce, "SK-WRONG");
+            Assert.False(authenticator.ValidateSignature(wrong, "SK-CORRECT"));
+
+            // The legitimate client can still answer the same challenge.
+            byte[] correct = authenticator.ComputeSignature(nonce, "SK-CORRECT");
+            Assert.True(authenticator.ValidateSignature(correct, "SK-CORRECT"));
+        }
+
+        // Issue #1.1 — the host must not pin its single peer slot to the first
+        // unauthenticated handshake. A wrong-secret client that reaches the challenge step
+        // must not prevent the real client from connecting.
+        [Fact]
+        public void UdpHost_FailedHandshake_DoesNotBlockAuthenticatedClient()
+        {
+            using var host = new LiteNetLibTransport(1, "Host");
+            host.StartHost(0);
+            string hostCode = RoomCodeCodec.EncodeWithSecret(IPAddress.Loopback, host.BoundPort);
+            host.SetRoomCode(hostCode);
+            host.RequireRoomCode = true;
+
+            var wrongSecret = new byte[RoomCodeCodec.SecretBytes];
+            wrongSecret[0] = 0xFF;
+            string wrongCode = RoomCodeCodec.Encode(IPAddress.Loopback, host.BoundPort, wrongSecret);
+
+            using var attacker = new LiteNetLibTransport(3, "Attacker");
+            attacker.Connect(wrongCode);
+
+            // Let the attacker reach ChallengeResponse and fail HMAC validation.
+            for (int i = 0; i < 40; i++)
+            {
+                host.PollEvents();
+                attacker.PollEvents();
+                Thread.Sleep(10);
+            }
+            Assert.False(attacker.IsConnected);
+
+            using var client = new LiteNetLibTransport(2, "Client");
+            client.Connect(hostCode);
+
+            for (int i = 0; i < 200 && (!host.IsConnected || !client.IsConnected); i++)
+            {
+                host.PollEvents();
+                client.PollEvents();
+                Thread.Sleep(10);
+            }
+
+            Assert.True(client.IsConnected, "the authenticated client must not be blocked by a failed handshake");
+            Assert.True(host.IsConnected, "host must accept the authenticated client");
+        }
+
+        // Issue #1.2 — a reconnect must resend the full inventory. The once-per-item dedup
+        // used to survive the session, so the initial dump was swallowed and the new peer
+        // never learned previously synced abilities/tools/crests.
+        [Fact]
+        public void Inventory_ResetSessionState_AllowsInitialDumpAgain()
+        {
+            var inventory = new InventorySyncService();
+            int sent = 0;
+            inventory.OnOutgoingItemUnlockPacket += _ => sent++;
+
+            inventory.OnLocalItemDiscovered("hasDash", ItemCategory.Ability);
+            Assert.Equal(1, sent);
+
+            inventory.OnLocalItemDiscovered("hasDash", ItemCategory.Ability);
+            Assert.Equal(1, sent); // same session: dedup still applies
+
+            inventory.ResetSessionState();
+            inventory.OnLocalItemDiscovered("hasDash", ItemCategory.Ability);
+            Assert.Equal(2, sent); // new peer receives the unlock again
         }
 
         // Issue #1.5 — spawn type is independent from the facing flag. A checkpoint with
