@@ -1808,8 +1808,21 @@ namespace SilksongCoop.Mod
                         catch (Exception ex)
                         {
                             Logger.LogError($"[Coop] Auto-reconnect failed: {ex.Message}");
-                            _reconnectPending = true;
-                            _nextReconnectTime = Time.unscaledTime + 4f;
+
+                            // Count failed attempts too: a permanently invalid address must
+                            // not retry every 4 seconds forever.
+                            _reconnectAttempts++;
+                            int maxAttempts = Math.Clamp(MaxReconnectAttemptsConfig?.Value ?? 5, 1, 10);
+                            if (_reconnectAttempts < maxAttempts)
+                            {
+                                _reconnectPending = true;
+                                _nextReconnectTime = Time.unscaledTime + 4f;
+                            }
+                            else
+                            {
+                                _reconnectPending = false;
+                                MenuUI?.SetStatusMessage("Connection lost. Max reconnect attempts reached.");
+                            }
                         }
                     }
                 }

@@ -28,6 +28,7 @@ namespace SilksongCoop.Mod.Settings
         // Log-once guards: Unity's input APIs can throw or be unavailable, and the
         // checks run every frame for every key — log the diagnostic only once.
         private static bool _legacyInputLogged;
+        private static bool _legacyInputUnavailable;
         private static bool _newInputLogged;
         private static bool _keyboardTypeLogged;
         private static bool _keyboardCurrentLogged;
@@ -104,22 +105,26 @@ namespace SilksongCoop.Mod.Settings
         {
             if (key == KeyCode.None) return false;
 
-            // 1. Try Unity Legacy Input
-            try
+            // 1. Try Unity Legacy Input. Once it throws (New-Input-only player
+            // settings), stop calling it: an exception per key per frame is expensive.
+            if (!_legacyInputUnavailable)
             {
-                if (Input.GetKeyDown(key))
+                try
                 {
-                    return true;
+                    if (Input.GetKeyDown(key))
+                    {
+                        return true;
+                    }
                 }
-            }
-            catch (System.Exception ex)
-            {
-                // Unity 6 throws InvalidOperationException if PlayerSettings only enables New Input System
-                // Log once for diagnostics
-                if (!_legacyInputLogged)
+                catch (System.Exception ex)
                 {
-                    _legacyInputLogged = true;
-                    Debug.Log($"[Coop] Legacy Input threw {ex.GetType().Name}: {ex.Message}");
+                    // Unity 6 throws InvalidOperationException if PlayerSettings only enables New Input System
+                    _legacyInputUnavailable = true;
+                    if (!_legacyInputLogged)
+                    {
+                        _legacyInputLogged = true;
+                        Debug.Log($"[Coop] Legacy Input threw {ex.GetType().Name}: {ex.Message}");
+                    }
                 }
             }
 

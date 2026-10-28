@@ -34,6 +34,25 @@ namespace SilksongCoop.Mod.Revive
             return mask;
         }
 
+        // CompareTag throws UnityException for tags that are not defined in this game's
+        // TagManager. Silksong does not define "Hazard"/"Spikes", so probing a normal
+        // terrain collider used to throw and abort the whole safe-ground search.
+        private static readonly bool HazardTagDefined = IsTagDefined("Hazard");
+        private static readonly bool SpikesTagDefined = IsTagDefined("Spikes");
+
+        private static bool IsTagDefined(string tag)
+        {
+            try
+            {
+                GameObject.FindWithTag(tag);
+                return true;
+            }
+            catch (UnityException)
+            {
+                return false;
+            }
+        }
+
         private readonly RaycastHit2D[] _hitBuffer = new RaycastHit2D[16];
         private readonly Collider2D[] _overlapBuffer = new Collider2D[16];
         private readonly ContactFilter2D _contactFilter = new ContactFilter2D { useTriggers = true };
@@ -146,8 +165,12 @@ namespace SilksongCoop.Mod.Revive
                 return true;
             }
 
-            // Tag check
-            if (collider.CompareTag("Hazard") || collider.CompareTag("Spikes"))
+            // Tag check (only for tags that actually exist in this game build)
+            if (HazardTagDefined && collider.CompareTag("Hazard"))
+            {
+                return true;
+            }
+            if (SpikesTagDefined && collider.CompareTag("Spikes"))
             {
                 return true;
             }
