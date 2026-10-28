@@ -89,6 +89,18 @@ namespace SilksongCoop.Mod.Visuals
                 // second — heavy GC churn / native memory pressure during long sessions.
                 if (_needsUpdate || Time.frameCount - _lastEnforceFrame >= EnforceIntervalFrames)
                 {
+                    // Pick up runtime hue changes (settings slider) for every Player 2
+                    // instance, including the remote clone that the slider cannot address.
+                    if (_isPlayer2 && SilksongCoopPlugin.Instance?.Player2HueShiftConfig != null)
+                    {
+                        float configured = SilksongCoopPlugin.Instance.Player2HueShiftConfig.Value;
+                        if (Math.Abs(configured - _hueShift) > 0.001f)
+                        {
+                            _hueShift = configured;
+                            _needsUpdate = true;
+                        }
+                    }
+
                     ApplyPaletteSwap();
                     _lastEnforceFrame = Time.frameCount;
                 }

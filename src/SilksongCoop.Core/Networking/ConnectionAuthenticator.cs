@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -15,6 +16,10 @@ namespace SilksongCoop.Core.Networking
         private const int NonceSizeBytes = 16;
         private const long NonceExpiryMs = 10000; // 10 seconds to complete handshake
 
+        // Monotonic clock — a system-clock adjustment must not extend or expire a nonce.
+        private static readonly Stopwatch _clock = Stopwatch.StartNew();
+        private static long NowMs() => _clock.ElapsedMilliseconds;
+
         /// <summary>
         /// Generates a cryptographically random nonce for challenge-response.
         /// </summary>
@@ -24,7 +29,7 @@ namespace SilksongCoop.Core.Networking
             using var rng = RandomNumberGenerator.Create();
             rng.GetBytes(nonce);
             _pendingNonce = nonce;
-            _nonceTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            _nonceTimestamp = NowMs();
             return nonce;
         }
 
@@ -47,7 +52,7 @@ namespace SilksongCoop.Core.Networking
                 return false;
 
             // Check nonce expiry
-            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            long now = NowMs();
             if (now - _nonceTimestamp > NonceExpiryMs)
             {
                 _pendingNonce = null;
@@ -90,7 +95,7 @@ namespace SilksongCoop.Core.Networking
         public bool TryGetPendingNonce(out byte[]? nonce)
         {
             if (_pendingNonce != null &&
-                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - _nonceTimestamp <= NonceExpiryMs)
+                NowMs() - _nonceTimestamp <= NonceExpiryMs)
             {
                 nonce = _pendingNonce;
                 return true;

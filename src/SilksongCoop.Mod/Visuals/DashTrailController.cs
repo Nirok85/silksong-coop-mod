@@ -62,6 +62,7 @@ namespace SilksongCoop.Mod.Visuals
         /// <param name="isAirDash">True if this is an air dash, false for ground dash.</param>
         public void TriggerDash(bool isAirDash)
         {
+            if (!IsTrailEnabled()) return;
             if (!_lifecycle.CanTriggerDash) return;
 
             _lifecycle.TriggerDash(isAirDash, _isPlayer2);
@@ -138,8 +139,26 @@ namespace SilksongCoop.Mod.Visuals
         {
             if (!SelfTick) return;
             if (_lastUpdateFrame == Time.frameCount) return;
-            // By default, if not externally ticked, tick with Time.deltaTime
-            UpdateLifecycle(Time.deltaTime, isGrounded: false, isWallSliding: false);
+
+            // The local hero's own controller does not tick us, so read the real movement
+            // state here. The old hard-coded false/false meant the dash cooldown was never
+            // reset on landing or wall contact.
+            bool grounded = false;
+            bool wallSliding = false;
+            var hero = HeroController.instance;
+            if (hero != null && hero.cState != null)
+            {
+                grounded = hero.cState.onGround;
+                wallSliding = hero.cState.wallSliding;
+            }
+
+            UpdateLifecycle(Time.deltaTime, grounded, wallSliding);
+        }
+
+        private bool IsTrailEnabled()
+        {
+            if (!_isPlayer2) return true;
+            return SilksongCoopPlugin.Instance?.EnablePlayer2DashTrailConfig?.Value ?? true;
         }
 
         private void EmitGhostAfterImage()
@@ -190,8 +209,10 @@ namespace SilksongCoop.Mod.Visuals
 
                     if (_isPlayer2)
                     {
+                        float hueShift = SilksongCoopPlugin.Instance?.Player2HueShiftConfig?.Value
+                            ?? PaletteSwapMath.Player2HueShift;
                         ghostSprite.EnableKeyword(PaletteSwapMath.KeywordHueShift);
-                        ghostSprite.SetFloat(PaletteSwapController.GetHueShiftPropertyId(), PaletteSwapMath.Player2HueShift);
+                        ghostSprite.SetFloat(PaletteSwapController.GetHueShiftPropertyId(), hueShift);
                     }
                 }
 

@@ -291,6 +291,16 @@ namespace SilksongCoop.Core.State
         {
             try
             {
+                // A solo bench-respawn is a recovery signal: it only clears our "partner
+                // is dead" flag and must survive an epoch mismatch (the two peers advance
+                // epochs independently when only one of them reloads at a bench).
+                if (packet.EventType == DeathEventType.SoloBenchRespawn)
+                {
+                    IsPartnerAlive = true;
+                    LastPartnerPosition = (packet.CoordinateX, packet.CoordinateY);
+                    return;
+                }
+
                 // BUG-A4: epochs are compared against our counter, but the peer may have
                 // survived more wipe cycles than we tracked (e.g. we reconnected mid-session).
                 // Adopt a HIGHER epoch so the session resynchronizes instead of silently
@@ -343,6 +353,16 @@ namespace SilksongCoop.Core.State
                         CurrentState = DeathState.TeamWipe;
                         OnTeamWipeTriggered?.Invoke();
                         break;
+
+                    case DeathEventType.BenchCheckpointUpdate:
+                        // Epoch-only sync sent after a bench respawn; the epoch was already
+                        // adopted above. Keeps both peers from silently dropping each
+                        // other's death packets after an uneven number of solo respawns.
+                        break;
+
+                    case DeathEventType.SoloBenchRespawn:
+                        // Handled before the epoch check (see entry point).
+                        break;
                 }
             }
             catch (Exception ex)
@@ -351,10 +371,21 @@ namespace SilksongCoop.Core.State
             }
         }
 
+        public void ForceBenchRespawn()
+        {
+            ForceBenchRespawn(notifyPartner: true);
+        }
+
         /// <summary>
         /// Forces a bench respawn by triggering team wipe state.
         /// </summary>
-        public void ForceBenchRespawn()
+        /// <param name="notifyPartner">
+        /// True to broadcast <see cref="DeathEventType.TeamWipeOccurred"/> (both players
+        /// must reload at a bench). False for a SOLO fallback — the partner is alive and
+        /// must not be killed; a <see cref="DeathEventType.SoloBenchRespawn"/> event tells
+        /// it that this player is alive again.
+        /// </param>
+        public void ForceBenchRespawn(bool notifyPartner)
         {
             _isPostBenchRespawn = false;
             _postBenchRespawnTimer = 0f;
@@ -368,7 +399,26 @@ namespace SilksongCoop.Core.State
             var packet = new DeathLifecyclePacket
             {
                 Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, (uint)Environment.TickCount),
-                EventType = DeathEventType.TeamWipeOccurred,
+                EventType = notifyPartner
+                    ? DeathEventType.TeamWipeOccurred
+                    : DeathEventType.SoloBenchRespawn,
+                RemainingSeconds = 0f,
+                Epoch = CurrentEpoch
+            };
+            OnOutgoingDeathPacket?.Invoke(packet);
+        }
+
+        /// <summary>
+        /// Sends the current epoch to the peer after a bench reload. Without this, a peer
+        /// that respawned once more than us advances its epoch and then silently ignores
+        /// our death packets forever (the receive path only adopts HIGHER epochs).
+        /// </summary>
+        public void BroadcastEpochSync()
+        {
+            var packet = new DeathLifecyclePacket
+            {
+                Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, (uint)Environment.TickCount),
+                EventType = DeathEventType.BenchCheckpointUpdate,
                 RemainingSeconds = 0f,
                 Epoch = CurrentEpoch
             };

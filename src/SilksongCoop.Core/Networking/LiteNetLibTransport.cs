@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 
@@ -152,7 +153,11 @@ namespace SilksongCoop.Core.Networking
         private long _lossPacketsLost;
         private volatile int _packetLossPercent;
 
-        private static long GetTimestampMs() => DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
+        // Monotonic clock: DateTime.UtcNow jumps when the system clock is adjusted
+        // (NTP/VPN/manual change) and broke RTT, heartbeat and retry timers. Stopwatch
+        // is unaffected by wall-clock changes.
+        private static readonly Stopwatch _clock = Stopwatch.StartNew();
+        private static long GetTimestampMs() => _clock.ElapsedMilliseconds;
 
         #endregion
 
@@ -236,6 +241,7 @@ namespace SilksongCoop.Core.Networking
             _lastHandshakeSentMs = 0;
             _rttMs = 30;
             _connectionAttemptStartMs = 0;
+            _authenticator.Reset();
         }
 
         /// <summary>
@@ -493,6 +499,18 @@ namespace SilksongCoop.Core.Networking
                 if (offset < 0 || length < 0 || offset + length > data.Length) return;
                 if (_remotePeerId.HasValue && target != _remotePeerId.Value) return;
 
+                // Backpressure instead of evicting the oldest unacknowledged packet: the
+                // receiver is still waiting for that sequence, and dropping it from the
+                // retransmit list leaves a permanent hole that blocks every later packet
+                // on the channel. Dropping the NEW packet (and not consuming a sequence
+                // number) keeps the reliable stream contiguous; the heartbeat will tear
+                // the session down if the backlog never drains.
+                if (method == DeliveryMethod.ReliableOrdered && _unacknowledged.Count >= MaxUnacknowledgedPackets)
+                {
+                    Debug.WriteLine($"[LiteNetLibTransport] Reliable backlog full ({MaxUnacknowledgedPackets}); dropping new packet on channel {channel}");
+                    return;
+                }
+
                 uint seq;
                 var sequenceKey = (channel, method);
                 if (!_sendSequences.TryGetValue(sequenceKey, out seq))
@@ -515,24 +533,12 @@ namespace SilksongCoop.Core.Networking
                 {
                     _socket.SendTo(envelope, 0, envelopeLength, SocketFlags.None, _remoteEndPoint);
                 }
-                catch (SocketException ex) { System.Diagnostics.Debug.WriteLine($"Socket error: {ex.Message}"); }
-                catch (ObjectDisposedException ex) { System.Diagnostics.Debug.WriteLine($"Socket disposed: {ex.Message}"); }
-                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Send error: {ex.Message}"); }
+                catch (SocketException ex) { Debug.WriteLine($"Socket error: {ex.Message}"); }
+                catch (ObjectDisposedException ex) { Debug.WriteLine($"Socket disposed: {ex.Message}"); }
+                catch (Exception ex) { Debug.WriteLine($"Send error: {ex.Message}"); }
 
                 if (method == DeliveryMethod.ReliableOrdered)
                 {
-                    // Fix: Cap unacknowledged packets to prevent unbounded memory growth
-                    if (_unacknowledged.Count >= MaxUnacknowledgedPackets)
-                    {
-                        // Drop oldest packet to make room (O(1) with LinkedList)
-                        var oldest = _unacknowledged.First;
-                        if (oldest != null)
-                        {
-                            ReturnPooledBuffer(oldest.Value.Envelope);
-                            _unacknowledgedIndex.Remove((oldest.Value.Channel, oldest.Value.Sequence));
-                            _unacknowledged.RemoveFirst();
-                        }
-                    }
                     var node = _unacknowledged.AddLast(new SentReliablePacket
                     {
                         Sequence = seq,
@@ -923,10 +929,13 @@ namespace SilksongCoop.Core.Networking
 
                     case UdpFrameType.Data:
                         // Handle incoming data first
-                        HandleIncomingData(channel, method, sequence, payload);
+                        bool accepted = HandleIncomingData(channel, method, sequence, payload);
 
-                        // If reliable, send ACK after successful dispatch
-                        if (method == DeliveryMethod.ReliableOrdered && IsConnected)
+                        // ACK only after the packet was actually delivered or buffered.
+                        // A reliable packet dropped because the reorder buffer was full must
+                        // NOT be acknowledged: the sender still owns it and will retransmit
+                        // once the missing sequence arrives.
+                        if (method == DeliveryMethod.ReliableOrdered && IsConnected && accepted)
                         {
                             byte[] ackPayload = new byte[5];
                             ackPayload[0] = channel;
@@ -993,7 +1002,16 @@ namespace SilksongCoop.Core.Networking
             }
         }
 
-        private void HandleIncomingData(byte channel, DeliveryMethod method, uint sequence, ReadOnlySpan<byte> payload)
+        /// <summary>
+        /// Buffers or dispatches an incoming data frame.
+        /// </summary>
+        /// <returns>
+        /// True when the frame was delivered, buffered for ordered delivery, or was an
+        /// already-delivered duplicate (safe to ACK). False when a future reliable frame
+        /// had to be rejected because the reorder buffer is full — the caller must not ACK
+        /// it so the sender retransmits later.
+        /// </returns>
+        private bool HandleIncomingData(byte channel, DeliveryMethod method, uint sequence, ReadOnlySpan<byte> payload)
         {
             try
             {
@@ -1009,11 +1027,15 @@ namespace SilksongCoop.Core.Networking
 
                     _expectedReceiveSequences.TryGetValue(channel, out uint expected);
 
-                    // Cap pending buffer size to prevent unbounded growth under packet loss
+                    // Cap pending buffer size to prevent unbounded growth under packet loss.
+                    // Never evict a buffered future packet: the sender would have to
+                    // retransmit it, but it already received our ACK (or worse, it was
+                    // dropped from its own retransmit list). Instead, reject NEW future
+                    // packets without ACKing them once the buffer is full.
                     const int MaxPendingPerChannel = 256;
-                    if (pending.Count >= MaxPendingPerChannel)
+                    if (pending.Count >= MaxPendingPerChannel && sequence > expected)
                     {
-                        // First remove stale entries (below expected)
+                        // Reclaim entries that can no longer be needed (stale duplicates).
                         var staleKeys = new List<uint>();
                         foreach (var key in pending.Keys)
                         {
@@ -1025,20 +1047,17 @@ namespace SilksongCoop.Core.Networking
                             pending.Remove(key);
                         }
 
-                        // If still over cap, remove oldest entries. On a SortedDictionary the
-                        // enumerator walks directly to the minimum key (O(log n) per removal).
-                        while (pending.Count >= MaxPendingPerChannel)
+                        if (pending.Count >= MaxPendingPerChannel)
                         {
-                            var first = pending.Keys.GetEnumerator();
-                            if (!first.MoveNext()) break;
-                            pending.Remove(first.Current);
+                            Debug.WriteLine($"[LiteNetLibTransport] Reorder buffer full on channel {channel}; deferring sequence {sequence}");
+                            return false;
                         }
                     }
 
                     if (sequence == expected)
                     {
                         DispatchData(data);
-                        if (!IsConnected) return;
+                        if (!IsConnected) return true;
 
                         expected++;
                         _expectedReceiveSequences[channel] = expected;
@@ -1047,7 +1066,7 @@ namespace SilksongCoop.Core.Networking
                         {
                             pending.Remove(expected);
                             DispatchData(nextData);
-                            if (!IsConnected) return;
+                            if (!IsConnected) return true;
 
                             expected++;
                             _expectedReceiveSequences[channel] = expected;
@@ -1058,6 +1077,8 @@ namespace SilksongCoop.Core.Networking
                         pending[sequence] = data;
                     }
                     // If sequence < expected, it's a duplicate/old packet - drop silently
+                    // but still ACK it so a sender that lost the original ACK can retire it.
+                    return true;
                 }
                 else if (method == DeliveryMethod.Sequenced)
                 {
@@ -1082,10 +1103,13 @@ namespace SilksongCoop.Core.Networking
                     TrackUnreliableSequences(channel, sequence);
                     DispatchData(data);
                 }
+
+                return true;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[LiteNetLibTransport] HandleIncomingData error: {ex.Message}");
+                Debug.WriteLine($"[LiteNetLibTransport] HandleIncomingData error: {ex.Message}");
+                return false;
             }
         }
 

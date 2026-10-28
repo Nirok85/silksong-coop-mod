@@ -39,7 +39,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "2.0.15";
+        public const string PluginVersion = "2.0.16";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -78,6 +78,7 @@ namespace SilksongCoop.Mod
         public BepInEx.Configuration.ConfigEntry<int>? TickRateHzConfig;
         public BepInEx.Configuration.ConfigEntry<bool>? AutoReconnectConfig;
         public BepInEx.Configuration.ConfigEntry<int>? MaxReconnectAttemptsConfig;
+        public BepInEx.Configuration.ConfigEntry<bool>? SaveConnectionHistoryConfig;
         #endregion
 
         public INetworkTransport? ActiveTransport { get; private set; }
@@ -117,6 +118,12 @@ namespace SilksongCoop.Mod
         private int _reconnectAttempts;
         private bool _reconnectIsSteam;
         private string? _reconnectAddress;
+
+        // Last counter value broadcast to the peer. Counters are shared progress, so after
+        // the connect-time baseline both sides exchange deltas instead of absolute values —
+        // an absolute overwrite let the peer's partial count clobber ours (issue #2.3).
+        private int _lastHeartPiecesBroadcast = -1;
+        private int _lastSilkPartsBroadcast = -1;
         #endregion
 
         #region Unity Lifecycle
@@ -143,10 +150,14 @@ namespace SilksongCoop.Mod
                 TickRateHzConfig = Config.Bind("Network", "TickRateHz", 30, "Network replication tick rate (20-60 Hz)");
                 AutoReconnectConfig = Config.Bind("Network", "AutoReconnect", true, "Automatically attempt to reconnect after an unexpected disconnect");
                 MaxReconnectAttemptsConfig = Config.Bind("Network", "MaxReconnectAttempts", 5, "Maximum number of automatic reconnection attempts (1-10)");
+                SaveConnectionHistoryConfig = Config.Bind("Network", "SaveConnectionHistory", true, "Persist the last five connection targets in PlayerPrefs (Windows registry)");
 
                 // Apply config values
                 DeathCoordinator.ReviveCooldownDuration = Math.Clamp(ReviveCooldownConfig.Value, 15f, 30f);
-                Logger.LogInfo($"[Coop] Config loaded: ReviveCooldown={DeathCoordinator.ReviveCooldownDuration}s, HueShift={Player2HueShiftConfig.Value}");
+                Logger.LogInfo($"[Coop] Config loaded: ReviveCooldown={DeathCoordinator.ReviveCooldownDuration}s, " +
+                    $"ReviveHealth={Math.Clamp(ReviveHealthPercentConfig.Value, 0.1f, 1f):P0}, " +
+                    $"ReviveInvuln={Math.Clamp(ReviveInvulnerabilityConfig.Value, 0f, 10f):F1}s, " +
+                    $"HueShift={Player2HueShiftConfig.Value}");
             }
             catch (Exception ex)
             {
@@ -156,6 +167,9 @@ namespace SilksongCoop.Mod
             // Initialize settings managers (Step 13)
             Keybinds = new KeybindManager(this);
             QualityPresets = new QualityPresetManager(this);
+            // Apply the saved preset to actual settings (tick rate / dash trail). Before
+            // this, the preset was read but never applied; Low/Medium/High were cosmetic.
+            QualityPresets.ApplyPreset(QualityPresets.CurrentLevel);
             Logger.LogInfo($"[Coop] Settings managers initialized: Quality={QualityPresets.CurrentLevel}");
 
             // Setup outgoing network callbacks
@@ -337,12 +351,31 @@ namespace SilksongCoop.Mod
                 BindTransportEvents(SteamTransport);
             }
 
-            // Initialize Harmony
+            // Initialize Harmony. Patch one class at a time: PatchAll() aborts on the first
+            // signature mismatch, which used to leave every hook after the failing class
+            // unpatched while the mod still looked initialized.
             try
             {
                 _harmony = new Harmony(PluginGuid);
-                _harmony.PatchAll();
-                Logger.LogInfo("Harmony hooks applied successfully.");
+                int applied = 0;
+                int failed = 0;
+                foreach (var patchType in typeof(SilksongCoopPlugin).Assembly.GetTypes())
+                {
+                    if (patchType.GetCustomAttributes(typeof(HarmonyPatch), inherit: true).Length == 0)
+                        continue;
+
+                    try
+                    {
+                        _harmony.PatchAll(patchType);
+                        applied++;
+                    }
+                    catch (Exception ex)
+                    {
+                        failed++;
+                        Logger.LogError($"[Coop] Failed to apply Harmony patches for {patchType.FullName}: {ex.Message}");
+                    }
+                }
+                Logger.LogInfo($"Harmony hooks applied: {applied} class(es), {failed} failed.");
             }
             catch (Exception ex)
             {
@@ -550,7 +583,7 @@ namespace SilksongCoop.Mod
                     // transforms, no input). Fall back to a bench respawn instead.
                     Logger.LogWarning("[Coop] Cannot revive: HeroController or gameObject is null — falling back to bench respawn");
                     ExitSpectatorMode();
-                    DeathCoordinator?.ForceBenchRespawn();
+                    DeathCoordinator?.ForceBenchRespawn(notifyPartner: false);
                     return;
                 }
 
@@ -564,7 +597,9 @@ namespace SilksongCoop.Mod
                 {
                     Logger.LogInfo("[Coop] Partner is in a different scene — falling back to bench respawn");
                     ExitSpectatorMode();
-                    DeathCoordinator?.ForceBenchRespawn();
+                    // Solo fallback: the partner is alive in another room. Broadcasting a
+                    // team wipe here killed them (issue #2.1) and reloaded their bench.
+                    DeathCoordinator?.ForceBenchRespawn(notifyPartner: false);
                     return;
                 }
 
@@ -595,7 +630,8 @@ namespace SilksongCoop.Mod
                 var pd = PlayerData.instance;
                 if (pd != null)
                 {
-                    int reviveHp = GroundProber?.CalculateReviveHealth(pd.maxHealth) ?? Math.Max(1, pd.maxHealth / 2);
+                    float reviveHealthPercent = Math.Clamp(ReviveHealthPercentConfig?.Value ?? 0.5f, 0.1f, 1f);
+                    int reviveHp = Math.Max(1, Math.Min(pd.maxHealth, (int)Math.Round(pd.maxHealth * reviveHealthPercent)));
                     pd.health = reviveHp;
                     pd.prevHealth = pd.health;
                     pd.healthBlue = 0;
@@ -635,8 +671,11 @@ namespace SilksongCoop.Mod
                 // 7. Re-center camera
                 GameManager.instance?.cameraCtrl?.PositionToHero(forceDirect: false);
 
-                // 8. Apply 2.5s invulnerability routine
-                StartCoroutine(ReviveInvulnerabilityRoutine(hero, SafeGroundSolver.InvulnerabilityDuration));
+                // 8. Apply the configured invulnerability window (was hard-coded 2.5 s)
+                float invulnerabilitySeconds = Math.Clamp(
+                    ReviveInvulnerabilityConfig?.Value ?? SafeGroundSolver.InvulnerabilityDuration,
+                    0f, 10f);
+                StartCoroutine(ReviveInvulnerabilityRoutine(hero, invulnerabilitySeconds));
 
                 DeathCoordinator?.CompleteRevival();
                 SessionState?.ReturnToActive();
@@ -691,6 +730,13 @@ namespace SilksongCoop.Mod
         /// <see cref="GameManager.PlayerDead"/> (see BUG-15). Internal use by DeathHooks.
         /// </summary>
         internal void BeginPlayerDeadHook() => _insidePlayerDeadHook = true;
+
+        /// <summary>
+        /// True while a team wipe / forced bench reload is pending. DeathHooks uses this to
+        /// keep calling <see cref="OnBenchRespawnCompleted"/> even after the session was
+        /// torn down (the disconnect handler starts a wipe and then disconnects).
+        /// </summary>
+        internal bool IsTeamWipeInProgress => Volatile.Read(ref _teamWipeInProgress) != 0;
 
         /// <summary>
         /// Clears the in-hook marker set by <see cref="BeginPlayerDeadHook"/>.
@@ -765,6 +811,7 @@ namespace SilksongCoop.Mod
                 camTarget?.EndFreeMode();
 
                 DeathCoordinator?.ResetAfterBenchRespawn();
+                DeathCoordinator?.BroadcastEpochSync();
                 SessionState?.ReturnToActive();
 
                 var hero = HeroController.instance;
@@ -862,8 +909,8 @@ namespace SilksongCoop.Mod
                     Header = new PacketHeader(PacketType.BenchCheckpointSync, 0, 0, (uint)(Time.timeAsDouble * 1000.0)),
                     SceneName = sceneName,
                     RespawnMarker = respawnMarker,
-                    FacingDirection = spawnType,
-                    AtBench = facingRight
+                    SpawnType = spawnType,
+                    FacingRight = facingRight
                 };
 
                 // BUG-C1: scene and marker names can exceed 128 bytes — a stack buffer
@@ -926,15 +973,16 @@ namespace SilksongCoop.Mod
         /// <param name="count">Number of heart pieces collected.</param>
         public void BroadcastHeartPieces(int count)
         {
-            try
-            {
-                if (SessionState?.IsConnected != true) return;
-                InventorySync?.OnLocalCounterChanged($"heartPieces:{count}", ItemCategory.KeyItem);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning($"[Coop] Failed broadcasting heart pieces: {ex.Message}");
-            }
+            BroadcastCounterDelta("heartPieces", "heartPiecesInit", count, ref _lastHeartPiecesBroadcast);
+        }
+
+        /// <summary>
+        /// Sends the connect-time heart-piece baseline. Both peers exchange it; the
+        /// receiver merges with <c>Math.Max</c> so neither side regresses.
+        /// </summary>
+        public void BroadcastHeartPiecesBaseline(int count)
+        {
+            BroadcastCounterBaseline("heartPiecesInit", count, ref _lastHeartPiecesBroadcast);
         }
 
         /// <summary>
@@ -943,14 +991,55 @@ namespace SilksongCoop.Mod
         /// <param name="count">Number of silk parts collected.</param>
         public void BroadcastSilkParts(int count)
         {
+            BroadcastCounterDelta("silkParts", "silkPartsInit", count, ref _lastSilkPartsBroadcast);
+        }
+
+        /// <summary>
+        /// Sends the connect-time silk-part baseline (max-merged on the receiver).
+        /// </summary>
+        public void BroadcastSilkPartsBaseline(int count)
+        {
+            BroadcastCounterBaseline("silkPartsInit", count, ref _lastSilkPartsBroadcast);
+        }
+
+        private void BroadcastCounterBaseline(string prefix, int count, ref int lastBroadcast)
+        {
             try
             {
+                lastBroadcast = count;
                 if (SessionState?.IsConnected != true) return;
-                InventorySync?.OnLocalCounterChanged($"silkParts:{count}", ItemCategory.KeyItem);
+                InventorySync?.OnLocalCounterChanged($"{prefix}:{count}", ItemCategory.KeyItem);
             }
             catch (Exception ex)
             {
-                Logger.LogWarning($"[Coop] Failed broadcasting silk parts: {ex.Message}");
+                Logger.LogWarning($"[Coop] Failed broadcasting counter baseline: {ex.Message}");
+            }
+        }
+
+        private void BroadcastCounterDelta(string prefix, string initPrefix, int count, ref int lastBroadcast)
+        {
+            try
+            {
+                if (SessionState?.IsConnected != true) return;
+                if (lastBroadcast < 0)
+                {
+                    // No baseline for this session yet (e.g. a pickup raced the connect
+                    // handshake). Re-anchor on the current value instead of emitting a
+                    // bogus delta from a previous session's count.
+                    BroadcastCounterBaseline(initPrefix, count, ref lastBroadcast);
+                    return;
+                }
+
+                int delta = count - lastBroadcast;
+                lastBroadcast = count;
+                if (delta == 0) return;
+
+                string encodedDelta = delta > 0 ? $"+{delta}" : delta.ToString();
+                InventorySync?.OnLocalCounterChanged($"{prefix}:{encodedDelta}", ItemCategory.KeyItem);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed broadcasting counter delta: {ex.Message}");
             }
         }
 
@@ -966,8 +1055,8 @@ namespace SilksongCoop.Mod
                 var pd = PlayerData.instance;
                 if (pd == null || InventorySync == null) return;
 
-                // 1. Shared ability bools
-                foreach (var boolName in Hooks.InventoryHooks.SharedAbilityBools)
+                // 1. Shared ability bools (validated against the game's PlayerData)
+                foreach (var boolName in Hooks.InventoryHooks.GetValidatedAbilityBools())
                 {
                     if (pd.GetBool(boolName))
                     {
@@ -1002,9 +1091,10 @@ namespace SilksongCoop.Mod
                 }
 
                 // 4. Heart pieces & silk parts (BUG-B5: counters bypass the unlock dedup —
-                // the same value recurs in every upgrade cycle)
-                BroadcastHeartPieces(pd.heartPieces);
-                BroadcastSilkParts(pd.silkParts);
+                // the same value recurs in every upgrade cycle). Send a baseline, not a
+                // delta: both sides max-merge so neither partial count is overwritten.
+                BroadcastHeartPiecesBaseline(pd.heartPieces);
+                BroadcastSilkPartsBaseline(pd.silkParts);
             }
             catch (Exception ex)
             {
@@ -1038,34 +1128,59 @@ namespace SilksongCoop.Mod
                         return;
                     }
 
-                // MED-02: Partial health and silk fragment synchronizations
-                // BUG-B5: counter values repeat across upgrade cycles (a new mask shard
-                // reports "heartPieces:1" again after the previous cycle reset to 0), so
-                // apply the received count ABSOLUTELY instead of a greater-than guard —
-                // the guard permanently blocked the post-mask reset and stalled upgrades.
+                // MED-02: Partial health and silk fragment synchronization.
+                // Counters are shared progress: the connect-time baseline is max-merged,
+                // and subsequent packets carry a signed delta. Absolute overwrites made
+                // the two players' partial counts swap with each other on connect (#2.3).
+                if (itemId.StartsWith("heartPiecesInit:"))
+                {
+                    if (int.TryParse(itemId.Substring("heartPiecesInit:".Length), out int baseline))
+                    {
+                        // Persistent state is 0..3 (4 is transiently visible before the
+                        // game resets it). Cap so a baseline can never award a second mask.
+                        int merged = Math.Max(playerData.heartPieces, Math.Clamp(baseline, 0, 3));
+                        playerData.heartPieces = merged;
+                    }
+                    return;
+                }
+                if (itemId.StartsWith("silkPartsInit:"))
+                {
+                    if (int.TryParse(itemId.Substring("silkPartsInit:".Length), out int baseline))
+                    {
+                        int merged = Math.Max(playerData.silkParts, Math.Clamp(baseline, 0, 2));
+                        playerData.silkParts = merged;
+                    }
+                    return;
+                }
                 if (itemId.StartsWith("heartPieces:"))
                 {
-                    if (int.TryParse(itemId.Substring("heartPieces:".Length), out int pieces))
+                    if (int.TryParse(itemId.Substring("heartPieces:".Length), out int value))
                     {
-                        playerData.heartPieces = pieces;
-                        if (playerData.heartPieces >= 4)
+                        bool isDelta = itemId["heartPieces:".Length] == '+' || itemId["heartPieces:".Length] == '-';
+                        int next = isDelta ? playerData.heartPieces + value : Math.Max(playerData.heartPieces, value);
+                        next = Math.Max(0, next);
+                        while (next >= 4)
                         {
                             HeroController.instance?.AddToMaxHealth(1);
-                            playerData.heartPieces -= 4;
+                            next -= 4;
                         }
+                        playerData.heartPieces = next;
                     }
                     return;
                 }
                 if (itemId.StartsWith("silkParts:"))
                 {
-                    if (int.TryParse(itemId.Substring("silkParts:".Length), out int parts))
+                    if (int.TryParse(itemId.Substring("silkParts:".Length), out int value))
                     {
-                        playerData.silkParts = parts;
-                        if (playerData.silkParts >= 3)
+                        bool isDelta = itemId["silkParts:".Length] == '+' || itemId["silkParts:".Length] == '-';
+                        int next = isDelta ? playerData.silkParts + value : Math.Max(playerData.silkParts, value);
+                        next = Math.Max(0, next);
+                        while (next >= 3)
                         {
                             HeroController.instance?.AddToMaxSilk(1);
-                            playerData.silkParts -= 3;
+                            next -= 3;
                         }
+                        playerData.silkParts = next;
                     }
                     return;
                 }
@@ -1167,6 +1282,15 @@ namespace SilksongCoop.Mod
                     _reconnectPending = false;
                     _reconnectAttempts = 0;
                     _reconnectAddress = null;
+
+                    // Issue #2.2: never inherit a wipe/spectator latch from the previous
+                    // session. If the old session ended mid-wipe, this flag stayed set until
+                    // the game was restarted and every later team wipe silently no-oped.
+                    Interlocked.Exchange(ref _teamWipeInProgress, 0);
+                    _spectatorActive = false;
+                    _lastHeartPiecesBroadcast = -1;
+                    _lastSilkPartsBroadcast = -1;
+
                     Logger.LogInfo($"[Coop] Peer connected: {peer}");
                     SessionState?.SetConnected(peer, transport.IsHost ? SessionRole.Host : SessionRole.Client);
                     MenuUI?.Diagnostics?.OnSessionStarted();
@@ -1330,13 +1454,20 @@ namespace SilksongCoop.Mod
                         case PacketType.BenchCheckpointSync:
                             var bench = BenchCheckpointSyncPacket.Deserialize(ref reader);
                             if (!PacketValidator.ValidateBenchCheckpoint(bench)) return;
-                            ApplyRemoteBenchCheckpoint(bench.SceneName, bench.RespawnMarker, bench.FacingDirection, bench.AtBench);
+                            ApplyRemoteBenchCheckpoint(bench.SceneName, bench.RespawnMarker, bench.SpawnType, bench.FacingRight);
                             break;
 
                         case PacketType.ActionTrigger:
                             var action = ActionTriggerPacket.Deserialize(ref reader);
                             if (!PacketValidator.ValidateActionTrigger(action)) return;
-                            CloneSpawner?.TriggerRemoteAction(peer, action.Action, (byte)action.Parameter);
+                            // A hidden clone still sits at its last position in this scene.
+                            // Its attack must not damage enemies in a room the partner has
+                            // already left (issue #2.4).
+                            if (CloneSpawner == null || !CloneSpawner.IsRemoteInSameScene(peer))
+                            {
+                                break;
+                            }
+                            CloneSpawner.TriggerRemoteAction(peer, action.Action, (byte)action.Parameter, action.OriginX, action.OriginY);
                             break;
 
                         case PacketType.VitalsSync:

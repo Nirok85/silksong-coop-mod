@@ -10,8 +10,27 @@ namespace SilksongCoop.Core.Protocol.Packets
         public PacketHeader Header;
         public string SceneName;
         public string RespawnMarker;
+
+        // Wire compatibility: the two values already travel in separate fields (int32 +
+        // byte). They were simply named after the wrong semantics. `FacingDirection` has
+        // always carried the spawn type and `AtBench` has always carried "facing right".
+        // The aliases below give callers the correct names without changing the layout.
         public int FacingDirection;
         public bool AtBench;
+
+        /// <summary>Bench spawn type passed to <c>PlayerData.SetBenchRespawn</c>.</summary>
+        public int SpawnType
+        {
+            get => FacingDirection;
+            set => FacingDirection = value;
+        }
+
+        /// <summary>Whether the player faces right at the checkpoint.</summary>
+        public bool FacingRight
+        {
+            get => AtBench;
+            set => AtBench = value;
+        }
 
         /// <summary>
         /// Serializes this packet to the specified writer.

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using HarmonyLib;
 using SilksongCoop.Core.Protocol.Packets;
 using SilksongCoop.Mod.State;
@@ -35,6 +36,58 @@ namespace SilksongCoop.Mod.Hooks
             "hasSuperJump",
             "hasQuill"
         };
+
+        private static HashSet<string>? _validatedAbilityBools;
+        private static readonly object _abilityValidationLock = new object();
+
+        /// <summary>
+        /// Returns the ability names that actually exist on <see cref="PlayerData"/>.
+        /// A name that is not a real field/property would be silently ignored by
+        /// <c>SetBool</c> and never synchronize anything; validate once at startup and log
+        /// the mismatch instead of pretending to sync it.
+        /// </summary>
+        public static HashSet<string> GetValidatedAbilityBools()
+        {
+            if (_validatedAbilityBools != null) return _validatedAbilityBools;
+
+            lock (_abilityValidationLock)
+            {
+                if (_validatedAbilityBools != null) return _validatedAbilityBools;
+
+                var validated = new HashSet<string>(StringComparer.Ordinal);
+                var type = typeof(PlayerData);
+                const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+
+                foreach (var name in SharedAbilityBools)
+                {
+                    bool exists = type.GetField(name, flags) != null || type.GetProperty(name, flags) != null;
+                    if (exists)
+                    {
+                        validated.Add(name);
+                    }
+                    else
+                    {
+                        SilksongCoopPlugin.LogWarn(
+                            $"[Coop] PlayerData has no member '{name}' — ability sync for it is disabled (game signature changed?)");
+                    }
+                }
+
+                _validatedAbilityBools = validated;
+                return validated;
+            }
+        }
+
+        /// <summary>
+        /// True when the name is a shared ability AND exists on the current game's
+        /// <see cref="PlayerData"/> type.
+        /// </summary>
+        public static bool IsSharedAbilityBool(string boolName)
+        {
+            if (string.IsNullOrEmpty(boolName) || !SharedAbilityBools.Contains(boolName))
+                return false;
+
+            return GetValidatedAbilityBools().Contains(boolName);
+        }
 
         /// <summary>
         /// Hook that fires after a crest is unlocked.
@@ -103,7 +156,7 @@ namespace SilksongCoop.Mod.Hooks
 
             try
             {
-                if (!string.IsNullOrEmpty(boolName) && SharedAbilityBools.Contains(boolName))
+                if (!string.IsNullOrEmpty(boolName) && IsSharedAbilityBool(boolName))
                 {
                     SilksongCoopPlugin.Instance.InventorySync.OnLocalItemDiscovered(boolName, ItemCategory.Ability);
                 }

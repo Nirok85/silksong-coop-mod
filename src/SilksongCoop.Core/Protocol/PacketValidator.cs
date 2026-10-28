@@ -13,6 +13,16 @@ namespace SilksongCoop.Core.Protocol
         private const float MaxVelocityValue = 1000f;
 
         /// <summary>
+        /// Upper bounds for progression values received from a peer. A modified client
+        /// could otherwise push arbitrary values into the partner's save file (the old
+        /// validator accepted MaxHealth = 255). These ceilings sit far above anything the
+        /// game legitimately produces, so honest sessions are unaffected.
+        /// </summary>
+        public const int MaxReasonableMaxHealth = 64;
+        public const int MaxReasonableSilkSpools = 16;
+        public const int MaxReasonableCurrency = 100_000_000;
+
+        /// <summary>
         /// Validates a TransformSync packet's field values.
         /// </summary>
         public static bool ValidateTransformSync(TransformSyncPacket packet)
@@ -48,14 +58,26 @@ namespace SilksongCoop.Core.Protocol
         /// </summary>
         public static bool ValidateVitalsSync(VitalsSyncPacket packet)
         {
-            // Validate HP is reasonable (byte range 0-255, but game max is ~9 masks)
-            if (packet.CurrentHealth > 255 || packet.MaxHealth < 1 || packet.MaxHealth > 255)
+            // Bounds are deliberately generous but finite: a malicious peer must not be
+            // able to write MaxHealth = 255 (or any other absurd value) into our save.
+            if (packet.MaxHealth < 1 || packet.MaxHealth > MaxReasonableMaxHealth)
             {
                 return false;
             }
 
-            // Validate silk is reasonable (byte range 0-255)
-            if (packet.CurrentSilk > 255 || packet.MaxSilkSpools > 255)
+            if (packet.CurrentHealth > MaxReasonableMaxHealth)
+            {
+                return false;
+            }
+
+            if (packet.MaxSilkSpools > MaxReasonableSilkSpools)
+            {
+                return false;
+            }
+
+            // Silk is stored per spool (9 units each); allow a small margin, then cap.
+            int maxSilk = Math.Max(9, packet.MaxSilkSpools * 9);
+            if (packet.CurrentSilk > maxSilk)
             {
                 return false;
             }
@@ -80,8 +102,8 @@ namespace SilksongCoop.Core.Protocol
                 return false;
             }
 
-            // Validate total wallet amount is non-negative
-            if (packet.TotalWalletAmount < 0)
+            // Validate total wallet amount is non-negative and within a sane ceiling
+            if (packet.TotalWalletAmount < 0 || packet.TotalWalletAmount > MaxReasonableCurrency)
             {
                 return false;
             }
@@ -181,7 +203,11 @@ namespace SilksongCoop.Core.Protocol
             if (packet.RespawnMarker == null || packet.RespawnMarker.Length > 256)
                 return false;
 
-            if (packet.AtBench && packet.FacingDirection != 0 && packet.FacingDirection != 1)
+            // Spawn type and facing direction are independent fields: the old check
+            // compared the spawn type against {0,1} whenever facing-right was set, which
+            // silently dropped legitimate checkpoints whose spawn type was, e.g., 2.
+            // SpawnType is intentionally an opaque enum value here.
+            if (packet.SpawnType < 0)
                 return false;
 
             return true;

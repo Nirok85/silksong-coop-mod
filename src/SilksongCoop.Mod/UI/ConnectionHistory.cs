@@ -18,6 +18,12 @@ namespace SilksongCoop.Mod.UI
         private bool _loaded;
 
         /// <summary>
+        /// When false, entries are kept in memory only and nothing is written to PlayerPrefs
+        /// (the Windows registry). Controlled by the [Network] SaveConnectionHistory config.
+        /// </summary>
+        public bool PersistEnabled { get; set; } = true;
+
+        /// <summary>
         /// Returns the list of recent connection targets, most recent first.
         /// </summary>
         public IReadOnlyList<string> GetAll()
@@ -57,6 +63,20 @@ namespace SilksongCoop.Mod.UI
         public void Clear()
         {
             _entries.Clear();
+            if (!PersistEnabled)
+            {
+                try
+                {
+                    UnityEngine.PlayerPrefs.DeleteKey(PrefsKey);
+                    UnityEngine.PlayerPrefs.Save();
+                }
+                catch (Exception ex)
+                {
+                    SilksongCoopPlugin.LogWarn($"[ConnectionHistory] Failed to delete: {ex.Message}");
+                }
+                return;
+            }
+
             Save();
         }
 
@@ -64,6 +84,8 @@ namespace SilksongCoop.Mod.UI
         {
             if (_loaded) return;
             _loaded = true;
+
+            if (!PersistEnabled) return;
 
             try
             {
@@ -88,6 +110,8 @@ namespace SilksongCoop.Mod.UI
 
         private void Save()
         {
+            if (!PersistEnabled) return;
+
             try
             {
                 string raw = string.Join(Separator.ToString(), _entries);

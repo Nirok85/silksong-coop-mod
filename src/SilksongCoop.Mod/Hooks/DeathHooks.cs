@@ -86,12 +86,18 @@ namespace SilksongCoop.Mod.Hooks
         [HarmonyPatch(typeof(GameManager), nameof(GameManager.ReadyForRespawn))]
         public static void PostfixReadyForRespawn()
         {
-            if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true)
+            var plugin = SilksongCoopPlugin.Instance;
+            if (plugin == null) return;
+
+            // Issue #2.2: a disconnect during spectator mode starts a local bench wipe and
+            // then tears the session down. The old IsConnected-only gate skipped this
+            // callback, so _teamWipeInProgress stayed latched until the game restarted.
+            if (plugin.SessionState?.IsConnected != true && !plugin.IsTeamWipeInProgress)
             {
                 return;
             }
 
-            SilksongCoopPlugin.Instance.OnBenchRespawnCompleted();
+            plugin.OnBenchRespawnCompleted();
         }
 
         /// <summary>

@@ -132,6 +132,9 @@ namespace SilksongCoop.Mod.Networking
 
             IsHost = true;
             IsConnected = false;
+            _remoteSteamId = CSteamID.Nil;
+            _peerConnectNotified = false;
+            _lobbyId = CSteamID.Nil;
             SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, 2);
         }
 
@@ -152,6 +155,10 @@ namespace SilksongCoop.Mod.Networking
             if (ulong.TryParse(addressOrCode, out ulong lobbyIdVal))
             {
                 CSteamID lobbySteamId = new CSteamID(lobbyIdVal);
+                _remoteSteamId = CSteamID.Nil;
+                _peerConnectNotified = false;
+                _lobbyId = CSteamID.Nil;
+                IsConnected = false;
                 _connectionAttemptStartMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 SteamMatchmaking.JoinLobby(lobbySteamId);
             }
@@ -262,6 +269,32 @@ namespace SilksongCoop.Mod.Networking
             }
         }
 
+        /// <summary>
+        /// True when the given Steam user is a member of our current lobby. P2P session
+        /// requests are only accepted from such users; "first packet wins" let any Steam
+        /// user who knew the host's SteamID occupy the single co-op slot.
+        /// </summary>
+        private bool IsLobbyMember(CSteamID user)
+        {
+            if (user == CSteamID.Nil || _lobbyId == CSteamID.Nil) return false;
+
+            try
+            {
+                int count = SteamMatchmaking.GetNumLobbyMembers(_lobbyId);
+                for (int i = 0; i < count; i++)
+                {
+                    if (SteamMatchmaking.GetLobbyMemberByIndex(_lobbyId, i) == user)
+                        return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger?.LogWarning($"[Steam] Lobby membership check failed: {ex.Message}");
+            }
+
+            return false;
+        }
+
         #endregion // Connection Notification Helpers
 
         #region Data Transmission
@@ -370,6 +403,14 @@ namespace SilksongCoop.Mod.Networking
                                     continue;
                                 }
 
+                                // The host must only adopt a member of its own lobby.
+                                if (!IsLobbyMember(remoteId))
+                                {
+                                    Logger?.LogWarning($"[Steam] Dropped packet from non-lobby user: {remoteId.m_SteamID}");
+                                    SteamNetworking.CloseP2PSessionWithUser(remoteId);
+                                    continue;
+                                }
+
                                 _remoteSteamId = remoteId;
                             }
 
@@ -407,7 +448,9 @@ namespace SilksongCoop.Mod.Networking
             {
                 _lobbyId = new CSteamID(callback.m_ulSteamIDLobby);
                 SteamMatchmaking.SetLobbyData(_lobbyId, "mod_name", "SilksongCoop");
-                SteamMatchmaking.SetLobbyData(_lobbyId, "mod_version", "1.0.0");
+                // Real build version, not a hard-coded placeholder — the joining client
+                // compares it and refuses to mix incompatible protocol layouts.
+                SteamMatchmaking.SetLobbyData(_lobbyId, "mod_version", SilksongCoopPlugin.PluginVersion);
             }
             else
             {
@@ -429,6 +472,22 @@ namespace SilksongCoop.Mod.Networking
             _lobbyId = new CSteamID(callback.m_ulSteamIDLobby);
             if (!IsHost)
             {
+                // Refuse lobbies that were not created by this mod or that run a different
+                // build. Previously `mod_version` was written as "1.0.0" and never read,
+                // so 2.0.x and future incompatible builds joined each other blindly.
+                string modName = SteamMatchmaking.GetLobbyData(_lobbyId, "mod_name");
+                string modVersion = SteamMatchmaking.GetLobbyData(_lobbyId, "mod_version");
+                if (!string.Equals(modName, "SilksongCoop", StringComparison.Ordinal) ||
+                    !string.Equals(modVersion, SilksongCoopPlugin.PluginVersion, StringComparison.Ordinal))
+                {
+                    Logger?.LogWarning(
+                        $"[Steam] Refusing incompatible lobby: mod='{modName}', version='{modVersion}', local='{SilksongCoopPlugin.PluginVersion}'");
+                    try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
+                    _lobbyId = CSteamID.Nil;
+                    OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.VersionMismatch);
+                    return;
+                }
+
                 SilksongCoopPlugin.Instance?.SetActiveTransport(this);
                 CSteamID hostId = SteamMatchmaking.GetLobbyOwner(_lobbyId);
                 if (hostId == CSteamID.Nil)
@@ -459,15 +518,15 @@ namespace SilksongCoop.Mod.Networking
 
         private void OnP2PSessionRequest(P2PSessionRequest_t callback)
         {
-            // Only accept P2P session from the expected remote peer
+            // Only accept P2P traffic from the expected peer, or (on the host) from a
+            // verified member of the current lobby. Being able to send a Steam packet to a
+            // SteamID must not be enough to claim the single co-op slot.
             if (_remoteSteamId != CSteamID.Nil && _remoteSteamId == callback.m_steamIDRemote)
             {
                 SteamNetworking.AcceptP2PSessionWithUser(callback.m_steamIDRemote);
             }
-            else if (_remoteSteamId == CSteamID.Nil && IsHost)
+            else if (_remoteSteamId == CSteamID.Nil && IsHost && IsLobbyMember(callback.m_steamIDRemote))
             {
-                // Host hasn't seen the client yet but is expecting a connection
-                // Accept only if we're in hosting state
                 SteamNetworking.AcceptP2PSessionWithUser(callback.m_steamIDRemote);
                 _remoteSteamId = callback.m_steamIDRemote;
                 NotifyPeerConnected(callback.m_steamIDRemote);
@@ -542,6 +601,7 @@ namespace SilksongCoop.Mod.Networking
                 if (_remoteSteamId != CSteamID.Nil && _remoteSteamId == leftUser)
                 {
                     Logger?.LogInfo($"[Steam] Remote peer left lobby: {leftUser.m_SteamID}");
+                    try { SteamNetworking.CloseP2PSessionWithUser(leftUser); } catch { /* best-effort */ }
                     NotifyPeerDisconnected(DisconnectReason.GracefulDisconnect);
                 }
             }

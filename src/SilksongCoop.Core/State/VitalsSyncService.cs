@@ -20,6 +20,12 @@ namespace SilksongCoop.Core.State
         private readonly object _transactionLock = new object();
         private const int MaxTrackedTransactions = 500;
 
+        // Monotonic per-sender sequence carried in PickupUniqueId. The GUID window is
+        // intentionally capped at 500 (pinned by tests); after eviction a replayed old
+        // packet has an older sequence and is still rejected here.
+        private readonly Dictionary<(NetworkPeerId Peer, CurrencyType Currency), uint> _lastCurrencySequences = new();
+        private uint _currencySequence;
+
         public int LocalHealth { get; private set; } = 5;
         public int LocalSilk { get; private set; } = 9;
         public int SharedMaxHealth { get; private set; } = 5;
@@ -123,6 +129,9 @@ namespace SilksongCoop.Core.State
             {
                 SharedRosaries = initialRosaries;
                 SharedShellShards = initialShards;
+                // New session: peer sequences restart from 1 on both sides.
+                _lastCurrencySequences.Clear();
+                _currencySequence = 0;
             }
         }
 
@@ -274,6 +283,7 @@ namespace SilksongCoop.Core.State
             if (transactionId == Guid.Empty) return;
 
             int currentWallet;
+            uint packetSequence;
             lock (_transactionLock)
             {
                 if (!_processedTransactions.Add(transactionId))
@@ -282,15 +292,24 @@ namespace SilksongCoop.Core.State
                 }
 
                 RecordTransactionOrder(transactionId);
+                packetSequence = ++_currencySequence;
 
+                // The local game is authoritative for this player's wallet snapshot.
+                // When the caller supplies a real total, prefer it over the arithmetic —
+                // this also repairs drift from a previously lost packet. Tests and older
+                // call sites pass 0, which means "derive from the delta".
                 if (currency == CurrencyType.Rosaries)
                 {
-                    SharedRosaries = Math.Max(0, SharedRosaries + deltaAmount);
+                    int next = (int)Math.Clamp((long)SharedRosaries + deltaAmount, 0, PacketValidator.MaxReasonableCurrency);
+                    if (newTotal > 0) next = Math.Min(newTotal, PacketValidator.MaxReasonableCurrency);
+                    SharedRosaries = next;
                     currentWallet = SharedRosaries;
                 }
                 else
                 {
-                    SharedShellShards = Math.Max(0, SharedShellShards + deltaAmount);
+                    int next = (int)Math.Clamp((long)SharedShellShards + deltaAmount, 0, PacketValidator.MaxReasonableCurrency);
+                    if (newTotal > 0) next = Math.Min(newTotal, PacketValidator.MaxReasonableCurrency);
+                    SharedShellShards = next;
                     currentWallet = SharedShellShards;
                 }
             }
@@ -301,6 +320,7 @@ namespace SilksongCoop.Core.State
                 Currency = currency,
                 TotalWalletAmount = currentWallet,
                 DeltaAmount = (short)Math.Clamp(deltaAmount, short.MinValue, short.MaxValue),
+                PickupUniqueId = packetSequence,
                 TransactionId = transactionId
             };
 
@@ -374,6 +394,20 @@ namespace SilksongCoop.Core.State
                 int updatedWallet;
                 lock (_transactionLock)
                 {
+                    // Reject replayed/out-of-order snapshots even after their GUID has been
+                    // evicted from the 500-entry FIFO. Packets from this build always carry
+                    // a per-sender sequence; the value 0 keeps older/manual callers working.
+                    if (packet.PickupUniqueId > 0)
+                    {
+                        var sequenceKey = (sender, packet.Currency);
+                        if (_lastCurrencySequences.TryGetValue(sequenceKey, out uint lastSequence) &&
+                            packet.PickupUniqueId <= lastSequence)
+                        {
+                            return;
+                        }
+                        _lastCurrencySequences[sequenceKey] = packet.PickupUniqueId;
+                    }
+
                     if (!_processedTransactions.Add(packet.TransactionId))
                     {
                         return; // Duplicate transaction, ignore
@@ -391,7 +425,18 @@ namespace SilksongCoop.Core.State
                         }
                         else
                         {
-                            SharedRosaries = Math.Max(0, SharedRosaries + delta);
+                            int next = (int)Math.Clamp((long)SharedRosaries + delta, 0, PacketValidator.MaxReasonableCurrency);
+
+                            // Reconcile upward against the sender's snapshot on gains only.
+                            // This repairs a missed positive delta without resurrecting a
+                            // stale balance after a concurrent spend (negative deltas are
+                            // applied arithmetically and stay clamped at zero).
+                            if (delta > 0 && packet.TotalWalletAmount > 0)
+                            {
+                                next = Math.Max(next, packet.TotalWalletAmount);
+                            }
+
+                            SharedRosaries = next;
                         }
                         updatedWallet = SharedRosaries;
                     }
@@ -403,7 +448,12 @@ namespace SilksongCoop.Core.State
                         }
                         else
                         {
-                            SharedShellShards = Math.Max(0, SharedShellShards + delta);
+                            int next = (int)Math.Clamp((long)SharedShellShards + delta, 0, PacketValidator.MaxReasonableCurrency);
+                            if (delta > 0 && packet.TotalWalletAmount > 0)
+                            {
+                                next = Math.Max(next, packet.TotalWalletAmount);
+                            }
+                            SharedShellShards = next;
                         }
                         updatedWallet = SharedShellShards;
                     }
@@ -473,10 +523,12 @@ namespace SilksongCoop.Core.State
                 if (currentRosaries > 0)
                 {
                     var tx = Guid.NewGuid();
+                    uint seq;
                     lock (_transactionLock)
                     {
                         _processedTransactions.Add(tx);
                         RecordTransactionOrder(tx);
+                        seq = ++_currencySequence;
                     }
 
                     var packet = new CurrencySyncPacket
@@ -486,7 +538,7 @@ namespace SilksongCoop.Core.State
                         TotalWalletAmount = currentRosaries,
                         DeltaAmount = 0, // Initial sync: delta 0 to avoid double-counting on receiver
                         TransactionId = tx,
-                        PickupUniqueId = 0 // Fix: Initialize field to prevent undefined behavior
+                        PickupUniqueId = seq
                     };
                     OnOutgoingCurrencyBroadcast?.Invoke(packet);
                 }
@@ -494,10 +546,12 @@ namespace SilksongCoop.Core.State
                 if (currentShards > 0)
                 {
                     var tx = Guid.NewGuid();
+                    uint seq;
                     lock (_transactionLock)
                     {
                         _processedTransactions.Add(tx);
                         RecordTransactionOrder(tx);
+                        seq = ++_currencySequence;
                     }
 
                     var packet = new CurrencySyncPacket
@@ -507,7 +561,7 @@ namespace SilksongCoop.Core.State
                         TotalWalletAmount = currentShards,
                         DeltaAmount = 0, // Initial sync: delta 0 to avoid double-counting on receiver
                         TransactionId = tx,
-                        PickupUniqueId = 0 // Fix: Initialize field to prevent undefined behavior
+                        PickupUniqueId = seq
                     };
                     OnOutgoingCurrencyBroadcast?.Invoke(packet);
                 }

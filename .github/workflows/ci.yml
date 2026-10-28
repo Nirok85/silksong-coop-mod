@@ -8,7 +8,7 @@ on:
 
 jobs:
   core:
-    name: Core — build + tests
+    name: Core - build + tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,8 +24,11 @@ jobs:
       - name: Build Core (warnings as errors)
         run: dotnet build src/SilksongCoop.Core/SilksongCoop.Core.csproj -c Release -p:TreatWarningsAsErrors=true
 
+      # Build the test project as part of `dotnet test` (no --no-build): it references
+      # SilksongCoop.Core, and a previous workflow built only Core then asked
+      # `dotnet test --no-build` to run an assembly that was never built.
       - name: Run tests
-        run: dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj -c Release --no-build --logger "trx;LogFileName=results.trx"
+        run: dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj -c Release --logger "trx;LogFileName=results.trx"
 
       - name: Upload test results
         if: always()
@@ -35,12 +38,13 @@ jobs:
           path: '**/results.trx'
           if-no-files-found: ignore
 
-  # Mod project requires game DLLs (Assembly-CSharp, UnityEngine, etc.) which cannot
-  # be redistributed. Build it only on a self-hosted runner with the game installed.
+  # The Mod project needs the game's managed assemblies (Assembly-CSharp, UnityEngine,
+  # TeamCherry.TK2D, ...), which cannot be redistributed. Build it only on a self-hosted
+  # runner that has Silksong installed; enable this job there.
   mod:
-    name: Mod — syntax check (optional)
+    name: Mod - compile against game assemblies (self-hosted only)
     runs-on: ubuntu-latest
-    if: false  # enable on a self-hosted runner with the game's Managed/ folder
+    if: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4

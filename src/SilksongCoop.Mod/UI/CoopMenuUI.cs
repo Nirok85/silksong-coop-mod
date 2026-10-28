@@ -40,6 +40,9 @@ namespace SilksongCoop.Mod.UI
         private string _inputAddressOrCode = "";
         private string _lastConnectionTarget = "";
         private string _currentHostAddress = "";
+        private string _currentRoomCode = "";
+        private string _udpPortInput = "";
+        private bool _udpPortInputInitialized;
         private int _windowId;
 
         // Copy feedback
@@ -104,6 +107,10 @@ namespace SilksongCoop.Mod.UI
             _keybinds = keybinds;
             _qualityPresets = qualityPresets;
             _diagnosticsOverlay = new DiagnosticsOverlay(_diagnostics);
+
+            // Issue #2.6: connection targets used to be written to the Windows registry
+            // (PlayerPrefs) unconditionally, with no way to opt out.
+            _history.PersistEnabled = SilksongCoopPlugin.Instance?.SaveConnectionHistoryConfig?.Value ?? true;
         }
 
         /// <summary>
@@ -228,8 +235,8 @@ namespace SilksongCoop.Mod.UI
             }
             else if (_sessionState != null && _sessionState.Status == SessionStatus.Hosting)
             {
-                watermark = !string.IsNullOrEmpty(_currentHostAddress)
-                    ? $"[F10] Hosting: {_currentHostAddress}"
+                watermark = !string.IsNullOrEmpty(_currentRoomCode)
+                    ? $"[F10] Hosting: {_currentRoomCode}"
                     : "[F10] Hosting (waiting for partner...)";
                 watermarkColor = SilksongSkin.Gold;
             }
@@ -480,6 +487,15 @@ namespace SilksongCoop.Mod.UI
                 GUILayout.Label("YOUR SESSION", _styleTitle ?? Skin.label);
                 GUILayout.Space(4);
 
+                if (!string.IsNullOrEmpty(_currentRoomCode))
+                {
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label("<b>Room code:</b>", GUILayout.Width(70));
+                    GUILayout.Label($"<color=#D4A843><b>{_currentRoomCode}</b></color>");
+                    DrawCopyButton(_currentRoomCode, "Copy");
+                    GUILayout.EndHorizontal();
+                }
+
                 if (!string.IsNullOrEmpty(_currentHostAddress))
                 {
                     GUILayout.BeginHorizontal();
@@ -487,7 +503,7 @@ namespace SilksongCoop.Mod.UI
                     GUILayout.Label($"<color=#D4A843><b>{_currentHostAddress}</b></color>");
                     DrawCopyButton(_currentHostAddress, "Copy");
                     GUILayout.EndHorizontal();
-                    GUILayout.Label("<color=#999999><i>Note: Direct UDP works via LAN or VPN (Radmin/Hamachi). For Internet, use Steam Host.</i></color>");
+                    GUILayout.Label("<color=#999999><i>Share the room code: it authenticates the session. Direct IP also works by LAN/VPN, but the host now requires the code.</i></color>");
                 }
 
                 if (_sessionState != null && _sessionState.SteamLobbyId.HasValue)
@@ -730,6 +746,14 @@ namespace SilksongCoop.Mod.UI
             SilksongSkin.DrawDivider(1f, 2f, 4f);
 
             // Host address (if hosting)
+            if (!string.IsNullOrEmpty(_currentRoomCode))
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Label($"<b>Room Code:</b>  {_currentRoomCode}", GUILayout.ExpandWidth(true));
+                DrawCopyButton(_currentRoomCode, "Copy");
+                GUILayout.EndHorizontal();
+            }
+
             if (!string.IsNullOrEmpty(_currentHostAddress))
             {
                 GUILayout.BeginHorizontal();
@@ -787,6 +811,7 @@ namespace SilksongCoop.Mod.UI
             if (newTickRate != tickRate && plugin.TickRateHzConfig != null)
             {
                 plugin.TickRateHzConfig.Value = newTickRate;
+                _qualityPresets?.MarkAsCustom();
             }
             GUILayout.Label("Higher = smoother but more bandwidth (20-60 Hz)", _styleSubtitle ?? Skin.label);
 
@@ -796,14 +821,34 @@ namespace SilksongCoop.Mod.UI
             GUILayout.Label("<b>Default UDP Port</b>");
             GUILayout.BeginHorizontal();
             int port = plugin.DefaultUdpPortConfig?.Value ?? 7777;
-            string portStr = GUILayout.TextField(port.ToString(), GUILayout.Width(80));
-            if (int.TryParse(portStr, out int newPort) && newPort >= 1024 && newPort <= 65535)
+            if (!_udpPortInputInitialized)
+            {
+                _udpPortInput = port.ToString();
+                _udpPortInputInitialized = true;
+            }
+
+            // Keep an editable buffer. Re-reading the config into the TextField every
+            // frame made the field impossible to type into (issue #1 / #2).
+            GUI.SetNextControlName("CoopUdpPort");
+            string editedPort = GUILayout.TextField(_udpPortInput, GUILayout.Width(80));
+            bool portFocused = GUI.GetNameOfFocusedControl() == "CoopUdpPort";
+            if (portFocused)
+            {
+                _udpPortInput = editedPort;
+            }
+
+            if (int.TryParse(editedPort, out int newPort) && newPort >= 1024 && newPort <= 65535)
             {
                 if (newPort != port && plugin.DefaultUdpPortConfig != null)
                 {
                     plugin.DefaultUdpPortConfig.Value = newPort;
                 }
             }
+            else if (!portFocused)
+            {
+                _udpPortInput = port.ToString();
+            }
+
             GUILayout.Label("(1024–65535)", _styleSubtitle ?? Skin.label);
             GUILayout.EndHorizontal();
 
@@ -841,6 +886,7 @@ namespace SilksongCoop.Mod.UI
             if (newTrail != trailEnabled && plugin.EnablePlayer2DashTrailConfig != null)
             {
                 plugin.EnablePlayer2DashTrailConfig.Value = newTrail;
+                _qualityPresets?.MarkAsCustom();
             }
 
             GUILayout.Space(10);
@@ -1031,21 +1077,26 @@ namespace SilksongCoop.Mod.UI
 
                 // BUG-B2: arm the HMAC challenge-response — without SetRoomCode the host
                 // silently ran in unauthenticated mode and the room code was never verified.
+                // Issue #1.1: also REQUIRE the code. The code is the shared secret; direct
+                // IP joins that do not know it are rejected instead of silently accepted.
                 _udpTransport.SetRoomCode(code);
+                _udpTransport.RequireRoomCode = true;
                 _udpTransport.StartHost(udpPort);
 
+                _currentRoomCode = code;
                 _currentHostAddress = $"{GetLocalIpAddress()}:{udpPort}";
 
                 _sessionState?.SetHosting(_udpTransport.LocalPeerId, code);
                 plugin.SetActiveTransport(_udpTransport);
 
-                // Auto-copy address to clipboard
-                GUIUtility.systemCopyBuffer = _currentHostAddress;
+                // Copy the room code (not just IP:port) — it is what the guest needs and
+                // it was previously never shown anywhere in the UI.
+                GUIUtility.systemCopyBuffer = code;
                 _copyFlashUntil = Time.unscaledTime + 2f;
-                _copyFlashText = _currentHostAddress;
+                _copyFlashText = code;
 
                 _diagnostics.OnSessionStarted();
-                _toasts.ShowSuccess($"Hosting on {_currentHostAddress} — address copied!");
+                _toasts.ShowSuccess($"Hosting on {_currentHostAddress} — room code {code} copied!");
                 _activeTab = Tab.Status;
             }
             catch (Exception ex)
@@ -1057,6 +1108,79 @@ namespace SilksongCoop.Mod.UI
 
         private string GetLocalIpAddress()
         {
+            // 1. Ask the OS which source address it would use for an outbound packet.
+            //    A UDP "connect" sends nothing; it only performs a route lookup. This
+            //    picks the adapter that actually has a route, instead of whichever
+            //    address Dns.GetHostEntry happens to list first (Docker/WSL/Hyper-V
+            //    virtual adapters used to win and produced an unreachable room code).
+            try
+            {
+                using var probe = new System.Net.Sockets.Socket(
+                    System.Net.Sockets.AddressFamily.InterNetwork,
+                    System.Net.Sockets.SocketType.Dgram,
+                    System.Net.Sockets.ProtocolType.Udp);
+                probe.Connect(System.Net.IPAddress.Parse("8.8.8.8"), 65530);
+                if (probe.LocalEndPoint is System.Net.IPEndPoint localEp &&
+                    localEp.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+                    !System.Net.IPAddress.IsLoopback(localEp.Address) &&
+                    !localEp.Address.ToString().StartsWith("169.254.", StringComparison.Ordinal))
+                {
+                    return localEp.Address.ToString();
+                }
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"Route-based local IP detection failed: {ex.Message}");
+            }
+
+            // 2. Fallback: enumerate interfaces, prefer a private LAN address on an
+            //    operational interface that has a gateway.
+            try
+            {
+                string? fallback = null;
+                foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up)
+                        continue;
+                    if (ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback ||
+                        ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Tunnel)
+                        continue;
+
+                    var props = ni.GetIPProperties();
+                    bool hasGateway = false;
+                    foreach (var gateway in props.GatewayAddresses)
+                    {
+                        if (gateway.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+                            !gateway.Address.Equals(System.Net.IPAddress.Any))
+                        {
+                            hasGateway = true;
+                            break;
+                        }
+                    }
+
+                    foreach (var unicast in props.UnicastAddresses)
+                    {
+                        if (unicast.Address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+                            continue;
+
+                        string s = unicast.Address.ToString();
+                        if (s == "127.0.0.1") continue;
+
+                        if (hasGateway && IsPrivateLanIp(s))
+                            return s;
+
+                        fallback ??= s;
+                    }
+                }
+
+                if (fallback != null) return fallback;
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"Interface-based local IP detection failed: {ex.Message}");
+            }
+
+            // 3. Last resort: the old DNS path.
             try
             {
                 var host = System.Net.Dns.GetHostEntry(System.Net.Dns.GetHostName());
@@ -1116,6 +1240,8 @@ namespace SilksongCoop.Mod.UI
                 _steamTransport.StartHost();
                 plugin.SetActiveTransport(_steamTransport);
                 _sessionState?.SetHosting(_steamTransport.LocalPeerId, "Steam-Lobby");
+                _currentRoomCode = "";
+                _currentHostAddress = "";
 
                 _diagnostics.OnSessionStarted();
                 _toasts.ShowSuccess("Steam lobby created — use Invite Friends");
@@ -1163,6 +1289,8 @@ namespace SilksongCoop.Mod.UI
                 plugin.SetActiveTransport(_udpTransport);
                 _lastConnectionTarget = connectAddress;
                 _history.Add(connectAddress);
+                _currentRoomCode = "";
+                _currentHostAddress = "";
 
                 _sessionState?.SetConnecting(_udpTransport.LocalPeerId, connectAddress);
                 _toasts.ShowInfo($"Connecting to {connectAddress}...");
@@ -1229,6 +1357,7 @@ namespace SilksongCoop.Mod.UI
                 }
 
                 _currentHostAddress = "";
+                _currentRoomCode = "";
                 _diagnostics.OnSessionEnded();
                 _toasts.ShowInfo("Disconnected");
                 _activeTab = Tab.Host;

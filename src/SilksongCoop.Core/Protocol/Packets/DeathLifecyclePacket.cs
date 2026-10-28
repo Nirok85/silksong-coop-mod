@@ -11,7 +11,13 @@ namespace SilksongCoop.Core.Protocol.Packets
         SpectatorCountdownSync = 1,
         PartnerReviveTrigger = 2,
         TeamWipeOccurred = 3,
-        BenchCheckpointUpdate = 4
+        BenchCheckpointUpdate = 4,
+        /// <summary>
+        /// The sender fell back to a SOLO bench respawn (for example when the partner was
+        /// in another room during the revive countdown). The receiver must only mark the
+        /// partner as alive again — it must NOT wipe its own living player.
+        /// </summary>
+        SoloBenchRespawn = 5
     }
 
     /// <summary>

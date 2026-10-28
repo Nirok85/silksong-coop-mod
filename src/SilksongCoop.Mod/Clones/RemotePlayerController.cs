@@ -57,6 +57,11 @@ namespace SilksongCoop.Mod.Clones
         private double _clockOffsetMs;
         private bool _isInSameScene = true;
 
+        // Reused hit-query storage: OverlapBoxAll allocated a new array on every slash.
+        private readonly List<Collider2D> _hitResults = new List<Collider2D>(32);
+        private readonly HashSet<HealthManager> _hitManagers = new HashSet<HealthManager>();
+        private ContactFilter2D _hitFilter;
+
         public NetworkPeerId PeerId => _peerId;
         public bool IsPlayer2 => _isPlayer2;
         public SnapshotBuffer Buffer => _buffer;
@@ -75,6 +80,10 @@ namespace SilksongCoop.Mod.Clones
             _animator = GetComponent<tk2dSpriteAnimator>();
             _paletteSwap = GetComponent<PaletteSwapController>();
             _dashTrail = GetComponent<DashTrailController>();
+
+            // Enemy hurtboxes are triggers; keep them enabled but skip the legacy
+            // layer-mask/depth filters so the query behaves like the old OverlapBoxAll.
+            _hitFilter = new ContactFilter2D { useTriggers = true };
         }
 
         /// <summary>
@@ -91,7 +100,9 @@ namespace SilksongCoop.Mod.Clones
             _clockOffsetMs = 0.0;
             _isInSameScene = true;
             _buffer.Clear();
-            _paletteSwap?.SetPlayer2(isPlayer2);
+            float hueShift = SilksongCoopPlugin.Instance?.Player2HueShiftConfig?.Value
+                ?? PaletteSwapMath.Player2HueShift;
+            _paletteSwap?.SetPlayer2(isPlayer2, hueShift);
             if (_dashTrail != null)
             {
                 _dashTrail.Initialize(isPlayer2);
@@ -283,21 +294,37 @@ namespace SilksongCoop.Mod.Clones
         /// <param name="variant">Action variant or parameter.</param>
         public void TriggerAction(ActionType action, byte variant)
         {
+            TriggerAction(action, variant, float.NaN, float.NaN);
+        }
+
+        /// <summary>
+        /// Triggers a remote action. When <paramref name="originX"/>/<paramref name="originY"/>
+        /// are supplied the hitbox is centred on the sender's authoritative position, not on
+        /// the locally interpolated clone (which trails by 50-300 ms).
+        /// </summary>
+        public void TriggerAction(ActionType action, byte variant, float originX, float originY)
+        {
+            if (!_isInSameScene) return;
+
             if (action == ActionType.AirDash || action == ActionType.HarpoonDash)
             {
                 _dashTrail?.TriggerDash(action == ActionType.AirDash);
             }
             else if (action == ActionType.SlashNormal || action == ActionType.SlashUp || action == ActionType.SlashDown)
             {
-                PerformSlashAttack(action);
+                PerformSlashAttack(action, originX, originY);
             }
         }
 
-        private void PerformSlashAttack(ActionType action)
+        private void PerformSlashAttack(ActionType action, float originX, float originY)
         {
             try
             {
-                Vector2 origin = transform.position;
+                if (!_isInSameScene) return;
+
+                Vector2 origin = float.IsNaN(originX) || float.IsNaN(originY)
+                    ? (Vector2)transform.position
+                    : new Vector2(originX, originY);
                 Vector2 size = new Vector2(2.5f, 1.8f);
                 Vector2 offset = Vector2.zero;
 
@@ -317,60 +344,64 @@ namespace SilksongCoop.Mod.Clones
                 }
 
                 Vector2 hitCenter = origin + offset;
-                var colliders = Physics2D.OverlapBoxAll(hitCenter, size, 0f);
-                if (colliders != null && colliders.Length > 0)
+                int hitCount = Physics2D.OverlapBox(hitCenter, size, 0f, _hitFilter, _hitResults);
+                if (hitCount <= 0) return;
+
+                // BUG-06: damage must reflect the REMOTE player's needle upgrade level,
+                // not the local PlayerData (which is this machine's upgrade state). The
+                // remote player broadcasts its own vitals (VitalsSyncPacket.NeedleUpgradeLevel),
+                // so use the observed value; fall back to local data only before any
+                // vitals packet has arrived.
+                int damage = 5;
+                var vitals = SilksongCoopPlugin.Instance?.VitalsSync;
+                if (vitals != null && vitals.HasRemoteData)
                 {
-                    // BUG-06: damage must reflect the REMOTE player's needle upgrade level,
-                    // not the local PlayerData (which is this machine's upgrade state). The
-                    // remote player broadcasts its own vitals (VitalsSyncPacket.NeedleUpgradeLevel),
-                    // so use the observed value; fall back to local data only before any
-                    // vitals packet has arrived.
-                    int damage = 5;
-                    var vitals = SilksongCoopPlugin.Instance?.VitalsSync;
-                    if (vitals != null && vitals.HasRemoteData)
+                    damage += vitals.RemoteNeedleUpgradeLevel * 3;
+                }
+                else
+                {
+                    var pd = PlayerData.instance;
+                    if (pd != null)
                     {
-                        damage += vitals.RemoteNeedleUpgradeLevel * 3;
+                        damage += pd.nailUpgrades * 3;
                     }
-                    else
+                }
+
+                // One HealthManager can own several colliders (body + hurtbox triggers).
+                // Without this, a single slash hit a boss once per collider (#2.4 / BUG-D3).
+                _hitManagers.Clear();
+
+                for (int i = 0; i < hitCount; i++)
+                {
+                    var col = _hitResults[i];
+                    if (col == null) continue;
+
+                    // BUG-B7: enemy hurtboxes in Silksong are TRIGGER colliders on
+                    // child objects with a HealthManager — skipping every trigger made
+                    // remote slashes pass through all enemies. A trigger only counts as
+                    // a hit when it belongs to a damageable entity; other triggers
+                    // (volumes, zone markers, own hitboxes) are still ignored.
+                    var hm = col.GetComponent<HealthManager>() ?? col.GetComponentInParent<HealthManager>();
+                    if (hm == null) continue;
+                    if (hm.GetIsDead()) continue;
+                    if (!_hitManagers.Add(hm)) continue;
+
+                    using (RemoteApplyScope.Begin())
                     {
-                        var pd = PlayerData.instance;
-                        if (pd != null)
+                        var hit = new HitInstance
                         {
-                            damage += pd.nailUpgrades * 3;
-                        }
-                    }
-
-                    for (int i = 0; i < colliders.Length; i++)
-                    {
-                        var col = colliders[i];
-                        if (col == null) continue;
-
-                        // BUG-B7: enemy hurtboxes in Silksong are TRIGGER colliders on
-                        // child objects with a HealthManager — skipping every trigger made
-                        // remote slashes pass through all enemies. A trigger only counts as
-                        // a hit when it belongs to a damageable entity; other triggers
-                        // (volumes, zone markers, own hitboxes) are still ignored.
-                        var hm = col.GetComponent<HealthManager>() ?? col.GetComponentInParent<HealthManager>();
-                        if (hm == null) continue;
-                        if (hm.GetIsDead()) continue;
-
-                        using (RemoteApplyScope.Begin())
-                        {
-                            var hit = new HitInstance
-                            {
-                                Source = gameObject,
-                                DamageDealt = damage,
-                                AttackType = AttackTypes.Nail,
-                                MoveAngle = _facingRight ? 0f : 180f,
-                                MoveDirection = _facingRight,
-                                Multiplier = 1f,
-                                MagnitudeMultiplier = 1f,
-                                CircleDirection = false,
-                                SpecialType = SpecialTypes.None,
-                                IsHeroDamage = true
-                            };
-                            hm.Hit(hit);
-                        }
+                            Source = gameObject,
+                            DamageDealt = damage,
+                            AttackType = AttackTypes.Nail,
+                            MoveAngle = _facingRight ? 0f : 180f,
+                            MoveDirection = _facingRight,
+                            Multiplier = 1f,
+                            MagnitudeMultiplier = 1f,
+                            CircleDirection = false,
+                            SpecialType = SpecialTypes.None,
+                            IsHeroDamage = true
+                        };
+                        hm.Hit(hit);
                     }
                 }
             }
@@ -447,14 +478,39 @@ namespace SilksongCoop.Mod.Clones
                 clip = _fallbackClip;
             }
 
-            if (clip != null && _animator.CurrentClip != clip)
+            if (clip == null) return;
+
+            float normTime = AnimationClipHasher.DecodeNormalizedTime(normalizedTime);
+            float duration = (clip.frames != null && clip.frames.Length > 0 && clip.fps > 0f)
+                ? (clip.frames.Length / clip.fps)
+                : 1.0f;
+
+            if (_animator.CurrentClip != clip)
             {
-                float normTime = AnimationClipHasher.DecodeNormalizedTime(normalizedTime);
-                float duration = (clip.frames != null && clip.frames.Length > 0 && clip.fps > 0f)
-                    ? (clip.frames.Length / clip.fps)
-                    : 1.0f;
                 float startTime = normTime * duration;
                 _animator.PlayFrom(clip, startTime);
+                return;
+            }
+
+            // The remote clip is already playing: correct phase drift instead of ignoring
+            // NormalizedTime forever (long clips used to desynchronize completely). SetFrame
+            // is used with triggerEvent:false so animation events are not re-fired.
+            if (clip.frames == null || clip.frames.Length == 0) return;
+
+            int frames = clip.frames.Length;
+            int targetFrame = Mathf.Clamp((int)(normTime * frames), 0, frames - 1);
+            int currentFrame = _animator.CurrentFrame;
+            int diff = Math.Abs(targetFrame - currentFrame);
+
+            // A large difference is either a wrap-around on a looping clip or a stale
+            // packet; seeking then would visibly rewind the animation. Leave it alone.
+            if (diff <= frames / 2)
+            {
+                int tolerance = Mathf.Max(1, (int)(frames * 0.15f));
+                if (diff > tolerance)
+                {
+                    _animator.SetFrame(targetFrame, triggerEvent: false);
+                }
             }
         }
 

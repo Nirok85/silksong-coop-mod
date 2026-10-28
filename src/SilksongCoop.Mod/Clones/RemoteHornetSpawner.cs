@@ -128,7 +128,9 @@ namespace SilksongCoop.Mod.Clones
 
                 // Add visual controllers
                 var paletteSwap = cloneGo.AddComponent<PaletteSwapController>();
-                paletteSwap.SetPlayer2(isPlayer2);
+                float hueShift = SilksongCoopPlugin.Instance?.Player2HueShiftConfig?.Value
+                    ?? SilksongCoop.Core.Visuals.PaletteSwapMath.Player2HueShift;
+                paletteSwap.SetPlayer2(isPlayer2, hueShift);
                 paletteSwap.ApplyPaletteSwap();
 
                 var dashTrail = cloneGo.AddComponent<DashTrailController>();
@@ -300,11 +302,25 @@ namespace SilksongCoop.Mod.Clones
         /// <param name="variant">Action variant or parameter.</param>
         public void TriggerRemoteAction(NetworkPeerId peerId, ActionType action, byte variant)
         {
+            TriggerRemoteAction(peerId, action, variant, float.NaN, float.NaN);
+        }
+
+        /// <summary>
+        /// Triggers a remote action with the sender's authoritative origin coordinates.
+        /// </summary>
+        public void TriggerRemoteAction(NetworkPeerId peerId, ActionType action, byte variant, float originX, float originY)
+        {
             try
             {
                 if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
                 {
-                    controller.TriggerAction(action, variant);
+                    // Never replay attacks while the clone is hidden in another scene.
+                    if (!controller.IsInSameScene)
+                    {
+                        return;
+                    }
+
+                    controller.TriggerAction(action, variant, originX, originY);
                 }
             }
             catch (Exception ex)

@@ -194,7 +194,9 @@ namespace SilksongCoop.Core.State
         private static bool IsCounterItemId(string itemId)
         {
             return itemId.StartsWith("heartPieces:", StringComparison.Ordinal)
-                || itemId.StartsWith("silkParts:", StringComparison.Ordinal);
+                || itemId.StartsWith("heartPiecesInit:", StringComparison.Ordinal)
+                || itemId.StartsWith("silkParts:", StringComparison.Ordinal)
+                || itemId.StartsWith("silkPartsInit:", StringComparison.Ordinal);
         }
 
         /// <summary>

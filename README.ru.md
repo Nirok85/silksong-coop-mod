@@ -3,8 +3,8 @@
 ![Platform](https://img.shields.io/badge/Platform-PC%20%7C%20Steam-blue)
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
 ![Loader](https://img.shields.io/badge/ModLoader-BepInEx%205.4.x-purple)
-![Tests](https://img.shields.io/badge/Tests-651%20%2F%20651%20Passing%20(100%25)-brightgreen)
-![Version](https://img.shields.io/badge/Version-2.0.15-success)
+![Tests](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)
+![Version](https://img.shields.io/badge/Version-2.0.16-success)
 
 **[🇬🇧 English version](README.md)**
 
@@ -79,7 +79,7 @@
 
 ### Способ A — Релизный пакет (Рекомендуется)
 
-Архив `SilksongCoop_v2.0.15.zip` со страницы [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) включает всё: BepInEx 5.4.21, HarmonyX и DLL мода.
+Архив `SilksongCoop_v2.0.16.zip` со страницы [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) включает всё: BepInEx 5.4.21, HarmonyX и DLL мода.
 
 1. Закройте игру, если она запущена.
 2. Откройте папку установки Silksong в Steam (Управление → Просмотреть локальные файлы). Типичный путь:
@@ -97,7 +97,7 @@
 ### Способ B — Ручная установка (сборка из исходников)
 
 Если BepInEx 5.4.x уже установлен (любая ОС, включая Linux/macOS), возьмите со страницы
-релизов `SilksongCoop_v2.0.15_plugin-only.zip` — там только две DLL, дефолтный конфиг и инструкция.
+релизов `SilksongCoop_v2.0.16_plugin-only.zip` — там только две DLL, дефолтный конфиг и инструкция.
 
 1. Установите [BepInEx 5.4.x (x64)](https://github.com/BepInEx/BepInEx/releases) в корень игры (чтобы появились `BepInEx\` и `winhttp.dll` рядом с exe).
 2. Соберите мод из исходников (см. [Разработка и сборка](#-разработка-и-сборка)) или возьмите DLL из релизного архива.
@@ -162,6 +162,8 @@
 | Открытые предметы (автооткрытие для напарника) | Позиция, движение, камера |
 | Скамейки и чекпоинты | Состояние смерти / возрождения |
 
+> **Известное ограничение:** здоровье врагов, боссы и двери по-прежнему симулируются каждым клиентом независимо. Один и тот же враг может начислить валюту в обеих симуляциях, и общий кошелёк получит обе дельты. Репликация врагов/боссов отслеживается в `ROADMAP.md`. Пакеты прогресса проверяются по диапазонам, но кооператив рассчитан на приглашённых друзей — изменённый клиент всё ещё может поднять свой прогресс в этих пределах.
+
 ---
 
 ## ⚰️ Правила смерти
@@ -205,6 +207,9 @@ AutoReconnect = true
 
 ## Максимальное число попыток автопереподключения (1–10)
 MaxReconnectAttempts = 5
+
+## Сохранять последние пять адресов подключения в PlayerPrefs (реестр Windows)
+SaveConnectionHistory = true
 
 [Keybinds]
 ToggleMenu = F10
@@ -299,7 +304,7 @@ dotnet test SilksongCoop.sln -c Release
 * **F11** — оверлей сетевой диагностики (графики пинга/потерь/трафика, правый верхний угол).
 * Клавиши настраиваются в `BepInEx\config\com.silksong.coop.cfg`, секция `[Keybinds]`.
 
-Если клавиши не отвечают: проверьте, что в `BepInEx\LogOutput.log` загружается плагин (строка `Initializing Silksong Co-op Multiplayer v2.0.15...`). Убедитесь, что ни другой мод, ни системная утилита (рекордеры, медиаплееры) не перехватывают F10/F11 глобально.
+Если клавиши не отвечают: проверьте, что в `BepInEx\LogOutput.log` загружается плагин (строка `Initializing Silksong Co-op Multiplayer v2.0.16...`). Убедитесь, что ни другой мод, ни системная утилита (рекордеры, медиаплееры) не перехватывают F10/F11 глобально.
 </details>
 
 <details>
