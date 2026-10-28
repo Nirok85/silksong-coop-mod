@@ -35,14 +35,17 @@ namespace SilksongCoop.Mod.Hooks
                 // Guard against scene transitions
                 if (PlayerData.instance == null) return;
 
-                var pd = PlayerData.instance;
                 var coreType = (type == CurrencyType.Money) ? Core.Protocol.Packets.CurrencyType.Rosaries : Core.Protocol.Packets.CurrencyType.ShellShards;
-                int currentWallet = (type == CurrencyType.Money) ? pd.geo : pd.ShellShards;
-                // Postfix runs AFTER ChangeCurrency has already updated pd.geo / pd.ShellShards.
-                // currentWallet already holds the updated balance.
-                int projectedTotal = Math.Max(0, currentWallet);
+                // CurrencyManager.ChangeCurrency only QUEUES the amount; PlayerData.geo is
+                // updated later by ProcessAddCurrency. Passing the stale wallet as
+                // "newTotal" used to overwrite the shared wallet and lose the pickup.
+                // Pass 0 so VitalsSyncService derives the total from the delta.
+                const int projectedTotal = 0;
 
-                SilksongCoopPlugin.Instance.VitalsSync.OnLocalCurrencyChanged(coreType, amount, projectedTotal, Guid.NewGuid());
+                ulong pickupKey = PickupContext.CurrentKey;
+                SilksongCoopPlugin.Instance.VitalsSync.OnLocalCurrencyChanged(
+                    coreType, amount, projectedTotal, Guid.NewGuid(),
+                    pickupKey, PickupContext.CurrentX, PickupContext.CurrentY);
             }
             catch (Exception ex)
             {

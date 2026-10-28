@@ -4,7 +4,7 @@
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
 ![Loader](https://img.shields.io/badge/ModLoader-BepInEx%205.4.x-purple)
 ![Tests](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)
-![Version](https://img.shields.io/badge/Version-2.0.16-success)
+![Version](https://img.shields.io/badge/Version-2.1.0-success)
 
 **[🇷🇺 Русская версия](README.ru.md)**
 
@@ -34,9 +34,11 @@ A fully-featured cooperative mod for **Hollow Knight: Silksong**, allowing two p
 
 ### 1. Serverless Networking
 * **Steam P2P Matchmaking**: the host opens the world for network play and sends a direct invitation via the Steam overlay. Uses the game's built-in `com.rlabrecque.steamworks.net.dll`.
+* **Steam telemetry**: app-level ping/pong probes on an unused channel feed real RTT and loss into the F11 overlay and adaptive interpolation (the legacy Steam P2P API exposes no counters).
 * **Fallback (custom UDP transport)**: if the Steam overlay is unavailable, the host generates a short room code (e.g. `SK-A8B3-K9Q2-W1Z4-M4T7`) or connects directly by IP:Port. The class is named `LiteNetLibTransport` for historical reasons, but this is a purpose-built UDP socket implementation — the LiteNetLib package is not used or bundled.
 * **Movement Smoothing (Hermite Spline)**: position is replicated at 30 Hz with cubic Hermite spline interpolation (C¹ continuity) and a 64-frame snapshot buffer. No teleporting or jitter at latencies up to 150 ms.
 * **Secure sessions**: challenge-response authentication, packet validation, rate limiting and room-code codec protection against unauthorized joins. The menu-generated code carries 40 random bits that cannot be derived from the address; a host started from the menu requires that code and rejects a bare IP:Port join.
+* **Shared world state**: enemy/boss HP is replicated from the attacker's authoritative hit, breakable walls and gates are mirrored, and physical currency drops are deduplicated so the shared wallet is credited once per drop.
 
 ### 2. Visual Differentiation (Blue Hornet Cloak)
 * **Player 1**: original crimson Hornet cloak (`_HueShift = 0.0`).
@@ -79,7 +81,7 @@ No other downloads required.
 
 ### Method A — Release Package (Recommended)
 
-The `SilksongCoop_v2.0.16.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21, HarmonyX and the mod DLLs.
+The `SilksongCoop_v2.1.0.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21, HarmonyX and the mod DLLs.
 
 1. Close the game if it is running.
 2. Open the Silksong install folder in Steam (Manage → Browse local files). Typical path:
@@ -97,7 +99,7 @@ The `SilksongCoop_v2.0.16.zip` from the [Releases](https://github.com/Nirok85/si
 ### Method B — Manual Install (from source build)
 
 If you already have BepInEx 5.4.x installed (any OS, including Linux/macOS), grab
-`SilksongCoop_v2.0.16_plugin-only.zip` from the release page — it contains just the two DLLs,
+`SilksongCoop_v2.1.0_plugin-only.zip` from the release page — it contains just the two DLLs,
 a default config and these instructions.
 
 1. Install [BepInEx 5.4.x (x64)](https://github.com/BepInEx/BepInEx/releases) into the game root (so that `BepInEx\` and `winhttp.dll` appear next to the game exe).
@@ -160,10 +162,12 @@ The diagnostics overlay (**F11**) shows ping (RTT), packet loss and bandwidth gr
 |--------|------------|
 | Max health, max silk, needle upgrades | Current health & silk |
 | Currency (Rosaries, Shell Shards) | Equipped crest / tools loadout |
-| Unlocked items (auto-unlock for partner) | Position, movement, camera |
-| Benches & checkpoints | Death / revival state |
+| Enemy & boss HP, breakable walls, opened gates | Enemy AI timing / animation phase |
+| Physical pickups (each drop is credited once) | Position, movement, camera |
+| Unlocked items (auto-unlock for partner) | Death / revival state |
+| Benches & checkpoints | |
 
-> **Known limitation:** enemy health, bosses and doors are still simulated independently by each client. The same enemy can therefore award currency in both simulations, and the shared wallet receives both deltas. Enemy/boss replication is tracked in `ROADMAP.md`. Progression packets are range-validated, but co-op still assumes invited friends — a modified client can raise its own progression within those limits.
+> **Enemy/world sync:** hero damage is applied to the attacker's simulation and then replicated as authoritative HP, so both players fight the same boss HP pool. `Breakable` walls and `Gate.Open()` are mirrored, and physical drops are deduplicated by a stable scene/type/position key plus a 0.5-unit drift window. Scripted doors driven only by `PlayerData` flags and boss phases that listen exclusively to `TookDamage` (rather than polling HP) may still differ. Progression packets are range-validated, but co-op still assumes invited friends — a modified client can raise its own progression within those limits.
 
 ---
 
@@ -249,7 +253,7 @@ silksong_coop_mod/
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 666 tests
+    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 680 tests
         ├── TestHarness/              # DualClientTestHarness (2-client simulation, no Unity)
         ├── Tier1_FeatureTests/       # Requirement coverage tests (F01–F28)
         ├── Tier2_BoundaryTests/      # Boundary value tests
@@ -271,8 +275,8 @@ dotnet test SilksongCoop.sln -c Release
 Current result:
 
 ```text
-Total tests:   666
-Passed:        666 (100.0%)
+Total tests:   680
+Passed:        680 (100.0%)
 Failed:        0
 Skipped:       0
 Duration:      ~3 s
@@ -281,20 +285,18 @@ Build:         0 errors, 0 warnings (Debug + Release)
 
 ---
 
----
-
 ## Known Limitations
 
 The mod is in active development. The following limitations are by design or are tracked for future releases:
 
 - **Two players only.** Multi-peer (3+) is on the roadmap (v3.0).
-- **Same game and mod version on both sides** is required; mismatched versions may fail the handshake.
-- **Enemies are simulated independently** on each machine — remote needle damage is applied to the local enemy instance, so bosses effectively have per-player HP pools. A shared simulation is not implemented.
+- **Same game and mod version on both sides** is required; Steam lobbies verify the full mod version and the UDP handshake carries a protocol revision, so mismatched builds are refused.
+- **Boss phase edge cases.** Enemy/boss HP is now shared and host snapshots correct drift, but a phase that is driven exclusively by a `TookDamage` event (rather than polling HP) may lag by one hit on the partner's machine.
+- **Scripted doors.** `Breakable` walls and `Gate.Open()` are mirrored. Doors driven only by `PlayerData` flags or PlayMaker scripts are still local.
 - **Maximum stats only grow.** `maxHealth`, `silkMax` and `nailUpgrades` are monotonic; a higher value on one peer never downgrades the other.
 - **Internet play requires Steam.** Direct UDP works over LAN or VPN (Radmin/Hamachi); the host's detected LAN IP may be wrong behind VPNs — use the room code or paste a direct `IP:Port`.
-- **Steam lobby RTT/loss** are not measured (Steam P2P API exposes no counters); the diagnostics overlay shows `n/a` for Steam sessions.
 - **Revive requires the partner to be in the same scene.** Cross-scene death falls back to a bench respawn.
-- **`RemoteApplyScope` guards feedback loops**, but very fast simultaneous pickups can still produce transient desync that self-corrects on the next sync packet.
+- **Pickup deduplication is positional.** A drop that lands more than 0.5 units away on the two machines (very high frame-time divergence) can still be credited twice; the periodic wallet reconciliation converges the total to the higher value.
 
 ## FAQ & Troubleshooting
 
@@ -305,7 +307,7 @@ The mod is in active development. The following limitations are by design or are
 * **F11** — network diagnostics overlay (ping/loss/bandwidth graphs, top-right corner).
 * Keys are remappable in `BepInEx\config\com.silksong.coop.cfg`, section `[Keybinds]`.
 
-If keys don't respond: check that `BepInEx\LogOutput.log` shows the plugin loading (look for `Initializing Silksong Co-op Multiplayer v2.0.16...`). Ensure no other mod or OS utility (e.g. screen recorders, media players) binds F10/F11 globally.
+If keys don't respond: check that `BepInEx\LogOutput.log` shows the plugin loading (look for `Initializing Silksong Co-op Multiplayer v2.1.0...`). Ensure no other mod or OS utility (e.g. screen recorders, media players) binds F10/F11 globally.
 </details>
 
 <details>

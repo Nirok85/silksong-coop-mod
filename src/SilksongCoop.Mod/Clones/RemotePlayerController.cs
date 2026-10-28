@@ -57,11 +57,6 @@ namespace SilksongCoop.Mod.Clones
         private double _clockOffsetMs;
         private bool _isInSameScene = true;
 
-        // Reused hit-query storage: OverlapBoxAll allocated a new array on every slash.
-        private readonly List<Collider2D> _hitResults = new List<Collider2D>(32);
-        private readonly HashSet<HealthManager> _hitManagers = new HashSet<HealthManager>();
-        private ContactFilter2D _hitFilter;
-
         public NetworkPeerId PeerId => _peerId;
         public bool IsPlayer2 => _isPlayer2;
         public SnapshotBuffer Buffer => _buffer;
@@ -80,10 +75,6 @@ namespace SilksongCoop.Mod.Clones
             _animator = GetComponent<tk2dSpriteAnimator>();
             _paletteSwap = GetComponent<PaletteSwapController>();
             _dashTrail = GetComponent<DashTrailController>();
-
-            // Enemy hurtboxes are triggers; keep them enabled but skip the legacy
-            // layer-mask/depth filters so the query behaves like the old OverlapBoxAll.
-            _hitFilter = new ContactFilter2D { useTriggers = true };
         }
 
         /// <summary>
@@ -298,9 +289,9 @@ namespace SilksongCoop.Mod.Clones
         }
 
         /// <summary>
-        /// Triggers a remote action. When <paramref name="originX"/>/<paramref name="originY"/>
-        /// are supplied the hitbox is centred on the sender's authoritative position, not on
-        /// the locally interpolated clone (which trails by 50-300 ms).
+        /// Triggers a remote action. Slash damage itself is replicated by
+        /// <see cref="EnemySyncController"/> from the sender's authoritative HealthManager
+        /// hit; the clone only plays dash-trail effects here.
         /// </summary>
         public void TriggerAction(ActionType action, byte variant, float originX, float originY)
         {
@@ -309,105 +300,6 @@ namespace SilksongCoop.Mod.Clones
             if (action == ActionType.AirDash || action == ActionType.HarpoonDash)
             {
                 _dashTrail?.TriggerDash(action == ActionType.AirDash);
-            }
-            else if (action == ActionType.SlashNormal || action == ActionType.SlashUp || action == ActionType.SlashDown)
-            {
-                PerformSlashAttack(action, originX, originY);
-            }
-        }
-
-        private void PerformSlashAttack(ActionType action, float originX, float originY)
-        {
-            try
-            {
-                if (!_isInSameScene) return;
-
-                Vector2 origin = float.IsNaN(originX) || float.IsNaN(originY)
-                    ? (Vector2)transform.position
-                    : new Vector2(originX, originY);
-                Vector2 size = new Vector2(2.5f, 1.8f);
-                Vector2 offset = Vector2.zero;
-
-                if (action == ActionType.SlashNormal)
-                {
-                    offset = new Vector2(_facingRight ? 1.2f : -1.2f, 0f);
-                }
-                else if (action == ActionType.SlashUp)
-                {
-                    offset = new Vector2(0f, 1.5f);
-                    size = new Vector2(2.0f, 2.5f);
-                }
-                else if (action == ActionType.SlashDown)
-                {
-                    offset = new Vector2(0f, -1.2f);
-                    size = new Vector2(2.0f, 2.0f);
-                }
-
-                Vector2 hitCenter = origin + offset;
-                int hitCount = Physics2D.OverlapBox(hitCenter, size, 0f, _hitFilter, _hitResults);
-                if (hitCount <= 0) return;
-
-                // BUG-06: damage must reflect the REMOTE player's needle upgrade level,
-                // not the local PlayerData (which is this machine's upgrade state). The
-                // remote player broadcasts its own vitals (VitalsSyncPacket.NeedleUpgradeLevel),
-                // so use the observed value; fall back to local data only before any
-                // vitals packet has arrived.
-                int damage = 5;
-                var vitals = SilksongCoopPlugin.Instance?.VitalsSync;
-                if (vitals != null && vitals.HasRemoteData)
-                {
-                    damage += vitals.RemoteNeedleUpgradeLevel * 3;
-                }
-                else
-                {
-                    var pd = PlayerData.instance;
-                    if (pd != null)
-                    {
-                        damage += pd.nailUpgrades * 3;
-                    }
-                }
-
-                // One HealthManager can own several colliders (body + hurtbox triggers).
-                // Without this, a single slash hit a boss once per collider (#2.4 / BUG-D3).
-                _hitManagers.Clear();
-
-                for (int i = 0; i < hitCount; i++)
-                {
-                    var col = _hitResults[i];
-                    if (col == null) continue;
-
-                    // BUG-B7: enemy hurtboxes in Silksong are TRIGGER colliders on
-                    // child objects with a HealthManager — skipping every trigger made
-                    // remote slashes pass through all enemies. A trigger only counts as
-                    // a hit when it belongs to a damageable entity; other triggers
-                    // (volumes, zone markers, own hitboxes) are still ignored.
-                    var hm = col.GetComponent<HealthManager>() ?? col.GetComponentInParent<HealthManager>();
-                    if (hm == null) continue;
-                    if (hm.GetIsDead()) continue;
-                    if (!_hitManagers.Add(hm)) continue;
-
-                    using (RemoteApplyScope.Begin())
-                    {
-                        var hit = new HitInstance
-                        {
-                            Source = gameObject,
-                            DamageDealt = damage,
-                            AttackType = AttackTypes.Nail,
-                            MoveAngle = _facingRight ? 0f : 180f,
-                            MoveDirection = _facingRight,
-                            Multiplier = 1f,
-                            MagnitudeMultiplier = 1f,
-                            CircleDirection = false,
-                            SpecialType = SpecialTypes.None,
-                            IsHeroDamage = true
-                        };
-                        hm.Hit(hit);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                SilksongCoopPlugin.LogWarn($"[RemotePlayerController] PerformSlashAttack error: {ex.Message}");
             }
         }
 

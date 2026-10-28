@@ -37,6 +37,9 @@ namespace SilksongCoop.Core.Protocol
 
         // World & Scene Synchronization (0x50 - 0x5F)
         SceneTransition     = 0x50,
-        DoorInteract        = 0x51
+        DoorInteract        = 0x51,
+        EnemySync           = 0x52,
+        EnemySnapshot       = 0x53,
+        WorldEvent          = 0x54
     }
 }

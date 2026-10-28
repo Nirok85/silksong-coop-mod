@@ -25,6 +25,7 @@ namespace SilksongCoop.Core.State
         void OnLocalMaxSilkUpgrade(int newMaxSilk);
         void OnLocalNeedleUpgrade(int newNeedleLevel);
         void OnLocalCurrencyChanged(CurrencyType currency, int deltaAmount, int newTotal, Guid transactionId);
+        void OnLocalCurrencyChanged(CurrencyType currency, int deltaAmount, int newTotal, Guid transactionId, ulong pickupKey);
 
         // Network Handlers
         void HandleVitalsPacket(NetworkPeerId sender, VitalsSyncPacket packet);

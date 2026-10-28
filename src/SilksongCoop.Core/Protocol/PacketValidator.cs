@@ -22,6 +22,10 @@ namespace SilksongCoop.Core.Protocol
         public const int MaxReasonableSilkSpools = 16;
         public const int MaxReasonableCurrency = 100_000_000;
 
+        // Enemy HP is much larger than player HP (bosses reach thousands), but still finite.
+        public const int MaxEnemyHp = 10_000_000;
+        public const int MaxEnemyDamage = short.MaxValue;
+
         /// <summary>
         /// Validates a TransformSync packet's field values.
         /// </summary>
@@ -192,6 +196,96 @@ namespace SilksongCoop.Core.Protocol
                 return false;
 
             if (Math.Abs(packet.OriginX) > MaxPositionValue || Math.Abs(packet.OriginY) > MaxPositionValue)
+                return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Validates an EnemySync packet's field values.
+        /// </summary>
+        public static bool ValidateEnemySync(EnemySyncPacket packet)
+        {
+            if (packet.EnemyKey == 0)
+                return false;
+
+            if (!Enum.IsDefined(typeof(EnemySyncEventType), packet.EventType))
+                return false;
+
+            if (packet.Hp < 0 || packet.Hp > MaxEnemyHp)
+                return false;
+
+            if (packet.EventType == EnemySyncEventType.Death && packet.Hp != 0)
+                return false;
+
+            if (packet.Damage < 0 || packet.Damage > MaxEnemyDamage)
+                return false;
+
+            if (float.IsNaN(packet.PositionX) || float.IsInfinity(packet.PositionX) ||
+                float.IsNaN(packet.PositionY) || float.IsInfinity(packet.PositionY))
+                return false;
+
+            if (Math.Abs(packet.PositionX) > MaxPositionValue || Math.Abs(packet.PositionY) > MaxPositionValue)
+                return false;
+
+            // AttackTypes is a game enum; cap the raw byte so a malicious peer cannot index
+            // outside the small expected range.
+            if (packet.AttackType > 64)
+                return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Validates an EnemySnapshot packet's field values.
+        /// </summary>
+        public static bool ValidateEnemySnapshot(EnemySnapshotPacket packet)
+        {
+            if (packet.Entries == null)
+                return packet.Count == 0;
+
+            if (packet.Count < 0 || packet.Count > EnemySnapshotPacket.MaxEntries || packet.Count > packet.Entries.Length)
+                return false;
+
+            for (int i = 0; i < packet.Count; i++)
+            {
+                var entry = packet.Entries[i];
+                if (entry.EnemyKey == 0)
+                    return false;
+
+                if (entry.Hp < 0 || entry.Hp > MaxEnemyHp)
+                    return false;
+
+                if ((entry.Flags & ~EnemySnapshotEntry.FlagDead) != 0)
+                    return false;
+
+                if (float.IsNaN(entry.PositionX) || float.IsInfinity(entry.PositionX) ||
+                    float.IsNaN(entry.PositionY) || float.IsInfinity(entry.PositionY))
+                    return false;
+
+                if (Math.Abs(entry.PositionX) > MaxPositionValue || Math.Abs(entry.PositionY) > MaxPositionValue)
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Validates a WorldEvent packet's field values.
+        /// </summary>
+        public static bool ValidateWorldEvent(WorldEventPacket packet)
+        {
+            if (packet.ObjectKey == 0)
+                return false;
+
+            if (!Enum.IsDefined(typeof(WorldEventType), packet.EventType))
+                return false;
+
+            if (float.IsNaN(packet.PositionX) || float.IsInfinity(packet.PositionX) ||
+                float.IsNaN(packet.PositionY) || float.IsInfinity(packet.PositionY))
+                return false;
+
+            if (Math.Abs(packet.PositionX) > MaxPositionValue || Math.Abs(packet.PositionY) > MaxPositionValue)
                 return false;
 
             return true;

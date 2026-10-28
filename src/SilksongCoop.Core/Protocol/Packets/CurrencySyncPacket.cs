@@ -24,6 +24,17 @@ namespace SilksongCoop.Core.Protocol.Packets
         public Guid TransactionId;
 
         /// <summary>
+        /// Stable key of the physical pickup that produced this delta (0 for non-pickup
+        /// changes). Both clients derive the same key from the drop's scene/type/position, so
+        /// a drop that exists in both simulations is credited only once.
+        /// </summary>
+        public ulong PickupKey;
+
+        /// <summary>World position of the collected drop (for proximity-based deduplication).</summary>
+        public float PickupX;
+        public float PickupY;
+
+        /// <summary>
         /// Serializes this packet to the specified writer.
         /// </summary>
         /// <param name="writer">The packet writer to serialize to.</param>
@@ -35,6 +46,9 @@ namespace SilksongCoop.Core.Protocol.Packets
             writer.WriteInt16(DeltaAmount);
             writer.WriteUInt32(PickupUniqueId);
             writer.WriteGuid(TransactionId);
+            writer.WriteUInt64(PickupKey);
+            writer.WriteFloat(PickupX);
+            writer.WriteFloat(PickupY);
         }
 
         /// <summary>
@@ -51,7 +65,10 @@ namespace SilksongCoop.Core.Protocol.Packets
                 TotalWalletAmount = reader.ReadInt32(),
                 DeltaAmount = reader.ReadInt16(),
                 PickupUniqueId = reader.ReadUInt32(),
-                TransactionId = reader.ReadGuid()
+                TransactionId = reader.ReadGuid(),
+                PickupKey = reader.ReadUInt64(),
+                PickupX = reader.ReadFloat(),
+                PickupY = reader.ReadFloat()
             };
         }
     }

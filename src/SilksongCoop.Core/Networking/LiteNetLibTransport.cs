@@ -14,6 +14,12 @@ namespace SilksongCoop.Core.Networking
     /// </summary>
     public class LiteNetLibTransport : INetworkTransport
     {
+        /// <summary>
+        /// Wire protocol revision. Bumped when packet layouts change incompatibly; both
+        /// peers must match or the handshake is refused.
+        /// </summary>
+        public const ushort ProtocolVersion = 3;
+
         #region Nested Types
 
         private enum UdpFrameType : byte
@@ -400,9 +406,18 @@ namespace SilksongCoop.Core.Networking
         /// </summary>
         private byte[] BuildHandshakePayload()
         {
-            byte[] payload = new byte[9];
+            byte[] payload = new byte[11];
             Buffer.BlockCopy(BitConverter.GetBytes(LocalPeerId.Value), 0, payload, 0, 8);
             payload[8] = (byte)(_roomCode != null ? 1 : 0);
+            Buffer.BlockCopy(BitConverter.GetBytes(ProtocolVersion), 0, payload, 9, 2);
+            return payload;
+        }
+
+        private byte[] BuildHandshakeAckPayload()
+        {
+            byte[] payload = new byte[10];
+            Buffer.BlockCopy(BitConverter.GetBytes(LocalPeerId.Value), 0, payload, 0, 8);
+            Buffer.BlockCopy(BitConverter.GetBytes(ProtocolVersion), 0, payload, 8, 2);
             return payload;
         }
 
@@ -801,7 +816,7 @@ namespace SilksongCoop.Core.Networking
                             // BUG-A3: our HandshakeAck travels unreliably and may have been
                             // lost — the client retried its handshake because it never
                             // connected. Re-send the ack so the session can complete.
-                            SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
+                            SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BuildHandshakeAckPayload());
                             break;
                         }
 
@@ -826,8 +841,22 @@ namespace SilksongCoop.Core.Networking
                                 }
                             }
 
+                            // Protocol compatibility: reject pre-2.1 clients (9-byte
+                            // handshake) and any future incompatible layout before the
+                            // challenge is issued.
+                            if (payload.Length < 11)
+                                break;
+
+                            ushort clientProtocol = (ushort)(payload[9] | (payload[10] << 8));
+                            if (clientProtocol != ProtocolVersion)
+                            {
+                                System.Diagnostics.Debug.WriteLine(
+                                    $"[LiteNetLibTransport] Rejected client protocol {clientProtocol} (expected {ProtocolVersion})");
+                                break;
+                            }
+
                             ulong clientPeerValue = payload.Length >= 8 ? BitConverter.ToUInt64(payload) : 2;
-                            if (payload.Length > 9) clientPeerValue = 2; // Cap oversized payloads
+                            if (payload.Length > 11) clientPeerValue = 2; // Cap oversized payloads
                             var candidatePeer = new NetworkPeerId(clientPeerValue, "Client");
 
                             // BUG-B2: only challenge clients that announced a room code (flag
@@ -869,7 +898,7 @@ namespace SilksongCoop.Core.Networking
                                 _remoteEndPoint = sender;
                                 _remotePeerId = candidatePeer;
                                 _isConnected = true;
-                                SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
+                                SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BuildHandshakeAckPayload());
                                 _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, candidatePeer));
                             }
                         }
@@ -900,7 +929,7 @@ namespace SilksongCoop.Core.Networking
                                 _remotePeerId = _pendingPeerId ?? new NetworkPeerId(2, "Client");
                                 _pendingPeerId = null;
                                 _isConnected = true;
-                                SendEnvelopeTo(sender, UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BitConverter.GetBytes(LocalPeerId.Value));
+                                SendEnvelopeTo(sender, UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BuildHandshakeAckPayload());
                                 _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, _remotePeerId.Value));
                             }
                             else
@@ -929,8 +958,21 @@ namespace SilksongCoop.Core.Networking
                                 _remoteEndPoint = sender;
                             }
 
-                            ulong hostPeerValue = payload.Length >= 8 ? BitConverter.ToUInt64(payload) : 1;
-                            if (payload.Length > 8) hostPeerValue = 1; // Cap oversized payloads
+                            // 8-byte peer id + 2-byte protocol version. Old hosts send only
+                            // the peer id and must not be accepted (their parser cannot read
+                            // 2.1 packets).
+                            if (payload.Length < 10)
+                                break;
+
+                            ushort hostProtocol = (ushort)(payload[8] | (payload[9] << 8));
+                            if (hostProtocol != ProtocolVersion)
+                            {
+                                System.Diagnostics.Debug.WriteLine(
+                                    $"[LiteNetLibTransport] Rejected host protocol {hostProtocol} (expected {ProtocolVersion})");
+                                break;
+                            }
+
+                            ulong hostPeerValue = BitConverter.ToUInt64(payload);
                             _remotePeerId = new NetworkPeerId(hostPeerValue, "Host");
                             _isConnected = true;
 

@@ -26,6 +26,21 @@ namespace SilksongCoop.Core.State
         private readonly Dictionary<(NetworkPeerId Peer, CurrencyType Currency), uint> _lastCurrencySequences = new();
         private uint _currencySequence;
 
+        // Physical drops exist in BOTH simulations (each client kills the same enemy and
+        // spawns its own copy). A shared key (plus a small proximity window for physics
+        // drift) lets the second pickup be credited only once.
+        private struct ClaimedPickup
+        {
+            public ulong Key;
+            public float X;
+            public float Y;
+            public CurrencyType Currency;
+        }
+
+        private readonly List<ClaimedPickup> _claimedPickups = new List<ClaimedPickup>();
+        private const int MaxTrackedPickupKeys = 1024;
+        private const float PickupDuplicateRadius = 0.5f;
+
         public int LocalHealth { get; private set; } = 5;
         public int LocalSilk { get; private set; } = 9;
         public int SharedMaxHealth { get; private set; } = 5;
@@ -97,6 +112,12 @@ namespace SilksongCoop.Core.State
         public event Action<CurrencySyncPacket>? OnOutgoingCurrencyBroadcast;
 
         /// <summary>
+        /// Raised when a remote pickup was credited; the Unity layer destroys the local copy
+        /// of the same drop so both players cannot collect it twice.
+        /// </summary>
+        public event Action<CurrencyType, ulong, float, float>? OnRemotePickupClaimed;
+
+        /// <summary>
         /// Initializes the local player's vitals and currency state.
         /// </summary>
         /// <param name="initialHealth">Initial health value.</param>
@@ -132,6 +153,8 @@ namespace SilksongCoop.Core.State
                 // New session: peer sequences restart from 1 on both sides.
                 _lastCurrencySequences.Clear();
                 _currencySequence = 0;
+                // _claimedPickups intentionally survives: a peer that connects later must be
+                // told which drops were already collected so it can remove its local copies.
             }
         }
 
@@ -279,11 +302,38 @@ namespace SilksongCoop.Core.State
         /// <param name="transactionId">Unique transaction identifier for deduplication.</param>
         public void OnLocalCurrencyChanged(CurrencyType currency, int deltaAmount, int newTotal, Guid transactionId)
         {
+            OnLocalCurrencyChanged(currency, deltaAmount, newTotal, transactionId, pickupKey: 0, float.NaN, float.NaN);
+        }
+
+        /// <summary>
+        /// Handles a local currency change attributed to a physical pickup (key only).
+        /// </summary>
+        public void OnLocalCurrencyChanged(CurrencyType currency, int deltaAmount, int newTotal, Guid transactionId, ulong pickupKey)
+        {
+            OnLocalCurrencyChanged(currency, deltaAmount, newTotal, transactionId, pickupKey, float.NaN, float.NaN);
+        }
+
+        /// <summary>
+        /// Handles a local currency change, optionally attributing it to a physical pickup.
+        /// When the same pickup was already credited by the peer, the local game already added
+        /// the amount, so it is reverted instead of being broadcast twice.
+        /// </summary>
+        /// <param name="currency">Type of currency that changed.</param>
+        /// <param name="deltaAmount">Amount of currency gained or lost.</param>
+        /// <param name="newTotal">New total amount of currency (0 = derive from the delta).</param>
+        /// <param name="transactionId">Unique transaction identifier for deduplication.</param>
+        /// <param name="pickupKey">Stable physical-drop key, or 0 for non-pickup changes.</param>
+        /// <param name="pickupX">World X of the collected drop (NaN when unknown).</param>
+        /// <param name="pickupY">World Y of the collected drop (NaN when unknown).</param>
+        public void OnLocalCurrencyChanged(CurrencyType currency, int deltaAmount, int newTotal, Guid transactionId, ulong pickupKey, float pickupX, float pickupY)
+        {
             if (deltaAmount == 0) return;
             if (transactionId == Guid.Empty) return;
 
-            int currentWallet;
-            uint packetSequence;
+            int currentWallet = 0;
+            uint packetSequence = 0;
+            bool duplicatePickup = false;
+
             lock (_transactionLock)
             {
                 if (!_processedTransactions.Add(transactionId))
@@ -292,26 +342,51 @@ namespace SilksongCoop.Core.State
                 }
 
                 RecordTransactionOrder(transactionId);
-                packetSequence = ++_currencySequence;
 
-                // The local game is authoritative for this player's wallet snapshot.
-                // When the caller supplies a real total, prefer it over the arithmetic —
-                // this also repairs drift from a previously lost packet. Tests and older
-                // call sites pass 0, which means "derive from the delta".
-                if (currency == CurrencyType.Rosaries)
+                if (pickupKey != 0)
                 {
-                    int next = (int)Math.Clamp((long)SharedRosaries + deltaAmount, 0, PacketValidator.MaxReasonableCurrency);
-                    if (newTotal > 0) next = Math.Min(newTotal, PacketValidator.MaxReasonableCurrency);
-                    SharedRosaries = next;
-                    currentWallet = SharedRosaries;
+                    if (IsPickupAlreadyClaimed(currency, pickupKey, pickupX, pickupY))
+                    {
+                        duplicatePickup = true;
+                        currentWallet = currency == CurrencyType.Rosaries ? SharedRosaries : SharedShellShards;
+                    }
+                    else
+                    {
+                        TrackClaimedPickup(currency, pickupKey, pickupX, pickupY);
+                    }
                 }
-                else
+
+                if (!duplicatePickup)
                 {
-                    int next = (int)Math.Clamp((long)SharedShellShards + deltaAmount, 0, PacketValidator.MaxReasonableCurrency);
-                    if (newTotal > 0) next = Math.Min(newTotal, PacketValidator.MaxReasonableCurrency);
-                    SharedShellShards = next;
-                    currentWallet = SharedShellShards;
+                    packetSequence = ++_currencySequence;
+
+                    // The local game is authoritative for this player's wallet snapshot.
+                    // When the caller supplies a real total, prefer it over the arithmetic —
+                    // this also repairs drift from a previously lost packet. Tests and older
+                    // call sites pass 0, which means "derive from the delta".
+                    if (currency == CurrencyType.Rosaries)
+                    {
+                        int next = (int)Math.Clamp((long)SharedRosaries + deltaAmount, 0, PacketValidator.MaxReasonableCurrency);
+                        if (newTotal > 0) next = Math.Min(newTotal, PacketValidator.MaxReasonableCurrency);
+                        SharedRosaries = next;
+                        currentWallet = SharedRosaries;
+                    }
+                    else
+                    {
+                        int next = (int)Math.Clamp((long)SharedShellShards + deltaAmount, 0, PacketValidator.MaxReasonableCurrency);
+                        if (newTotal > 0) next = Math.Min(newTotal, PacketValidator.MaxReasonableCurrency);
+                        SharedShellShards = next;
+                        currentWallet = SharedShellShards;
+                    }
                 }
+            }
+
+            if (duplicatePickup)
+            {
+                // The peer already credited this drop. The local game added it anyway, so
+                // restore PlayerData to the shared total without broadcasting anything.
+                OnSharedCurrencyChanged?.Invoke(currency, -deltaAmount, currentWallet);
+                return;
             }
 
             var packet = new CurrencySyncPacket
@@ -321,10 +396,52 @@ namespace SilksongCoop.Core.State
                 TotalWalletAmount = currentWallet,
                 DeltaAmount = (short)Math.Clamp(deltaAmount, short.MinValue, short.MaxValue),
                 PickupUniqueId = packetSequence,
-                TransactionId = transactionId
+                TransactionId = transactionId,
+                PickupKey = pickupKey,
+                PickupX = pickupX,
+                PickupY = pickupY
             };
 
             OnOutgoingCurrencyBroadcast?.Invoke(packet);
+        }
+
+        private bool IsPickupAlreadyClaimed(CurrencyType currency, ulong pickupKey, float x, float y)
+        {
+            for (int i = 0; i < _claimedPickups.Count; i++)
+            {
+                var claimed = _claimedPickups[i];
+                if (claimed.Currency != currency) continue;
+
+                if (pickupKey != 0 && claimed.Key == pickupKey)
+                    return true;
+
+                if (!float.IsNaN(x) && !float.IsNaN(y) &&
+                    !float.IsNaN(claimed.X) && !float.IsNaN(claimed.Y))
+                {
+                    float dx = claimed.X - x;
+                    float dy = claimed.Y - y;
+                    if (dx * dx + dy * dy <= PickupDuplicateRadius * PickupDuplicateRadius)
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void TrackClaimedPickup(CurrencyType currency, ulong pickupKey, float x, float y)
+        {
+            _claimedPickups.Add(new ClaimedPickup
+            {
+                Key = pickupKey,
+                X = x,
+                Y = y,
+                Currency = currency
+            });
+
+            while (_claimedPickups.Count > MaxTrackedPickupKeys)
+            {
+                _claimedPickups.RemoveAt(0);
+            }
         }
 
         #endregion
@@ -392,6 +509,7 @@ namespace SilksongCoop.Core.State
 
                 int delta = packet.DeltaAmount;
                 int updatedWallet;
+                bool claimedPickup = false;
                 lock (_transactionLock)
                 {
                     // Reject replayed/out-of-order snapshots even after their GUID has been
@@ -408,12 +526,27 @@ namespace SilksongCoop.Core.State
                         _lastCurrencySequences[sequenceKey] = packet.PickupUniqueId;
                     }
 
+                    // The same physical drop exists in both simulations. If this drop was
+                    // already credited locally, the local player collected its copy — do not
+                    // apply the peer's delta a second time.
+                    if (packet.PickupKey != 0 &&
+                        IsPickupAlreadyClaimed(packet.Currency, packet.PickupKey, packet.PickupX, packet.PickupY))
+                    {
+                        return;
+                    }
+
                     if (!_processedTransactions.Add(packet.TransactionId))
                     {
                         return; // Duplicate transaction, ignore
                     }
 
                     RecordTransactionOrder(packet.TransactionId);
+
+                    if (packet.PickupKey != 0)
+                    {
+                        TrackClaimedPickup(packet.Currency, packet.PickupKey, packet.PickupX, packet.PickupY);
+                        claimedPickup = true;
+                    }
 
                     if (packet.Currency == CurrencyType.Rosaries)
                     {
@@ -460,6 +593,12 @@ namespace SilksongCoop.Core.State
                 }
 
                 OnSharedCurrencyChanged?.Invoke(packet.Currency, delta, updatedWallet);
+
+                if (claimedPickup)
+                {
+                    // Destroy the local copy of the drop that the peer just collected.
+                    OnRemotePickupClaimed?.Invoke(packet.Currency, packet.PickupKey, packet.PickupX, packet.PickupY);
+                }
             }
             catch (Exception ex)
             {
@@ -569,6 +708,74 @@ namespace SilksongCoop.Core.State
             catch (Exception ex)
             {
                 Log($"[VitalsSyncService] BroadcastCurrentCurrency error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Re-broadcasts the most recent claimed pickups as delta-0 packets. A client that
+        /// connects after a drop was collected uses this to disable its local copy; without
+        /// it the reconnecting player could collect the same world drop a second time.
+        /// </summary>
+        public void BroadcastClaimedPickups()
+        {
+            try
+            {
+                List<ClaimedPickup> snapshot;
+                int rosaries, shards;
+                lock (_transactionLock)
+                {
+                    // Only the most recent drops matter for a newly connected scene; sending
+                    // the whole 1024-entry window would flood the handshake.
+                    int skip = Math.Max(0, _claimedPickups.Count - 64);
+                    snapshot = _claimedPickups.GetRange(skip, _claimedPickups.Count - skip);
+                    rosaries = SharedRosaries;
+                    shards = SharedShellShards;
+                }
+
+                foreach (var claimed in snapshot)
+                {
+                    if (claimed.Key == 0) continue;
+
+                    var tx = Guid.NewGuid();
+                    uint seq;
+                    lock (_transactionLock)
+                    {
+                        _processedTransactions.Add(tx);
+                        RecordTransactionOrder(tx);
+                        seq = ++_currencySequence;
+                    }
+
+                    var packet = new CurrencySyncPacket
+                    {
+                        Header = new PacketHeader(PacketType.CurrencySync, 3, 0, (uint)Environment.TickCount),
+                        Currency = claimed.Currency,
+                        TotalWalletAmount = claimed.Currency == CurrencyType.Rosaries ? rosaries : shards,
+                        DeltaAmount = 0,
+                        TransactionId = tx,
+                        PickupUniqueId = seq,
+                        PickupKey = claimed.Key,
+                        PickupX = claimed.X,
+                        PickupY = claimed.Y
+                    };
+                    OnOutgoingCurrencyBroadcast?.Invoke(packet);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"[VitalsSyncService] BroadcastClaimedPickups error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Clears the picked-up-drop registry after a world reset (bench respawn / scene
+        /// change). Without this, a fresh drop at the same scene/position would be mistaken
+        /// for one collected in the previous world.
+        /// </summary>
+        public void ClearClaimedPickups()
+        {
+            lock (_transactionLock)
+            {
+                _claimedPickups.Clear();
             }
         }
 

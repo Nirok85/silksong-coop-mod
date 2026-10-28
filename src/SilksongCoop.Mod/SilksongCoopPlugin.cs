@@ -39,7 +39,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "2.0.16";
+        public const string PluginVersion = "2.1.0";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -86,6 +86,7 @@ namespace SilksongCoop.Mod
         public LiteNetLibTransport? UdpTransport { get; private set; }
         public CoopMenuUI MenuUI { get; private set; } = null!;
         public RemoteHornetSpawner CloneSpawner { get; private set; } = null!;
+        public EnemySyncController? EnemySync { get; private set; }
         #endregion
 
         #region Private Fields
@@ -118,6 +119,10 @@ namespace SilksongCoop.Mod
         private int _reconnectAttempts;
         private bool _reconnectIsSteam;
         private string? _reconnectAddress;
+
+        // Periodic wallet reconciliation: independent simulations can produce slightly
+        // different drop amounts (charms), and a missed delta would otherwise persist.
+        private float _currencyResyncTimer;
 
         // Last counter value broadcast to the peer. Counters are shared progress, so after
         // the connect-time baseline both sides exchange deltas instead of absolute values —
@@ -284,14 +289,33 @@ namespace SilksongCoop.Mod
                     using (RemoteApplyScope.Begin())
                     {
                         var silkgurrencyType = (type == Core.Protocol.Packets.CurrencyType.Rosaries) ? CurrencyType.Money : CurrencyType.Shard;
-                        int current = (type == Core.Protocol.Packets.CurrencyType.Rosaries) ? pd.geo : pd.ShellShards;
-                        int diff = total - current;
-                        if (diff != 0)
+
+                        if (delta != 0)
                         {
-                            CurrencyManager.ChangeCurrency(diff, silkgurrencyType, true);
+                            // Apply the delta directly. CurrencyManager.ChangeCurrency queues
+                            // the amount and pd.geo is updated later, so computing
+                            // total - pd.geo here used sibling pending changes and could
+                            // duplicate or erase currency.
+                            CurrencyManager.ChangeCurrency(delta, silkgurrencyType, true);
+                        }
+                        else
+                        {
+                            // Reconciliation packet (delta 0): only raise the local wallet,
+                            // never lower it below currency that is still queued locally.
+                            int current = (type == Core.Protocol.Packets.CurrencyType.Rosaries) ? pd.geo : pd.ShellShards;
+                            int diff = total - current;
+                            if (diff > 0)
+                            {
+                                CurrencyManager.ChangeCurrency(diff, silkgurrencyType, true);
+                            }
                         }
                     }
                 }
+            };
+
+            VitalsSync.OnRemotePickupClaimed += (currency, key, x, y) =>
+            {
+                EnemySync?.OnRemotePickupClaimed(currency, key, x, y);
             };
 
             DeathCoordinator.OnReviveAtPartnerRequested += (x, y) =>
@@ -390,6 +414,12 @@ namespace SilksongCoop.Mod
             var spawnerGo = new GameObject("SilksongCoop_CloneSpawner");
             DontDestroyOnLoad(spawnerGo);
             CloneSpawner = spawnerGo.AddComponent<RemoteHornetSpawner>();
+
+            // Enemy/boss/world synchronization controller (HP, breakables, gates, pickups).
+            var enemySyncGo = new GameObject("SilksongCoop_EnemySync");
+            DontDestroyOnLoad(enemySyncGo);
+            EnemySync = enemySyncGo.AddComponent<EnemySyncController>();
+            EnemySync.Initialize(this);
 
             // Create Menu UI
             var uiGo = new GameObject("SilksongCoop_MenuUI");
@@ -823,6 +853,8 @@ namespace SilksongCoop.Mod
 
                 DeathCoordinator?.ResetAfterBenchRespawn();
                 DeathCoordinator?.BroadcastEpochSync();
+                // A bench reload resets the world's enemies/drops.
+                VitalsSync?.ClearClaimedPickups();
                 SessionState?.ReturnToActive();
 
                 var hero = HeroController.instance;
@@ -1304,6 +1336,7 @@ namespace SilksongCoop.Mod
                     if (_spectatorActive) ExitSpectatorMode();
                     _lastHeartPiecesBroadcast = -1;
                     _lastSilkPartsBroadcast = -1;
+                    EnemySync?.ResetSession();
 
                     Logger.LogInfo($"[Coop] Peer connected: {peer}");
                     SessionState?.SetConnected(peer, transport.IsHost ? SessionRole.Host : SessionRole.Client);
@@ -1344,6 +1377,9 @@ namespace SilksongCoop.Mod
                         }
                         VitalsSync.BroadcastCurrentVitals();
                         VitalsSync.BroadcastCurrentCurrency();
+                        // Tell the newly connected peer which world drops were already
+                        // collected, so its local copies are disabled before it can pick them.
+                        VitalsSync.BroadcastClaimedPickups();
 
                         // HIGH-02: Broadcast initial inventory dump (abilities, tools, crests) to client
                         BroadcastInitialInventory();
@@ -1395,6 +1431,7 @@ namespace SilksongCoop.Mod
                     // disconnect (before any packet of the next session can arrive) so the
                     // next BroadcastInitialInventory is not swallowed.
                     InventorySync?.ResetSessionState();
+                    EnemySync?.ResetSession();
 
                     if (recoveringFromSpectator)
                     {
@@ -1530,6 +1567,24 @@ namespace SilksongCoop.Mod
                             {
                                 CloneSpawner?.SetRemoteScenePresence(peer, true);
                             }
+                            break;
+
+                        case PacketType.EnemySync:
+                            var enemyPacket = EnemySyncPacket.Deserialize(ref reader);
+                            if (!PacketValidator.ValidateEnemySync(enemyPacket)) return;
+                            EnemySync?.ApplyRemoteHit(enemyPacket);
+                            break;
+
+                        case PacketType.EnemySnapshot:
+                            var enemySnapshot = EnemySnapshotPacket.Deserialize(ref reader);
+                            if (!PacketValidator.ValidateEnemySnapshot(enemySnapshot)) return;
+                            EnemySync?.ApplyRemoteSnapshot(enemySnapshot);
+                            break;
+
+                        case PacketType.WorldEvent:
+                            var worldEvent = WorldEventPacket.Deserialize(ref reader);
+                            if (!PacketValidator.ValidateWorldEvent(worldEvent)) return;
+                            EnemySync?.ApplyRemoteWorldEvent(worldEvent);
                             break;
 
                         case PacketType.ItemUnlockSync:
@@ -1680,6 +1735,9 @@ namespace SilksongCoop.Mod
             {
                 if (ActiveTransport == null || SessionState?.IsConnected != true || !SessionState.RemotePeerId.HasValue) return;
 
+                // World drops from the scene we are leaving must not be replayed later.
+                VitalsSync?.ClearClaimedPickups();
+
                 int sceneHash = GameManager.instance != null ? GameManager.instance.sceneNameHash : 0;
                 var packet = new SceneTransitionPacket
                 {
@@ -1778,6 +1836,16 @@ namespace SilksongCoop.Mod
                 }
                 ActiveTransport?.PollEvents();
                 UpdateTransportDiagnostics();
+
+                if (SessionState?.IsConnected == true && SessionState.RemotePeerId.HasValue)
+                {
+                    _currencyResyncTimer += Time.unscaledDeltaTime;
+                    if (_currencyResyncTimer >= 5f)
+                    {
+                        _currencyResyncTimer = 0f;
+                        VitalsSync?.BroadcastCurrentCurrency();
+                    }
+                }
 
                 // Auto-reconnect attempt
                 if (_reconnectPending && Time.unscaledTime >= _nextReconnectTime)

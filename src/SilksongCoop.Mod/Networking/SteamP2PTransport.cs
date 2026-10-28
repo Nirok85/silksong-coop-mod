@@ -41,6 +41,20 @@ namespace SilksongCoop.Mod.Networking
         // membership callback and the P2P session/packet paths observe the same peer.
         private bool _peerConnectNotified;
 
+        // Application-level ping/pong on the otherwise-unused channel 1. The legacy Steam
+        // P2P API exposes no RTT/loss counters, so this is the only portable way to feed the
+        // diagnostics overlay and adaptive interpolation.
+        private const byte RttPing = 0x50;
+        private const byte RttPong = 0x51;
+        private const int RttPingIntervalMs = 1000;
+        private const int RttLossWindowMs = 5000;
+        private int _rttMs;
+        private int _packetLossPercent;
+        private long _lastPingSentMs;
+        private long _lossWindowStartMs;
+        private int _pingsSentInWindow;
+        private int _pongsReceivedInWindow;
+
         #endregion // Fields and State
 
         #region Events and Properties
@@ -57,9 +71,9 @@ namespace SilksongCoop.Mod.Networking
         // Steamworks.NET's P2P API exposes no RTT/loss counters for lobby networking, so
         // these stay 0 (the UI treats 0 as "unknown" and hides the quality indicator).
         /// <inheritdoc />
-        public int RoundTripTimeMs => 0;
+        public int RoundTripTimeMs => _rttMs;
         /// <inheritdoc />
-        public int PacketLossPercent => 0;
+        public int PacketLossPercent => _packetLossPercent;
 
         public static BepInEx.Logging.ManualLogSource? Logger { get; set; }
 
@@ -261,6 +275,13 @@ namespace SilksongCoop.Mod.Networking
             IsConnected = true;
             _connectionAttemptStartMs = 0;
 
+            _rttMs = 0;
+            _packetLossPercent = 0;
+            _lastPingSentMs = 0;
+            _lossWindowStartMs = 0;
+            _pingsSentInWindow = 0;
+            _pongsReceivedInWindow = 0;
+
             string displayName = peer.m_SteamID.ToString();
             try
             {
@@ -289,6 +310,8 @@ namespace SilksongCoop.Mod.Networking
             _remoteSteamId = CSteamID.Nil;
             IsConnected = false;
             _peerConnectNotified = false;
+            _rttMs = 0;
+            _packetLossPercent = 0;
 
             if (wasNotified)
             {
@@ -413,6 +436,31 @@ namespace SilksongCoop.Mod.Networking
                 }
             }
 
+            // Application-level RTT/loss probes (legacy Steam P2P has no counters).
+            if (IsConnected && _remoteSteamId != CSteamID.Nil)
+            {
+                long now = NowMs();
+                if (_lossWindowStartMs == 0) _lossWindowStartMs = now;
+
+                if (now - _lastPingSentMs >= RttPingIntervalMs)
+                {
+                    _lastPingSentMs = now;
+                    SendRttPing();
+                }
+
+                if (now - _lossWindowStartMs >= RttLossWindowMs)
+                {
+                    int sent = _pingsSentInWindow;
+                    int received = _pongsReceivedInWindow;
+                    _packetLossPercent = sent > 0
+                        ? Math.Clamp((int)Math.Round((sent - received) * 100.0 / sent), 0, 100)
+                        : 0;
+                    _pingsSentInWindow = 0;
+                    _pongsReceivedInWindow = 0;
+                    _lossWindowStartMs = now;
+                }
+            }
+
             // 2. Fix: Poll only the channels used by the protocol (2-4) and reuse buffer
             for (int channel = MinChannel; channel <= MaxChannel; channel++)
             {
@@ -428,6 +476,13 @@ namespace SilksongCoop.Mod.Networking
                     {
                         try
                         {
+                            // Channel 1 is reserved for transport control (RTT probes).
+                            if (channel == 1)
+                            {
+                                HandleRttControl(remoteId, bytesRead);
+                                continue;
+                            }
+
                             // Fix: Validate that packets are from the expected remote peer
                             if (_remoteSteamId == CSteamID.Nil)
                             {
@@ -473,6 +528,60 @@ namespace SilksongCoop.Mod.Networking
                         }
                     }
                 }
+            }
+        }
+
+        private void SendRttPing()
+        {
+            byte[] ping = new byte[9];
+            ping[0] = RttPing;
+            Buffer.BlockCopy(BitConverter.GetBytes(NowMs()), 0, ping, 1, 8);
+
+            try
+            {
+                if (SteamNetworking.SendP2PPacket(
+                        _remoteSteamId, ping, (uint)ping.Length,
+                        EP2PSend.k_EP2PSendUnreliableNoDelay, 1))
+                {
+                    _pingsSentInWindow++;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger?.LogWarning($"[Steam] Failed to send RTT probe: {ex.Message}");
+            }
+        }
+
+        private void HandleRttControl(CSteamID remoteId, uint bytesRead)
+        {
+            if (_remoteSteamId == CSteamID.Nil || remoteId != _remoteSteamId) return;
+            if (bytesRead < 9) return;
+
+            byte type = _readBuffer[0];
+            if (type == RttPing)
+            {
+                // Echo the sender's timestamp back unchanged (both clocks are on the sender).
+                _readBuffer[0] = RttPong;
+                try
+                {
+                    SteamNetworking.SendP2PPacket(
+                        remoteId, _readBuffer, 9,
+                        EP2PSend.k_EP2PSendUnreliableNoDelay, 1);
+                }
+                catch (Exception ex)
+                {
+                    Logger?.LogWarning($"[Steam] Failed to reply to RTT probe: {ex.Message}");
+                }
+            }
+            else if (type == RttPong)
+            {
+                long sentMs = BitConverter.ToInt64(_readBuffer, 1);
+                long rtt = NowMs() - sentMs;
+                if (rtt >= 0 && rtt < 5000)
+                {
+                    _rttMs = (int)rtt;
+                }
+                _pongsReceivedInWindow++;
             }
         }
 
