@@ -253,7 +253,7 @@ silksong_coop_mod/
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 680 tests
+    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 682 tests
         ├── TestHarness/              # DualClientTestHarness (2-client simulation, no Unity)
         ├── Tier1_FeatureTests/       # Requirement coverage tests (F01–F28)
         ├── Tier2_BoundaryTests/      # Boundary value tests
@@ -275,8 +275,8 @@ dotnet test SilksongCoop.sln -c Release
 Current result:
 
 ```text
-Total tests:   680
-Passed:        680 (100.0%)
+Total tests:   682
+Passed:        682 (100.0%)
 Failed:        0
 Skipped:       0
 Duration:      ~3 s
@@ -292,7 +292,7 @@ The mod is in active development. The following limitations are by design or are
 - **Two players only.** Multi-peer (3+) is on the roadmap (v3.0).
 - **Same game and mod version on both sides** is required; Steam lobbies verify the full mod version and the UDP handshake carries a protocol revision, so mismatched builds are refused.
 - **Boss phase edge cases.** Enemy/boss HP is now shared and host snapshots correct drift, but a phase that is driven exclusively by a `TookDamage` event (rather than polling HP) may lag by one hit on the partner's machine.
-- **Scripted doors.** `Breakable` walls and `Gate.Open()` are mirrored. Doors driven only by `PlayerData` flags or PlayMaker scripts are still local.
+- **Scripted doors.** `Breakable` walls, `Gate.Open()` and `PersistentBoolItem`/`PersistentIntItem` state (levers, chests, caches and most scripted doors) are mirrored while both players are in the same scene. A door whose state exists only in a PlayMaker FSM or `PlayerData` flag without a persistent component, or one changed while the partner is in another scene, is still local.
 - **Maximum stats only grow.** `maxHealth`, `silkMax` and `nailUpgrades` are monotonic; a higher value on one peer never downgrades the other.
 - **Internet play requires Steam.** Direct UDP works over LAN or VPN (Radmin/Hamachi); the host's detected LAN IP may be wrong behind VPNs — use the room code or paste a direct `IP:Port`.
 - **Revive requires the partner to be in the same scene.** Cross-scene death falls back to a bench respawn.

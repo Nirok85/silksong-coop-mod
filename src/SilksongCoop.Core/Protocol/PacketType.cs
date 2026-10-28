@@ -40,6 +40,7 @@ namespace SilksongCoop.Core.Protocol
         DoorInteract        = 0x51,
         EnemySync           = 0x52,
         EnemySnapshot       = 0x53,
-        WorldEvent          = 0x54
+        WorldEvent          = 0x54,
+        PersistentState     = 0x55
     }
 }

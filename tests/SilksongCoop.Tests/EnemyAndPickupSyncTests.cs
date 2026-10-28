@@ -217,6 +217,54 @@ namespace SilksongCoop.Tests
         }
 
         [Fact]
+        public void PersistentStatePacket_Roundtrip_PreservesFields()
+        {
+            var original = new PersistentStatePacket
+            {
+                Header = new PacketHeader(PacketType.PersistentState, 4, 11, 999),
+                ItemKey = 0xABCDEF,
+                ValueType = PersistentValueType.Int,
+                Value = 7
+            };
+
+            Span<byte> buffer = stackalloc byte[64];
+            var writer = new PacketWriter(buffer);
+            original.Serialize(ref writer);
+
+            var reader = new PacketReader(writer.WrittenSpan);
+            var roundtrip = PersistentStatePacket.Deserialize(ref reader);
+
+            Assert.Equal(original.ItemKey, roundtrip.ItemKey);
+            Assert.Equal(original.ValueType, roundtrip.ValueType);
+            Assert.Equal(original.Value, roundtrip.Value);
+        }
+
+        [Fact]
+        public void PersistentStateValidator_RejectsMalformedPackets()
+        {
+            Assert.False(PacketValidator.ValidatePersistentState(new PersistentStatePacket
+            {
+                ItemKey = 0,
+                ValueType = PersistentValueType.Bool,
+                Value = 1
+            }));
+
+            Assert.False(PacketValidator.ValidatePersistentState(new PersistentStatePacket
+            {
+                ItemKey = 1,
+                ValueType = PersistentValueType.Bool,
+                Value = 2
+            }));
+
+            Assert.True(PacketValidator.ValidatePersistentState(new PersistentStatePacket
+            {
+                ItemKey = 1,
+                ValueType = PersistentValueType.Int,
+                Value = -5
+            }));
+        }
+
+        [Fact]
         public void Currency_QueuedGameChange_DerivesTotalFromDelta()
         {
             var service = new VitalsSyncService();

@@ -1587,6 +1587,12 @@ namespace SilksongCoop.Mod
                             EnemySync?.ApplyRemoteWorldEvent(worldEvent);
                             break;
 
+                        case PacketType.PersistentState:
+                            var persistentState = PersistentStatePacket.Deserialize(ref reader);
+                            if (!PacketValidator.ValidatePersistentState(persistentState)) return;
+                            EnemySync?.ApplyRemotePersistentState(persistentState);
+                            break;
+
                         case PacketType.ItemUnlockSync:
                             var item = ItemUnlockPacket.Deserialize(ref reader);
                             if (!PacketValidator.ValidateItemUnlock(item)) return;

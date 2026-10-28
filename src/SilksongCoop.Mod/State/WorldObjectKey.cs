@@ -64,6 +64,20 @@ namespace SilksongCoop.Mod.State
         }
 
         /// <summary>
+        /// Hash of a persistent world item (scene + persistent id + value type).
+        /// </summary>
+        public static ulong ComputePersistent(string sceneName, string itemId, int valueType)
+        {
+            if (string.IsNullOrEmpty(itemId)) return 0;
+
+            string raw = string.Concat(
+                sceneName ?? string.Empty, "|", itemId, "|",
+                valueType.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+            return HashString(raw);
+        }
+
+        /// <summary>
         /// FNV-1a 64-bit hash. Deterministic across runtimes (unlike string.GetHashCode).
         /// </summary>
         public static ulong HashString(string value)

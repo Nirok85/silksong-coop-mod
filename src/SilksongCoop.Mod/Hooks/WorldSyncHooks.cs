@@ -101,6 +101,34 @@ namespace SilksongCoop.Mod.Hooks
             SilksongCoopPlugin.Instance?.EnemySync?.OnLocalWorldEvent(WorldEventType.GateOpened, __instance?.transform);
         }
 
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(PersistentItem<bool>), "SaveState")]
+        public static void PostfixPersistentBoolSave(PersistentItem<bool> __instance)
+        {
+            if (RemoteApplyScope.IsActive) return;
+            if (__instance == null || !__instance.HasLoadedValue) return;
+
+            SilksongCoopPlugin.Instance?.EnemySync?.OnLocalPersistentState(
+                __instance.GetSceneName(),
+                __instance.GetId(),
+                PersistentValueType.Bool,
+                __instance.GetCurrentValue() ? 1 : 0);
+        }
+
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(PersistentItem<int>), "SaveState")]
+        public static void PostfixPersistentIntSave(PersistentItem<int> __instance)
+        {
+            if (RemoteApplyScope.IsActive) return;
+            if (__instance == null || !__instance.HasLoadedValue) return;
+
+            SilksongCoopPlugin.Instance?.EnemySync?.OnLocalPersistentState(
+                __instance.GetSceneName(),
+                __instance.GetId(),
+                PersistentValueType.Int,
+                __instance.GetCurrentValue());
+        }
+
         /// <summary>
         /// Catches deaths that did not come from a hero hit (acid, scripted kills, enemy
         /// infighting). All shorter Die overloads chain to this one.

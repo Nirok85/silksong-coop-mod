@@ -292,6 +292,23 @@ namespace SilksongCoop.Core.Protocol
         }
 
         /// <summary>
+        /// Validates a PersistentState packet's field values.
+        /// </summary>
+        public static bool ValidatePersistentState(PersistentStatePacket packet)
+        {
+            if (packet.ItemKey == 0)
+                return false;
+
+            if (!Enum.IsDefined(typeof(PersistentValueType), packet.ValueType))
+                return false;
+
+            if (packet.ValueType == PersistentValueType.Bool && packet.Value != 0 && packet.Value != 1)
+                return false;
+
+            return true;
+        }
+
+        /// <summary>
         /// Validates a BenchCheckpointSync packet's field values.
         /// </summary>
         public static bool ValidateBenchCheckpoint(BenchCheckpointSyncPacket packet)

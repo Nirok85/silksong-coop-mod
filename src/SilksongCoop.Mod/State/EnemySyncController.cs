@@ -42,6 +42,8 @@ namespace SilksongCoop.Mod.State
         private readonly Dictionary<ulong, bool> _lastSnapshotDead = new Dictionary<ulong, bool>();
         private readonly Dictionary<ulong, DeadEnemy> _deadEnemies = new Dictionary<ulong, DeadEnemy>();
         private readonly Dictionary<ulong, WorldEventPacket> _worldEvents = new Dictionary<ulong, WorldEventPacket>();
+        private readonly Dictionary<ulong, PersistentStatePacket> _persistentStates = new Dictionary<ulong, PersistentStatePacket>();
+        private readonly Dictionary<ulong, PersistentStatePacket> _persistentLastValue = new Dictionary<ulong, PersistentStatePacket>();
         private bool _worldReplayPending;
 
         private string _sceneName = string.Empty;
@@ -416,6 +418,17 @@ namespace SilksongCoop.Mod.State
                     PositionY = stored.PositionY
                 });
             }
+
+            foreach (var stored in _persistentStates.Values)
+            {
+                SendPersistentPacket(new PersistentStatePacket
+                {
+                    Header = new PacketHeader(PacketType.PersistentState, WorldChannel, ++_packetSequence, (uint)Environment.TickCount),
+                    ItemKey = stored.ItemKey,
+                    ValueType = stored.ValueType,
+                    Value = stored.Value
+                });
+            }
         }
 
         private void SendWorldPacket(WorldEventPacket packet)
@@ -465,6 +478,132 @@ namespace SilksongCoop.Mod.State
                 {
                     SilksongCoopPlugin.LogWarn($"[EnemySync] Failed applying world event: {ex.Message}");
                 }
+            }
+        }
+
+        /// <summary>
+        /// Called after a local persistent world item (door, lever, chest, cache) saves its
+        /// value. Registers the state for catch-up and broadcasts it when connected.
+        /// </summary>
+        public void OnLocalPersistentState(string sceneName, string itemId, PersistentValueType valueType, int value)
+        {
+            ulong key = WorldObjectKey.ComputePersistent(sceneName, itemId, (int)valueType);
+            if (key == 0) return;
+
+            if (_persistentLastValue.TryGetValue(key, out var last) &&
+                last.ValueType == valueType && last.Value == value)
+            {
+                return;
+            }
+
+            var packet = new PersistentStatePacket
+            {
+                Header = new PacketHeader(PacketType.PersistentState, WorldChannel, ++_packetSequence, (uint)Environment.TickCount),
+                ItemKey = key,
+                ValueType = valueType,
+                Value = value
+            };
+
+            if (_persistentStates.Count >= 2048)
+            {
+                _persistentStates.Clear();
+                _persistentLastValue.Clear();
+            }
+
+            _persistentStates[key] = packet;
+            _persistentLastValue[key] = packet;
+
+            if (_plugin?.SessionState?.IsConnected != true) return;
+
+            SendPersistentPacket(packet);
+        }
+
+        /// <summary>
+        /// Applies a persistent world value from the peer.
+        /// </summary>
+        public void ApplyRemotePersistentState(PersistentStatePacket packet)
+        {
+            if (RemoteApplyScope.IsActive) return;
+
+            using (RemoteApplyScope.Begin())
+            {
+                try
+                {
+                    if (packet.ValueType == PersistentValueType.Bool)
+                    {
+                        var item = FindPersistentBool(packet.ItemKey);
+                        if (item == null) return;
+
+                        bool value = packet.Value != 0;
+                        if (item.GetCurrentValue() == value) return;
+
+                        item.SetValueOverride(value);
+                        item.SaveState();
+                    }
+                    else if (packet.ValueType == PersistentValueType.Int)
+                    {
+                        var item = FindPersistentInt(packet.ItemKey);
+                        if (item == null) return;
+
+                        if (item.GetCurrentValue() == packet.Value) return;
+
+                        item.SetValueOverride(packet.Value);
+                        item.SaveState();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    SilksongCoopPlugin.LogWarn($"[EnemySync] Failed applying persistent state: {ex.Message}");
+                }
+            }
+        }
+
+        private static PersistentItem<bool>? FindPersistentBool(ulong key)
+        {
+            var items = UnityEngine.Object.FindObjectsByType<PersistentBoolItem>(FindObjectsSortMode.None);
+            for (int i = 0; i < items.Length; i++)
+            {
+                var item = items[i];
+                if (item == null) continue;
+
+                if (WorldObjectKey.ComputePersistent(item.GetSceneName(), item.GetId(), (int)PersistentValueType.Bool) == key)
+                    return item;
+            }
+
+            return null;
+        }
+
+        private static PersistentItem<int>? FindPersistentInt(ulong key)
+        {
+            var items = UnityEngine.Object.FindObjectsByType<PersistentIntItem>(FindObjectsSortMode.None);
+            for (int i = 0; i < items.Length; i++)
+            {
+                var item = items[i];
+                if (item == null) continue;
+
+                if (WorldObjectKey.ComputePersistent(item.GetSceneName(), item.GetId(), (int)PersistentValueType.Int) == key)
+                    return item;
+            }
+
+            return null;
+        }
+
+        private void SendPersistentPacket(PersistentStatePacket packet)
+        {
+            byte[] buffer = ArrayPool<byte>.Shared.Rent(64);
+            try
+            {
+                var writer = new PacketWriter(buffer);
+                packet.Serialize(ref writer);
+                SendBuffer(buffer, writer.Position);
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[EnemySync] Failed sending persistent state: {ex.Message}");
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
             }
         }
 
