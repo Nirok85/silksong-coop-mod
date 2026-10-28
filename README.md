@@ -162,7 +162,7 @@ The diagnostics overlay (**F11**) shows ping (RTT), packet loss and bandwidth gr
 |--------|------------|
 | Max health, max silk, needle upgrades | Current health & silk |
 | Currency (Rosaries, Shell Shards) | Equipped crest / tools loadout |
-| Enemy & boss HP, breakable walls, opened gates | Enemy AI timing / animation phase |
+| Enemy & boss HP, breakable walls, gates, persistent doors/levers | Enemy AI timing / animation phase |
 | Physical pickups (each drop is credited once) | Position, movement, camera |
 | Unlocked items (auto-unlock for partner) | Death / revival state |
 | Benches & checkpoints | |
