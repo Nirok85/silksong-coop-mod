@@ -8,7 +8,7 @@
 ## Статус на v2.1.0
 
 **Сделано (из этого плана):**
-- **#13 CI/CD.** Workflow лежит в `.github/workflows/ci.yml`, собирает Core с warnings-as-errors и запускает тестовый проект (не `--no-build`). Job сборки Mod подготовлена для self-hosted runner (`ENABLE_MOD_CI=true`, `SILKSONG_MANAGED_DIR`), пока пропускается.
+- **#13 CI/CD.** Workflow лежит в `.github/workflows/ci.yml`, собирает Core с warnings-as-errors и запускает тестовый проект (не `--no-build`). Job сборки Mod подготовлена в `docs/ci-mod-job.md` для self-hosted runner (`ENABLE_MOD_CI=true`, `SILKSONG_MANAGED_DIR`); применение требует PAT со scope `workflow`.
 - **Лицензирование.** `LICENSE` (MIT), `THIRD-PARTY-NOTICES.md` и `LICENSES/` входят в оба релизных архива.
 - **#15 Перформанс — частично.** F11-оверлей показывает реальный RTT и потери, убраны per-frame аллокации (кэш `GUIStyle`, кэш `Renderer.materials`, `ArrayPool<byte>` в сетевых hot-path). Формального бюджета и бенчмарк-сцены пока нет.
 - **Синхронизация мира.** HP врагов/боссов, смерти, разрушаемые стены, `Gate.Open()` и дедупликация физических дропов валюты реализованы в v2.1.0.

@@ -137,8 +137,9 @@
   кадр); привязки продолжают работать через New Input System.
 - История подключений выключается через `[Network] SaveConnectionHistory = false`.
 - CI workflow перенесён в `.github/workflows/ci.yml`; тестовый проект собирается перед
-  `dotnet test`. Добавлена отдельная job сборки Mod на self-hosted runner (включается
-  переменными `ENABLE_MOD_CI=true` и `SILKSONG_MANAGED_DIR`).
+  `dotnet test`. Job сборки Mod на self-hosted runner подготовлена в
+  `docs/ci-mod-job.md` (включается переменными `ENABLE_MOD_CI=true` и
+  `SILKSONG_MANAGED_DIR`); применить её можно после выдачи PAT scope `workflow`.
 
 ### Дистрибуция и лицензии
 - Добавлен `LICENSE` (MIT) для кода мода и `THIRD-PARTY-NOTICES.md` с полными текстами
