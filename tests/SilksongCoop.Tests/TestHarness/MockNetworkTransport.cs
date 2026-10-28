@@ -64,6 +64,11 @@ namespace SilksongCoop.Core.Networking
         public int JitterMs { get; set; }
         public float PacketLossRate { get; set; }
 
+        /// <summary>
+        /// The mock delivers packets immediately, so there is never a reliable backlog.
+        /// </summary>
+        public int ReliableBacklogCount => 0;
+
         public long CurrentVirtualTimeMs { get; set; }
         public bool UseVirtualTime { get; set; }
 

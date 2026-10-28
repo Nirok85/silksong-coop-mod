@@ -12,7 +12,7 @@ namespace SilksongCoop.Core.State
     {
         #region Fields
 
-        private static void Log(string msg) => System.Diagnostics.Debug.WriteLine(msg);
+        private static void Log(string msg) => CoopLog.Warn(msg);
 
         private readonly object _lock = new object();
 

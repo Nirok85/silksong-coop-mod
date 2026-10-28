@@ -7,9 +7,11 @@
 using System;
 using System.Buffers;
 using System.Collections;
+using System.Collections.Generic;
 using System.Threading;
 using BepInEx;
 using HarmonyLib;
+using SilksongCoop.Core;
 using SilksongCoop.Core.Clones;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Revive;
@@ -39,7 +41,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "2.1.0";
+        public const string PluginVersion = "2.2.0";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -106,12 +108,27 @@ namespace SilksongCoop.Mod
         // must undo them — otherwise the hero falls through geometry with no input.
         private bool _spectatorActive;
 
+        // Components the mod itself disabled when entering spectator mode. Restoring only
+        // these avoids re-enabling colliders/renderers the game disabled for its own reasons.
+        private readonly List<Collider2D> _spectatorDisabledColliders = new List<Collider2D>();
+        private readonly List<Renderer> _spectatorDisabledRenderers = new List<Renderer>();
+
+        // F9: while spectating, keep the free camera tethered to the partner (default) or
+        // leave it where the player died. The keybind was documented but never read.
+        private bool _spectatorCameraFollow = true;
+
         private ulong? _pendingSteamLobbyJoin;
 
         // Outgoing transform replication. Start above one interval so the first
         // packet after connecting is sent immediately instead of waiting a tick.
         private float _transformSendAccumulator = 1f;
         private uint _transformTick;
+
+        // Cached per-frame lookups on the transform hot path (BroadcastLocalTransform runs
+        // 20-60 times per second; GetComponent and the clip-name hash were being repeated).
+        private Rigidbody2D? _cachedHeroBody;
+        private GameObject? _cachedHeroBodyOwner;
+        private readonly Dictionary<string, int> _clipHashCache = new Dictionary<string, int>(64);
 
         // Auto-reconnect state
         private bool _reconnectPending;
@@ -136,6 +153,7 @@ namespace SilksongCoop.Mod
         {
             Instance = this;
             SteamP2PTransport.Logger = Logger;
+            CoopLog.Sink = message => Logger.LogWarning(message);
             Logger.LogInfo($"Initializing {PluginName} v{PluginVersion}...");
 
             SessionState = new CoopSessionState();
@@ -186,7 +204,7 @@ namespace SilksongCoop.Mod
                     byte[] buffer = new byte[64];
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
-                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, 2);
+                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, NetworkChannels.Vitals);
                     MenuUI?.Diagnostics?.RecordSent(writer.Position);
                 }
             };
@@ -199,7 +217,7 @@ namespace SilksongCoop.Mod
                     byte[] buffer = new byte[64];
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
-                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, 3);
+                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency);
                     MenuUI?.Diagnostics?.RecordSent(writer.Position);
                 }
             };
@@ -212,7 +230,7 @@ namespace SilksongCoop.Mod
                     byte[] buffer = new byte[64];
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
-                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, 4);
+                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, NetworkChannels.Death);
                     MenuUI?.Diagnostics?.RecordSent(writer.Position);
                 }
             };
@@ -225,7 +243,7 @@ namespace SilksongCoop.Mod
                     byte[] buffer = new byte[512];
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
-                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, 3);
+                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency);
                     MenuUI?.Diagnostics?.RecordSent(writer.Position);
                 }
             };
@@ -481,8 +499,26 @@ namespace SilksongCoop.Mod
             }
 
             var oldTransport = ActiveTransport;
+            if (ReferenceEquals(oldTransport, transport))
+                return;
+
             ActiveTransport = transport;
-            
+
+            // Switching transports must not leave the previous socket bound or its Steam
+            // lobby open: the stale transport is still polled for callbacks and could
+            // accept a peer whose packets the session layer then ignores.
+            if (oldTransport != null)
+            {
+                try
+                {
+                    oldTransport.Disconnect();
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning($"[Coop] Failed to close previous transport: {ex.Message}");
+                }
+            }
+
             string transportType = transport is SteamP2PTransport ? "Steam" : "UDP";
             Logger.LogInfo($"[Coop] Active transport changed from {(oldTransport == null ? "null" : (oldTransport is SteamP2PTransport ? "Steam" : "UDP"))} to {transportType}");
         }
@@ -526,21 +562,29 @@ namespace SilksongCoop.Mod
                 {
                     hero.AffectedByGravity(false);
                     hero.RelinquishControl();
-                    
+
+                    if (!_spectatorActive)
+                    {
+                        _spectatorDisabledColliders.Clear();
+                        _spectatorDisabledRenderers.Clear();
+                    }
+
                     // HIGH-01: Disable colliders so invisible dead body doesn't block path or take hits
                     foreach (var col in hero.gameObject.GetComponentsInChildren<Collider2D>())
                     {
-                        if (col != null)
+                        if (col != null && col.enabled)
                         {
                             col.enabled = false;
+                            _spectatorDisabledColliders.Add(col);
                         }
                     }
 
                     foreach (var ren in hero.gameObject.GetComponentsInChildren<Renderer>())
                     {
-                        if (ren != null)
+                        if (ren != null && ren.enabled)
                         {
                             ren.enabled = false;
+                            _spectatorDisabledRenderers.Add(ren);
                         }
                     }
 
@@ -572,21 +616,7 @@ namespace SilksongCoop.Mod
                     hero.AffectedByGravity(true);
                     hero.RegainControl(allowInput: true);
 
-                    foreach (var col in hero.gameObject.GetComponentsInChildren<Collider2D>())
-                    {
-                        if (col != null)
-                        {
-                            col.enabled = true;
-                        }
-                    }
-
-                    foreach (var ren in hero.gameObject.GetComponentsInChildren<Renderer>())
-                    {
-                        if (ren != null)
-                        {
-                            ren.enabled = true;
-                        }
-                    }
+                    RestoreSpectatorComponents();
                 }
 
                 _spectatorActive = false;
@@ -598,6 +628,28 @@ namespace SilksongCoop.Mod
             {
                 Logger.LogWarning($"[Coop] Failed exiting spectator mode: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Re-enables exactly the components that <see cref="EnterSpectatorMode"/> disabled.
+        /// Enabling every child collider/renderer also revived components the game had
+        /// disabled for its own reasons (invisible hazards, scripted sequences).
+        /// </summary>
+        private void RestoreSpectatorComponents()
+        {
+            for (int i = 0; i < _spectatorDisabledColliders.Count; i++)
+            {
+                var col = _spectatorDisabledColliders[i];
+                if (col != null) col.enabled = true;
+            }
+            _spectatorDisabledColliders.Clear();
+
+            for (int i = 0; i < _spectatorDisabledRenderers.Count; i++)
+            {
+                var ren = _spectatorDisabledRenderers[i];
+                if (ren != null) ren.enabled = true;
+            }
+            _spectatorDisabledRenderers.Clear();
         }
 
         /// <summary>
@@ -679,21 +731,8 @@ namespace SilksongCoop.Mod
                     VitalsSync?.BroadcastCurrentVitals();
                 }
 
-                // 5. Re-enable renderers and colliders
-                foreach (var col in hero.gameObject.GetComponentsInChildren<Collider2D>())
-                {
-                    if (col != null)
-                    {
-                        col.enabled = true;
-                    }
-                }
-                foreach (var ren in hero.gameObject.GetComponentsInChildren<Renderer>())
-                {
-                    if (ren != null)
-                    {
-                        ren.enabled = true;
-                    }
-                }
+                // 5. Re-enable the renderers and colliders disabled by EnterSpectatorMode
+                RestoreSpectatorComponents();
 
                 // 6. Restore player state in exact engine sequence: clear dead before RegainControl!
                 _spectatorActive = false;
@@ -841,10 +880,7 @@ namespace SilksongCoop.Mod
                     {
                         heroRestore.AffectedByGravity(true);
                         heroRestore.RegainControl(allowInput: true);
-                        foreach (var col in heroRestore.gameObject.GetComponentsInChildren<Collider2D>())
-                        {
-                            if (col != null) col.enabled = true;
-                        }
+                        RestoreSpectatorComponents();
                     }
                 }
 
@@ -862,14 +898,6 @@ namespace SilksongCoop.Mod
                 {
                     hero.cState.dead = false;
                     hero.cState.hazardDeath = false;
-                    
-                    foreach (var ren in hero.gameObject.GetComponentsInChildren<Renderer>())
-                    {
-                        if (ren != null)
-                        {
-                            ren.enabled = true;
-                        }
-                    }
                 }
             }
             catch (Exception ex)
@@ -921,7 +949,7 @@ namespace SilksongCoop.Mod
                         0,
                         writer.Position,
                         DeliveryMethod.ReliableOrdered,
-                        1);
+                        NetworkChannels.Action);
                 }
                 finally
                 {
@@ -970,7 +998,7 @@ namespace SilksongCoop.Mod
                         0,
                         writer.Position,
                         DeliveryMethod.ReliableOrdered,
-                        0);
+                        NetworkChannels.Death);
                 }
                 finally
                 {
@@ -1200,12 +1228,28 @@ namespace SilksongCoop.Mod
                     if (int.TryParse(itemId.Substring("heartPieces:".Length), out int value))
                     {
                         bool isDelta = itemId["heartPieces:".Length] == '+' || itemId["heartPieces:".Length] == '-';
-                        int next = isDelta ? playerData.heartPieces + value : Math.Max(playerData.heartPieces, value);
-                        next = Math.Max(0, next);
-                        while (next >= 4)
+                        // A peer may only report the small deltas the game produces (±1 per
+                        // pickup, at most one mask's worth per packet). Without this bound a
+                        // modified client could ask for millions of AddToMaxHealth calls in a
+                        // single frame and freeze the host.
+                        if (isDelta && (value < -8 || value > 8))
+                        {
+                            Logger.LogWarning($"[Coop] Rejected heart-piece delta {value}");
+                            return;
+                        }
+
+                        int next = isDelta
+                            ? playerData.heartPieces + value
+                            : Math.Max(playerData.heartPieces, Math.Clamp(value, 0, 3));
+
+                        // 4 pieces = 1 mask. Bound the work: at most two masks can be
+                        // completed by a single valid packet.
+                        next = Math.Clamp(next, 0, 11);
+                        int masks = next / 4;
+                        next %= 4;
+                        for (int i = 0; i < masks; i++)
                         {
                             HeroController.instance?.AddToMaxHealth(1);
-                            next -= 4;
                         }
                         playerData.heartPieces = next;
                     }
@@ -1216,12 +1260,23 @@ namespace SilksongCoop.Mod
                     if (int.TryParse(itemId.Substring("silkParts:".Length), out int value))
                     {
                         bool isDelta = itemId["silkParts:".Length] == '+' || itemId["silkParts:".Length] == '-';
-                        int next = isDelta ? playerData.silkParts + value : Math.Max(playerData.silkParts, value);
-                        next = Math.Max(0, next);
-                        while (next >= 3)
+                        if (isDelta && (value < -6 || value > 6))
+                        {
+                            Logger.LogWarning($"[Coop] Rejected silk-part delta {value}");
+                            return;
+                        }
+
+                        int next = isDelta
+                            ? playerData.silkParts + value
+                            : Math.Max(playerData.silkParts, Math.Clamp(value, 0, 2));
+
+                        // 3 parts = 1 spool.
+                        next = Math.Clamp(next, 0, 8);
+                        int spools = next / 3;
+                        next %= 3;
+                        for (int i = 0; i < spools; i++)
                         {
                             HeroController.instance?.AddToMaxSilk(1);
-                            next -= 3;
                         }
                         playerData.silkParts = next;
                     }
@@ -1410,6 +1465,7 @@ namespace SilksongCoop.Mod
                         : (transport == SteamTransport
                             ? SessionState?.SteamLobbyId?.ToString()
                             : SessionState?.CurrentRoomCode);
+                    string? hostRoomCode = wasHost ? SessionState?.CurrentRoomCode : null;
 
                     // CRIT-02: If partner disconnected while local player was spectating/pending revive,
                     // the local player must fall back to a bench respawn to avoid a perma-softlock.
@@ -1438,6 +1494,17 @@ namespace SilksongCoop.Mod
                         Logger.LogWarning("[Coop] Partner disconnected while in spectator mode. Exiting spectator and respawning at bench.");
                         ExitSpectatorMode();
                         TriggerTeamWipe();
+                    }
+
+                    // A UDP host keeps its socket bound after a peer timeout (so the guest
+                    // can reconnect). Do not leave the UI in "Disconnected" with the room
+                    // code hidden: the host is still listening and must be able to share the
+                    // same code again. A deliberate Disconnect() reports GracefulDisconnect
+                    // and must not re-enter the hosting state.
+                    if (wasHost && reason == DisconnectReason.Timeout)
+                    {
+                        SessionState?.SetHosting(transport.LocalPeerId, hostRoomCode ?? string.Empty);
+                        MenuUI?.SetStatusMessage("Partner timed out — still hosting. Share the same room code to reconnect.");
                     }
 
                     // Schedule auto-reconnect on unexpected disconnect
@@ -1648,7 +1715,12 @@ namespace SilksongCoop.Mod
 
                 float velocityX = 0f;
                 float velocityY = 0f;
-                var body = hero.GetComponent<Rigidbody2D>();
+                if (_cachedHeroBody == null || _cachedHeroBodyOwner != hero.gameObject)
+                {
+                    _cachedHeroBody = hero.GetComponent<Rigidbody2D>();
+                    _cachedHeroBodyOwner = hero.gameObject;
+                }
+                var body = _cachedHeroBody;
                 if (body != null)
                 {
                     Vector2 velocity = body.linearVelocity;
@@ -1674,7 +1746,11 @@ namespace SilksongCoop.Mod
                 var clip = animator?.CurrentClip;
                 if (clip != null)
                 {
-                    clipHash = AnimationClipHasher.ComputeHash(clip.name);
+                    if (!_clipHashCache.TryGetValue(clip.name, out clipHash))
+                    {
+                        clipHash = AnimationClipHasher.ComputeHash(clip.name);
+                        if (_clipHashCache.Count < 512) _clipHashCache[clip.name] = clipHash;
+                    }
                     float duration = clip.Duration;
                     if (duration > 0f)
                     {
@@ -1766,7 +1842,7 @@ namespace SilksongCoop.Mod
                         0,
                         writer.Position,
                         DeliveryMethod.ReliableOrdered,
-                        1);
+                        NetworkChannels.Action);
                     SessionState?.RecordSent(writer.Position);
                     MenuUI?.Diagnostics?.RecordSent(writer.Position);
                 }
@@ -1842,6 +1918,14 @@ namespace SilksongCoop.Mod
                 }
                 ActiveTransport?.PollEvents();
                 UpdateTransportDiagnostics();
+
+                if (Keybinds != null && Keybinds.IsKeyDown(KeybindManager.ToggleSpectatorCamera))
+                {
+                    _spectatorCameraFollow = !_spectatorCameraFollow;
+                    MenuUI?.SetStatusMessage(_spectatorCameraFollow
+                        ? "Spectator camera: follow partner"
+                        : "Spectator camera: hold position");
+                }
 
                 if (SessionState?.IsConnected == true && SessionState.RemotePeerId.HasValue)
                 {
@@ -1935,7 +2019,7 @@ namespace SilksongCoop.Mod
                             DeathCoordinator.LastPartnerPosition = (posX, posY);
 
                             // If spectating, tether camera target to remote partner position
-                            if (DeathCoordinator.CurrentState == DeathState.Spectating)
+                            if (DeathCoordinator.CurrentState == DeathState.Spectating && _spectatorCameraFollow)
                             {
                                 var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
                                 if (camTarget != null)
@@ -1970,6 +2054,11 @@ namespace SilksongCoop.Mod
                 CancelReconnect();
                 
                 _harmony?.UnpatchSelf();
+
+                // Release static GUI resources (textures are HideFlags.DontSave and are not
+                // collected with the scene).
+                SilksongSkin.Release();
+                DiagnosticsOverlay.Release();
             }
             catch (Exception ex)
             {
@@ -1977,6 +2066,7 @@ namespace SilksongCoop.Mod
             }
             finally
             {
+                CoopLog.Sink = null;
                 Instance = null;
             }
         }

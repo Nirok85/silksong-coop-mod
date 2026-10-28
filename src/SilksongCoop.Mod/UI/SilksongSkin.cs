@@ -112,10 +112,36 @@ namespace SilksongCoop.Mod.UI
 
         /// <summary>
         /// Force rebuild the skin (call if DPI / resolution changes dramatically).
+        /// Destroys the cached textures so a rebuild does not leak native memory.
         /// </summary>
         public static void Invalidate()
         {
+            Release();
+        }
+
+        /// <summary>
+        /// Destroys the cached skin textures. Call from the plugin's OnDestroy.
+        /// </summary>
+        public static void Release()
+        {
             _cached = null;
+            DestroyTexture(ref _texBgDeepest);
+            DestroyTexture(ref _texBgPanel);
+            DestroyTexture(ref _texBgField);
+            DestroyTexture(ref _texBgSubtle);
+            DestroyTexture(ref _texGold);
+            DestroyTexture(ref _texGoldBright);
+            DestroyTexture(ref _texGoldDim);
+            DestroyTexture(ref _texWhite);
+        }
+
+        private static void DestroyTexture(ref Texture2D? texture)
+        {
+            if (texture != null)
+            {
+                UnityEngine.Object.Destroy(texture);
+                texture = null;
+            }
         }
 
         #endregion

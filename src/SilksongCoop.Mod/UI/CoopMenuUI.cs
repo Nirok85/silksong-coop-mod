@@ -166,6 +166,11 @@ namespace SilksongCoop.Mod.UI
 
         private void OnGUI()
         {
+            // GUI.skin is process-global; restore the previous skin so other mods' OnGUI
+            // passes are not rendered with the co-op skin.
+            var previousSkin = GUI.skin;
+            try
+            {
             // Lazy-load skin + styles
             if (_skin == null)
             {
@@ -211,6 +216,11 @@ namespace SilksongCoop.Mod.UI
             if (!IsVisible) return;
 
             _windowRect = GUI.Window(_windowId, _windowRect, DrawWindowContents, "");
+            }
+            finally
+            {
+                GUI.skin = previousSkin;
+            }
         }
 
         #endregion // Unity Lifecycle
@@ -1076,7 +1086,7 @@ namespace SilksongCoop.Mod.UI
                 // StartHost(0) would bind an ephemeral port while the code advertised port 0.
                 int udpPort = Math.Clamp(plugin.DefaultUdpPortConfig?.Value ?? 7777, 1024, 65535);
                 // Issue #1.1: the 12-character code is a deterministic encoding of IP:port,
-                // so it cannot serve as a shared secret. Append 40 random bits; the host
+                // so it cannot serve as a shared secret. Append 80 random bits; the host
                 // HMACs the challenge against the full string and direct IP joins fail.
                 string code = RoomCodeCodec.EncodeWithSecret(GetLocalIpAddress(), udpPort);
 

@@ -8,13 +8,13 @@ namespace SilksongCoop.Core.Networking
     /// <summary>
     /// Crockford Base32 room code encoder and decoder for peer-to-peer connection strings.
     /// Packs IPv4 (4 bytes), Port (2 bytes), and CRC checksum (1 byte) into an easily shareable code,
-    /// optionally followed by a random 40-bit shared secret. Tolerates case insensitivity, hyphens,
+    /// optionally followed by a random 80-bit shared secret. Tolerates case insensitivity, hyphens,
     /// spaces, and ambiguous characters (I, L -> 1; O -> 0).
     /// </summary>
     /// <remarks>
     /// The legacy 12-character code is a deterministic encoding of IP:port, so it is not a
     /// secret: anyone who knows the address can rebuild it. <see cref="EncodeWithSecret"/> appends
-    /// 8 random Crockford characters (40 bits) that act as the actual pre-shared key for the
+    /// 16 random Crockford characters (80 bits) that act as the actual pre-shared key for the
     /// challenge-response handshake, while the first 12 characters still carry the address.
     /// </remarks>
     public static class RoomCodeCodec
@@ -25,10 +25,12 @@ namespace SilksongCoop.Core.Networking
         private const string Prefix = "SK-";
 
         /// <summary>Number of random bytes appended by <see cref="EncodeWithSecret"/>.</summary>
-        public const int SecretBytes = 5;
+        public const int SecretBytes = 10;
 
         private const int AddressCodeChars = 12;
-        private const int SecretCodeChars = 8;
+        private const int SecretCodeChars = 16;
+        private const int LegacySecretChars = 8;
+        private const int LegacySecretBodyLength = AddressCodeChars + LegacySecretChars;
         private const int SecretCodeBodyLength = AddressCodeChars + SecretCodeChars;
 
         #endregion
@@ -84,8 +86,8 @@ namespace SilksongCoop.Core.Networking
         }
 
         /// <summary>
-        /// Encodes an IP address and port with a fresh cryptographically random 40-bit secret.
-        /// The result is <c>SK-XXXX-XXXX-XXXX-YYYY-YYYY</c>: the first part addresses the host,
+        /// Encodes an IP address and port with a fresh cryptographically random 80-bit secret.
+        /// The result is <c>SK-XXXX-XXXX-XXXX-YYYY-YYYY-YYYY-YYYY</c>: the first part addresses the host,
         /// the second is the pre-shared key for the HMAC handshake. Because the secret is not
         /// derivable from the address, knowing IP:port is no longer enough to join.
         /// </summary>
@@ -132,18 +134,34 @@ namespace SilksongCoop.Core.Networking
 
         private static string AppendSecret(string addressCode, ReadOnlySpan<byte> secret)
         {
-            ulong value = 0;
-            for (int i = 0; i < SecretBytes; i++)
-                value = (value << 8) | secret[i];
-
+            // Encode SecretBytes*8 bits into SecretCodeChars Crockford characters
+            // (10 bytes = 80 bits = 16 * 5). The MSB of the first byte is the first bit.
             var chars = new char[SecretCodeChars];
-            for (int i = SecretCodeChars - 1; i >= 0; i--)
+            for (int charIndex = SecretCodeChars - 1; charIndex >= 0; charIndex--)
             {
-                chars[i] = CrockfordAlphabet[(int)(value & 0x1F)];
-                value >>= 5;
+                int value = 0;
+                for (int bit = 0; bit < 5; bit++)
+                {
+                    int bitIndex = charIndex * 5 + bit;
+                    int byteIndex = bitIndex >> 3;
+                    int bitInByte = 7 - (bitIndex & 7);
+                    value = (value << 1) | ((secret[byteIndex] >> bitInByte) & 1);
+                }
+                chars[charIndex] = CrockfordAlphabet[value];
             }
 
-            return addressCode + "-" + new string(chars, 0, 4) + "-" + new string(chars, 4, 4);
+            return addressCode + "-" + FormatGroups(new string(chars), 4);
+        }
+
+        private static string FormatGroups(string value, int groupSize)
+        {
+            var sb = new StringBuilder(value.Length + value.Length / groupSize);
+            for (int i = 0; i < value.Length; i += groupSize)
+            {
+                if (i > 0) sb.Append('-');
+                sb.Append(value, i, Math.Min(groupSize, value.Length - i));
+            }
+            return sb.ToString();
         }
 
         /// <summary>
@@ -153,7 +171,7 @@ namespace SilksongCoop.Core.Networking
         /// </summary>
         /// <param name="code">The room code to normalize.</param>
         /// <param name="canonical">The canonical room code when successful.</param>
-        /// <returns>True when the input is a valid 12- or 20-character code.</returns>
+        /// <returns>True when the input is a valid 12-, 20- or 28-character code.</returns>
         public static bool TryCanonicalize(string? code, out string canonical)
         {
             canonical = string.Empty;
@@ -162,11 +180,9 @@ namespace SilksongCoop.Core.Networking
 
             string clean = NormalizeCode(code!);
             string addressPart = Encode(ip, port);
-            if (clean.Length == SecretCodeBodyLength)
+            if (clean.Length == SecretCodeBodyLength || clean.Length == LegacySecretBodyLength)
             {
-                canonical = addressPart + "-" +
-                            clean.Substring(AddressCodeChars, 4) + "-" +
-                            clean.Substring(AddressCodeChars + 4, 4);
+                canonical = addressPart + "-" + FormatGroups(clean.Substring(AddressCodeChars), 4);
             }
             else
             {
@@ -196,11 +212,11 @@ namespace SilksongCoop.Core.Networking
             {
                 return TryDecodeAddressPayload(clean, out ip, out port);
             }
-            else if (clean.Length == SecretCodeBodyLength)
+            else if (clean.Length == SecretCodeBodyLength || clean.Length == LegacySecretBodyLength)
             {
-                // New format: 12 address characters followed by an 8-character random secret.
-                // The secret is validated as Crockford Base32 but its value is irrelevant here;
-                // it only matters as the HMAC key of the full canonical string.
+                // Address + random secret (new 80-bit or legacy 40-bit format). The secret
+                // is validated as Crockford Base32 but its value is irrelevant here; it only
+                // matters as the HMAC key of the full canonical string.
                 for (int i = AddressCodeChars; i < clean.Length; i++)
                 {
                     if (CrockfordAlphabet.IndexOf(clean[i]) < 0)
@@ -365,7 +381,8 @@ namespace SilksongCoop.Core.Networking
                     bodyLength++;
                 }
 
-                if (bodyLength == AddressCodeChars || bodyLength == SecretCodeBodyLength)
+                if (bodyLength == AddressCodeChars || bodyLength == SecretCodeBodyLength ||
+                    bodyLength == LegacySecretBodyLength)
                     start = 2;
             }
 

@@ -573,10 +573,7 @@ namespace SilksongCoop.Tests
         {
             // Verify that in SilksongCoopPlugin.cs within ReviveAtPartner, "hero.cState.dead = false" occurs
             // BEFORE "hero.RegainControl" in the revival sequence!
-            string pluginPath = Path.GetFullPath(Path.Combine(
-                AppDomain.CurrentDomain.BaseDirectory,
-                "..", "..", "..", "..", "..",
-                "src", "SilksongCoop.Mod", "SilksongCoopPlugin.cs"));
+            string pluginPath = FindRepoFile(Path.Combine("src", "SilksongCoop.Mod", "SilksongCoopPlugin.cs"));
 
             Assert.True(File.Exists(pluginPath), $"SilksongCoopPlugin.cs must exist at {pluginPath}");
 
@@ -614,6 +611,24 @@ namespace SilksongCoop.Tests
             Assert.True(regainControlLine > 0, "hero.RegainControl must be present inside ReviveAtPartner");
             Assert.True(clearDeadLine < regainControlLine,
                 $"Invariant violation: hero.cState.dead = false (line {clearDeadLine}) must occur strictly BEFORE hero.RegainControl (line {regainControlLine}).");
+        }
+
+        /// <summary>
+        /// Walks up from the test binaries until the repository root (SilksongCoop.sln) is
+        /// found, so the static-analysis check does not depend on the output directory depth.
+        /// </summary>
+        private static string FindRepoFile(string relativePath)
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory != null)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "SilksongCoop.sln")))
+                    return Path.Combine(directory.FullName, relativePath);
+
+                directory = directory.Parent;
+            }
+
+            return Path.GetFullPath(relativePath);
         }
 
         #endregion

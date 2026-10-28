@@ -4,7 +4,7 @@
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
 ![Loader](https://img.shields.io/badge/ModLoader-BepInEx%205.4.x-purple)
 ![Tests](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)
-![Version](https://img.shields.io/badge/Version-2.1.0-success)
+![Version](https://img.shields.io/badge/Version-2.2.0-success)
 
 **[🇷🇺 Русская версия](README.ru.md)**
 
@@ -34,10 +34,10 @@ A fully-featured cooperative mod for **Hollow Knight: Silksong**, allowing two p
 
 ### 1. Serverless Networking
 * **Steam P2P Matchmaking**: the host opens the world for network play and sends a direct invitation via the Steam overlay. Uses the game's built-in `com.rlabrecque.steamworks.net.dll`.
-* **Steam telemetry**: app-level ping/pong probes on an unused channel feed real RTT and loss into the F11 overlay and adaptive interpolation (the legacy Steam P2P API exposes no counters).
-* **Fallback (custom UDP transport)**: if the Steam overlay is unavailable, the host generates a short room code (e.g. `SK-A8B3-K9Q2-W1Z4-M4T7`) or connects directly by IP:Port. The class is named `LiteNetLibTransport` for historical reasons, but this is a purpose-built UDP socket implementation — the LiteNetLib package is not used or bundled.
+* **Steam telemetry**: app-level ping/pong probes on a dedicated control channel feed real RTT and loss into the F11 overlay and adaptive interpolation (the legacy Steam P2P API exposes no counters).
+* **Fallback (custom UDP transport)**: if the Steam overlay is unavailable, the host generates a short room code (e.g. `SK-A8B3-K9Q2-W1Z4-M4T7-N6P8-Q2R4-S5T6`) or connects directly by IP:Port. The class is named `LiteNetLibTransport` for historical reasons, but this is a purpose-built UDP socket implementation — the LiteNetLib package is not used or bundled.
 * **Movement Smoothing (Hermite Spline)**: position is replicated at 30 Hz with cubic Hermite spline interpolation (C¹ continuity) and a 64-frame snapshot buffer. No teleporting or jitter at latencies up to 150 ms.
-* **Secure sessions**: challenge-response authentication, packet validation, rate limiting and room-code codec protection against unauthorized joins. The menu-generated code carries 40 random bits that cannot be derived from the address; a host started from the menu requires that code and rejects a bare IP:Port join.
+* **Secure sessions**: challenge-response authentication, a per-session MAC on every post-handshake UDP datagram (room-code sessions), packet validation, rate limiting and room-code codec protection against unauthorized joins. The menu-generated code carries 80 random bits that cannot be derived from the address; a host started from the menu requires that code and rejects a bare IP:Port join.
 * **Shared world state**: enemy/boss HP is replicated from the attacker's authoritative hit, breakable walls and gates are mirrored, and physical currency drops are deduplicated so the shared wallet is credited once per drop.
 
 ### 2. Visual Differentiation (Blue Hornet Cloak)
@@ -81,7 +81,7 @@ No other downloads required.
 
 ### Method A — Release Package (Recommended)
 
-The `SilksongCoop_v2.1.0.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21, HarmonyX and the mod DLLs.
+The `SilksongCoop_v2.2.0.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21, HarmonyX and the mod DLLs.
 
 1. Close the game if it is running.
 2. Open the Silksong install folder in Steam (Manage → Browse local files). Typical path:
@@ -99,7 +99,7 @@ The `SilksongCoop_v2.1.0.zip` from the [Releases](https://github.com/Nirok85/sil
 ### Method B — Manual Install (from source build)
 
 If you already have BepInEx 5.4.x installed (any OS, including Linux/macOS), grab
-`SilksongCoop_v2.1.0_plugin-only.zip` from the release page — it contains just the two DLLs,
+`SilksongCoop_v2.2.0_plugin-only.zip` from the release page — it contains just the two DLLs,
 a default config and these instructions.
 
 1. Install [BepInEx 5.4.x (x64)](https://github.com/BepInEx/BepInEx/releases) into the game root (so that `BepInEx\` and `winhttp.dll` appear next to the game exe).
@@ -131,7 +131,7 @@ In the main menu or in game, press **F10** to open the co-op interface.
 If the Steam overlay is disabled or unavailable:
 1. **Player 1 (Host)**:
    * Press **F10** → **"Host Session (Direct UDP)"**.
-   * A room code (e.g. `SK-A8B3-K9Q2-W1Z4-M4T7`) and the local port (`7777`) are shown; the code is auto-copied to the clipboard. Share it with the partner.
+   * A room code (e.g. `SK-A8B3-K9Q2-W1Z4-M4T7-N6P8-Q2R4-S5T6`) and the local port (`7777`) are shown; the code is auto-copied to the clipboard. Share it with the partner.
 2. **Player 2 (Client)**:
    * Press **F10**, switch to the **"Join"** tab.
    * Paste the room code and press **"Connect"**. A bare `IP:Port` only works for hosts that do not require a code (the menu always creates one, so prefer the code).
@@ -146,7 +146,7 @@ If the Steam overlay is disabled or unavailable:
 |--------|-----|
 | Open/close co-op menu | **F10** (configurable, `[Keybinds] ToggleMenu`) |
 | Toggle network diagnostics overlay | **F11** (configurable, `[Keybinds] ToggleDiagnostics`) |
-| Spectator camera | **F9** (configurable, `[Keybinds] ToggleSpectatorCamera`) |
+| Spectator camera | **F9** — toggles whether the spectator camera follows the partner (`[Keybinds] ToggleSpectatorCamera`) |
 | Invite Steam friends | Menu → "Invite Steam Friends…" (host only) |
 | Copy room code / lobby ID | Menu → "Copy" (auto-copied when hosting) |
 | Disconnect | Menu → "Disconnect Session" |
@@ -253,7 +253,7 @@ silksong_coop_mod/
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 682 tests
+    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 687 tests
         ├── TestHarness/              # DualClientTestHarness (2-client simulation, no Unity)
         ├── Tier1_FeatureTests/       # Requirement coverage tests (F01–F28)
         ├── Tier2_BoundaryTests/      # Boundary value tests
@@ -275,8 +275,8 @@ dotnet test SilksongCoop.sln -c Release
 Current result:
 
 ```text
-Total tests:   682
-Passed:        682 (100.0%)
+Total tests:   687
+Passed:        687 (100.0%)
 Failed:        0
 Skipped:       0
 Duration:      ~3 s
@@ -307,7 +307,7 @@ The mod is in active development. The following limitations are by design or are
 * **F11** — network diagnostics overlay (ping/loss/bandwidth graphs, top-right corner).
 * Keys are remappable in `BepInEx\config\com.silksong.coop.cfg`, section `[Keybinds]`.
 
-If keys don't respond: check that `BepInEx\LogOutput.log` shows the plugin loading (look for `Initializing Silksong Co-op Multiplayer v2.1.0...`). Ensure no other mod or OS utility (e.g. screen recorders, media players) binds F10/F11 globally.
+If keys don't respond: check that `BepInEx\LogOutput.log` shows the plugin loading (look for `Initializing Silksong Co-op Multiplayer v2.2.0...`). Ensure no other mod or OS utility (e.g. screen recorders, media players) binds F10/F11 globally.
 </details>
 
 <details>

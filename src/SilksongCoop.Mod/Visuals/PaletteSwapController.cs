@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using SilksongCoop.Core.Visuals;
 using UnityEngine;
 
@@ -77,6 +78,32 @@ namespace SilksongCoop.Mod.Visuals
             CacheComponents();
             _needsUpdate = true;
             ApplyPaletteSwap();
+        }
+
+        private void OnDestroy()
+        {
+            // Renderer.materials instantiates a per-renderer copy; Unity does not destroy
+            // those copies with the GameObject. Without this every clone spawn leaked a set
+            // of native materials.
+            if (_cachedMaterials == null) return;
+
+            var destroyed = new HashSet<Material>();
+            for (int i = 0; i < _cachedMaterials.Length; i++)
+            {
+                var materials = _cachedMaterials[i];
+                if (materials == null) continue;
+
+                for (int m = 0; m < materials.Length; m++)
+                {
+                    var material = materials[m];
+                    if (material != null && destroyed.Add(material))
+                    {
+                        Destroy(material);
+                    }
+                }
+            }
+
+            _cachedMaterials = null;
         }
 
         private void LateUpdate()

@@ -26,6 +26,14 @@ namespace SilksongCoop.Core.Networking
         /// </summary>
         int PacketLossPercent { get; }
 
+        /// <summary>
+        /// Number of reliable-ordered packets waiting for an acknowledgement. A sender that
+        /// needs to stream a large burst (for example the world-state catch-up replay) must
+        /// throttle itself below the transport's backlog cap, otherwise the transport has to
+        /// drop new packets to preserve stream continuity.
+        /// </summary>
+        int ReliableBacklogCount { get; }
+
         void StartHost(int port = 7777);
         void Connect(string addressOrCode);
         void Disconnect();

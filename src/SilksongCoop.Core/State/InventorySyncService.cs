@@ -316,7 +316,7 @@ namespace SilksongCoop.Core.State
 
         #region Private Methods
 
-        private static void Log(string msg) => System.Diagnostics.Debug.WriteLine(msg);
+        private static void Log(string msg) => CoopLog.Warn(msg);
 
         private void RecordTransaction(Guid transactionId)
         {

@@ -43,11 +43,36 @@ namespace SilksongCoop.Core.Networking
         }
 
         /// <summary>
+        /// Derives the session key used to authenticate post-handshake datagrams.
+        /// Domain-separated from the challenge signature: the signature itself travels on
+        /// the wire and must not be usable as a MAC key.
+        /// </summary>
+        public byte[] ComputeSessionKey(byte[] nonce, string roomCode)
+        {
+            using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(roomCode));
+            byte[] label = Encoding.UTF8.GetBytes("SilksongCoop-Session-v4");
+            byte[] message = new byte[label.Length + nonce.Length];
+            Buffer.BlockCopy(label, 0, message, 0, label.Length);
+            Buffer.BlockCopy(nonce, 0, message, label.Length, nonce.Length);
+            return hmac.ComputeHash(message);
+        }
+
+        /// <summary>
         /// Validates a client's signature against the pending nonce.
         /// Returns true if signature is valid and nonce hasn't expired.
         /// </summary>
         public bool ValidateSignature(byte[] receivedSignature, string roomCode)
         {
+            return ValidateSignature(receivedSignature, roomCode, out _);
+        }
+
+        /// <summary>
+        /// Validates the challenge response and, on success, returns the derived session key
+        /// (null when validation failed).
+        /// </summary>
+        public bool ValidateSignature(byte[] receivedSignature, string roomCode, out byte[]? sessionKey)
+        {
+            sessionKey = null;
             if (_pendingNonce == null)
                 return false;
 
@@ -77,9 +102,10 @@ namespace SilksongCoop.Core.Networking
             // Keep the nonce on a failed attempt: an unauthenticated (possibly spoofed)
             // response must not invalidate the challenge for the legitimate client that is
             // still about to answer. Brute force is infeasible because the key carries
-            // 40 random bits and the nonce expires after 10 seconds.
+            // 80 random bits and the nonce expires after 10 seconds.
             if (valid)
             {
+                sessionKey = ComputeSessionKey(_pendingNonce, roomCode);
                 _pendingNonce = null;
             }
 

@@ -183,6 +183,7 @@ namespace SilksongCoop.Mod.Visuals
                     ghostGo = new GameObject($"DashGhost_{_isPlayer2}_{Time.frameCount}");
                     ghost = ghostGo.AddComponent<DashGhostInstance>();
                 }
+                _activeGhosts.Add(ghost);
 
                 ghostGo.transform.position = transform.position;
                 ghostGo.transform.rotation = transform.rotation;
@@ -239,7 +240,9 @@ namespace SilksongCoop.Mod.Visuals
             {
                 yield break;
             }
-            
+
+            _activeGhosts.Remove(ghost);
+
             if (_ghostPool != null && _ghostPool.Count < MaxPoolSize)
             {
                 ghost.gameObject.SetActive(false);
@@ -291,6 +294,18 @@ namespace SilksongCoop.Mod.Visuals
                     Destroy(ghost.gameObject);
                 }
             }
+
+            // Ghosts that were still fading when the clone was destroyed (they are root
+            // objects, so Unity does not remove them with the clone).
+            for (int i = 0; i < _activeGhosts.Count; i++)
+            {
+                var ghost = _activeGhosts[i];
+                if (ghost != null && ghost.gameObject != null)
+                {
+                    Destroy(ghost.gameObject);
+                }
+            }
+            _activeGhosts.Clear();
         }
 
         #endregion
@@ -360,6 +375,7 @@ namespace SilksongCoop.Mod.Visuals
 
         // Object pool for ghost instances to reduce GC pressure
         private readonly Queue<DashGhostInstance> _ghostPool = new Queue<DashGhostInstance>();
+        private readonly List<DashGhostInstance> _activeGhosts = new List<DashGhostInstance>();
         private const int MaxPoolSize = 20;
     }
 }

@@ -90,6 +90,25 @@ namespace SilksongCoop.Mod.UI
             if (_gridTex == null) _gridTex = GetSolidTexture(new Color(1f, 1f, 1f, 0.15f));
         }
 
+        /// <summary>
+        /// Destroys the static textures; call from the plugin's OnDestroy.
+        /// </summary>
+        public static void Release()
+        {
+            DestroyTexture(ref _whiteTex);
+            DestroyTexture(ref _bgTex);
+            DestroyTexture(ref _gridTex);
+        }
+
+        private static void DestroyTexture(ref Texture2D? texture)
+        {
+            if (texture != null)
+            {
+                UnityEngine.Object.Destroy(texture);
+                texture = null;
+            }
+        }
+
         #endregion
 
         #region Public Methods

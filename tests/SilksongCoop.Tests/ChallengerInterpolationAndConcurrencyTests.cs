@@ -324,12 +324,14 @@ namespace SilksongCoop.Tests
                 clientReceivedBytes.Add(length);
             };
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var token = cts.Token;
 
-            // Worker threads sending packets concurrently
+            // Worker threads sending packets concurrently. LongRunning gives the workers
+            // dedicated threads, so a busy xUnit thread pool cannot starve them past the
+            // timeout (the old test occasionally recorded zero sends on loaded CI).
             int sentPackets = 0;
-            var sendTask1 = Task.Run(() =>
+            var sendTask1 = Task.Factory.StartNew(() =>
             {
                 byte[] payload = new byte[32];
                 while (!token.IsCancellationRequested)
@@ -338,9 +340,9 @@ namespace SilksongCoop.Tests
                     Interlocked.Increment(ref sentPackets);
                     Thread.SpinWait(50);
                 }
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
-            var sendTask2 = Task.Run(() =>
+            var sendTask2 = Task.Factory.StartNew(() =>
             {
                 byte[] payload = new byte[32];
                 while (!token.IsCancellationRequested)
@@ -349,26 +351,26 @@ namespace SilksongCoop.Tests
                     Interlocked.Increment(ref sentPackets);
                     Thread.SpinWait(50);
                 }
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
             // Poller threads continuously draining events
-            var pollTask1 = Task.Run(() =>
+            var pollTask1 = Task.Factory.StartNew(() =>
             {
                 while (!token.IsCancellationRequested)
                 {
                     host.PollEvents();
                     Thread.SpinWait(100);
                 }
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
-            var pollTask2 = Task.Run(() =>
+            var pollTask2 = Task.Factory.StartNew(() =>
             {
                 while (!token.IsCancellationRequested)
                 {
                     client.PollEvents();
                     Thread.SpinWait(100);
                 }
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
             await Task.WhenAll(sendTask1, sendTask2, pollTask1, pollTask2);
 

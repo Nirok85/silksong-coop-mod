@@ -24,6 +24,8 @@ namespace SilksongCoop.Mod.Settings
         private static Type? _cachedKeyboardType;
         private static bool _keyboardTypeResolved;
         private static PropertyInfo? _cachedCurrentProp;
+        private static PropertyInfo? _cachedWasPressedProp;
+        private static readonly Dictionary<KeyCode, PropertyInfo?> _cachedKeyControlProps = new();
 
         // Log-once guards: Unity's input APIs can throw or be unavailable, and the
         // checks run every frame for every key — log the diagnostic only once.
@@ -257,14 +259,21 @@ namespace SilksongCoop.Mod.Settings
 
                 if (keyPropName != null)
                 {
-                    var keyControlProp = keyboardType.GetProperty(keyPropName, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    // Cache the reflected PropertyInfo per key: IsKeyDown runs for every
+                    // bound key on every frame, and GetProperty is not free on Mono.
+                    if (!_cachedKeyControlProps.TryGetValue(key, out var keyControlProp))
+                    {
+                        keyControlProp = keyboardType.GetProperty(keyPropName, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                        _cachedKeyControlProps[key] = keyControlProp;
+                    }
+
                     var keyControl = keyControlProp?.GetValue(keyboard);
                     if (keyControl != null)
                     {
-                        var wasPressedProp = keyControl.GetType().GetProperty("wasPressedThisFrame");
-                        if (wasPressedProp != null)
+                        _cachedWasPressedProp ??= keyControl.GetType().GetProperty("wasPressedThisFrame");
+                        if (_cachedWasPressedProp != null)
                         {
-                            return (bool)(wasPressedProp.GetValue(keyControl) ?? false);
+                            return (bool)(_cachedWasPressedProp.GetValue(keyControl) ?? false);
                         }
                     }
                 }

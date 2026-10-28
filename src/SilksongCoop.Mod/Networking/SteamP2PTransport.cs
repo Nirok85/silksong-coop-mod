@@ -33,9 +33,12 @@ namespace SilksongCoop.Mod.Networking
         // Fix: Reuse buffer to avoid allocation in hot path
         private byte[] _readBuffer = new byte[4096];
         
-        // Fix: Track channels actually used by the protocol (0=transform, 2=vitals, 3=currency/item, 4=death)
-        private const int MinChannel = 0;
-        private const int MaxChannel = 4;
+        // Channels actually used by the protocol. The RTT probes live on the dedicated
+        // control channel; channel 1 carries ActionTrigger/SceneTransition game data and
+        // must be dispatched, not swallowed as transport control.
+        private const int MinChannel = NetworkChannels.Min;
+        private const int MaxChannel = NetworkChannels.Max;
+        private const byte RttChannel = NetworkChannels.Control;
 
         // Guards against firing OnPeerConnected more than once when both the lobby
         // membership callback and the P2P session/packet paths observe the same peer.
@@ -74,6 +77,12 @@ namespace SilksongCoop.Mod.Networking
         public int RoundTripTimeMs => _rttMs;
         /// <inheritdoc />
         public int PacketLossPercent => _packetLossPercent;
+
+        /// <summary>
+        /// Steam's reliable send is handled by the Steam client; there is no local backlog
+        /// that the mod can inspect.
+        /// </summary>
+        public int ReliableBacklogCount => 0;
 
         public static BepInEx.Logging.ManualLogSource? Logger { get; set; }
 
@@ -476,8 +485,8 @@ namespace SilksongCoop.Mod.Networking
                     {
                         try
                         {
-                            // Channel 1 is reserved for transport control (RTT probes).
-                            if (channel == 1)
+                            // The dedicated control channel is reserved for RTT probes.
+                            if (channel == RttChannel)
                             {
                                 HandleRttControl(remoteId, bytesRead);
                                 continue;
@@ -541,7 +550,7 @@ namespace SilksongCoop.Mod.Networking
             {
                 if (SteamNetworking.SendP2PPacket(
                         _remoteSteamId, ping, (uint)ping.Length,
-                        EP2PSend.k_EP2PSendUnreliableNoDelay, 1))
+                        EP2PSend.k_EP2PSendUnreliableNoDelay, RttChannel))
                 {
                     _pingsSentInWindow++;
                 }
@@ -566,7 +575,7 @@ namespace SilksongCoop.Mod.Networking
                 {
                     SteamNetworking.SendP2PPacket(
                         remoteId, _readBuffer, 9,
-                        EP2PSend.k_EP2PSendUnreliableNoDelay, 1);
+                        EP2PSend.k_EP2PSendUnreliableNoDelay, RttChannel);
                 }
                 catch (Exception ex)
                 {
@@ -689,6 +698,10 @@ namespace SilksongCoop.Mod.Networking
         private void OnGameLobbyJoinRequested(GameLobbyJoinRequested_t callback)
         {
             Logger?.LogInfo($"[Steam] OnGameLobbyJoinRequested: lobby={callback.m_steamIDLobby.m_SteamID}");
+            // An invite to the lobby we are already in must not drop host state or re-join.
+            if (_lobbyId != CSteamID.Nil && _lobbyId == callback.m_steamIDLobby)
+                return;
+
             IsHost = false;
             SilksongCoopPlugin.Instance?.SetActiveTransport(this);
 

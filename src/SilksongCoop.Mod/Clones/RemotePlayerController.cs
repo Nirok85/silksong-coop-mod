@@ -45,6 +45,9 @@ namespace SilksongCoop.Mod.Clones
         private PaletteSwapController? _paletteSwap;
         private DashTrailController? _dashTrail;
         private tk2dSpriteAnimationClip? _fallbackClip;
+        private Renderer? _spriteRenderer;
+        private Renderer? _heroRenderer;
+        private GameObject? _heroRendererOwner;
 
         private float _currentVelX;
         private float _currentVelY;
@@ -241,6 +244,13 @@ namespace SilksongCoop.Mod.Clones
                     _hasClockOffset = true;
                     // Immediately snap position on first received packet to prevent staying at spawn/default coordinates
                     transform.position = new Vector3(posX, posY, transform.position.z);
+                }
+                else if (diff < -10000)
+                {
+                    // Timestamp wrap (uint) or a sender-side clock reset: the old offset
+                    // would map every new packet far into the past and freeze the clone.
+                    _clockOffsetMs = localNowMs - timestampMs;
+                    _buffer.Clear();
                 }
                 double mappedTimestampMs = timestampMs + _clockOffsetMs;
 
@@ -522,11 +532,19 @@ namespace SilksongCoop.Mod.Clones
                 }
             }
 
-            // Keep sorting layer synchronized with local hero (via tk2dSprite's renderer)
+            // Keep sorting layer synchronized with local hero (via tk2dSprite's renderer).
+            // Both renderers are cached: this used to run GetComponent every frame.
             if (_sprite != null)
             {
-                var spriteRenderer = _sprite.GetComponent<Renderer>();
-                var heroRenderer = hero.GetComponent<Renderer>() ?? hero.GetComponentInChildren<Renderer>();
+                if (_spriteRenderer == null) _spriteRenderer = _sprite.GetComponent<Renderer>();
+                if (_heroRenderer == null || _heroRendererOwner != hero.gameObject)
+                {
+                    _heroRenderer = hero.GetComponent<Renderer>() ?? hero.GetComponentInChildren<Renderer>();
+                    _heroRendererOwner = hero.gameObject;
+                }
+
+                var spriteRenderer = _spriteRenderer;
+                var heroRenderer = _heroRenderer;
                 if (spriteRenderer != null && heroRenderer != null && (spriteRenderer.sortingLayerID != heroRenderer.sortingLayerID || spriteRenderer.sortingOrder != heroRenderer.sortingOrder))
                 {
                     spriteRenderer.sortingLayerID = heroRenderer.sortingLayerID;

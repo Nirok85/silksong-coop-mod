@@ -56,9 +56,27 @@ namespace SilksongCoop.Core.Protocol
         public bool IsValidMagic => Magic == ExpectedMagic;
 
         /// <summary>
-        /// Checks whether the packet ID is a defined <see cref="PacketType"/> value.
+        /// Checks whether the packet ID is handled by this build. A switch avoids the
+        /// reflection/boxing cost of <see cref="Enum.IsDefined(Type, object)"/> on the
+        /// per-packet hot path.
         /// </summary>
-        public bool IsValidPacketType => Enum.IsDefined(typeof(PacketType), PacketId);
+        public bool IsValidPacketType => PacketId switch
+        {
+            PacketType.TransformSync => true,
+            PacketType.ActionTrigger => true,
+            PacketType.VitalsSync => true,
+            PacketType.CurrencySync => true,
+            PacketType.ItemUnlockSync => true,
+            PacketType.PlayerDeath => true,
+            PacketType.BenchCheckpointSync => true,
+            PacketType.SceneTransition => true,
+            PacketType.EnemySync => true,
+            PacketType.EnemySnapshot => true,
+            PacketType.WorldEvent => true,
+            PacketType.PersistentState => true,
+            _ => false
+        };
+
 
         /// <summary>
         /// Writes the header to the destination span in little-endian format.

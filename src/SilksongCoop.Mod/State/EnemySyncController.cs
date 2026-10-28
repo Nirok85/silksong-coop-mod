@@ -25,7 +25,7 @@ namespace SilksongCoop.Mod.State
             public ulong Key;
         }
 
-        private const byte WorldChannel = 4;
+        private const byte WorldChannel = NetworkChannels.World;
 
         private struct DeadEnemy
         {
@@ -33,7 +33,21 @@ namespace SilksongCoop.Mod.State
             public float Y;
         }
 
+        /// <summary>
+        /// A queued world-state packet for the catch-up replay. Replaying in one frame used
+        /// to overflow the transport's reliable backlog (512) and silently lose every later
+        /// packet; the queue is drained gradually instead.
+        /// </summary>
+        private struct ReplayItem
+        {
+            public bool IsPersistent;
+            public WorldEventPacket World;
+            public PersistentStatePacket Persistent;
+        }
+
         private const int MaxDeadRegistry = 256;
+        private const int ReplayBatchSize = 16;
+        private const int ReplayBacklogThreshold = 192;
 
         private SilksongCoopPlugin? _plugin;
         private readonly EnemySyncService _service = new EnemySyncService();
@@ -44,6 +58,27 @@ namespace SilksongCoop.Mod.State
         private readonly Dictionary<ulong, WorldEventPacket> _worldEvents = new Dictionary<ulong, WorldEventPacket>();
         private readonly Dictionary<ulong, PersistentStatePacket> _persistentStates = new Dictionary<ulong, PersistentStatePacket>();
         private readonly Dictionary<ulong, PersistentStatePacket> _persistentLastValue = new Dictionary<ulong, PersistentStatePacket>();
+        // States that arrived while their scene was not loaded. They are retried after a
+        // scene change instead of being dropped; a late joiner in another room otherwise
+        // never learns about doors/levers/chests the host already changed.
+        private readonly Dictionary<ulong, PersistentStatePacket> _pendingPersistentStates = new Dictionary<ulong, PersistentStatePacket>();
+        private readonly Queue<ulong> _pendingPersistentOrder = new Queue<ulong>();
+        private readonly Dictionary<ulong, WorldEventPacket> _pendingWorldEvents = new Dictionary<ulong, WorldEventPacket>();
+        private readonly Queue<ulong> _pendingWorldEventOrder = new Queue<ulong>();
+        private Dictionary<ulong, PersistentItem<bool>>? _boolItems;
+        private Dictionary<ulong, PersistentItem<int>>? _intItems;
+        private string _persistentIndexScene = string.Empty;
+        private float _pendingPersistentRetryAt;
+        private int _pendingPersistentRetryAttempts;
+        private float _pendingWorldRetryAt;
+        private int _pendingWorldRetryAttempts;
+
+        private const int MaxPendingPersistentStates = 4096;
+        private const int MaxPendingWorldEvents = 1024;
+        private const int MaxPendingRetryAttempts = 8;
+
+        private readonly Queue<ReplayItem> _replayQueue = new Queue<ReplayItem>();
+        private float _nextReplaySendTime;
         private bool _worldReplayPending;
 
         private string _sceneName = string.Empty;
@@ -76,7 +111,16 @@ namespace SilksongCoop.Mod.State
 
             // The dead/world registries deliberately survive a reconnect: the next host
             // snapshot/world replay catches a newly connected client up.
+            _replayQueue.Clear();
+            _nextReplaySendTime = 0f;
             _worldReplayPending = true;
+
+            _pendingPersistentStates.Clear();
+            _pendingPersistentOrder.Clear();
+            _pendingWorldEvents.Clear();
+            _pendingWorldEventOrder.Clear();
+            _pendingPersistentRetryAttempts = 0;
+            _pendingWorldRetryAttempts = 0;
         }
 
         private void Update()
@@ -84,6 +128,8 @@ namespace SilksongCoop.Mod.State
             if (_plugin?.SessionState?.IsConnected != true) return;
 
             DetectSceneChange();
+            PumpPendingPersistentStates();
+            PumpPendingWorldEvents();
 
             // Only the host is authoritative for periodic snapshots and world catch-up.
             if (_plugin.SessionState.IsHost != true) return;
@@ -91,8 +137,10 @@ namespace SilksongCoop.Mod.State
             if (_worldReplayPending)
             {
                 _worldReplayPending = false;
-                ReplayWorldEvents();
+                QueueWorldReplay();
             }
+
+            PumpWorldReplay();
 
             _snapshotTimer += Time.unscaledDeltaTime;
             if (_snapshotTimer < 1f) return;
@@ -403,32 +451,81 @@ namespace SilksongCoop.Mod.State
             SendWorldPacket(packet);
         }
 
-        private void ReplayWorldEvents()
+        /// <summary>
+        /// Snapshots the current world registries into the replay queue. The queue is sent
+        /// gradually by <see cref="PumpWorldReplay"/> so a late joiner can never overflow
+        /// the sender's reliable window.
+        /// </summary>
+        private void QueueWorldReplay()
         {
-            if (_plugin?.SessionState?.IsConnected != true) return;
+            _replayQueue.Clear();
 
             foreach (var stored in _worldEvents.Values)
             {
-                SendWorldPacket(new WorldEventPacket
-                {
-                    Header = new PacketHeader(PacketType.WorldEvent, WorldChannel, ++_packetSequence, (uint)Environment.TickCount),
-                    ObjectKey = stored.ObjectKey,
-                    EventType = stored.EventType,
-                    PositionX = stored.PositionX,
-                    PositionY = stored.PositionY
-                });
+                _replayQueue.Enqueue(new ReplayItem { IsPersistent = false, World = stored });
             }
 
             foreach (var stored in _persistentStates.Values)
             {
-                SendPersistentPacket(new PersistentStatePacket
-                {
-                    Header = new PacketHeader(PacketType.PersistentState, WorldChannel, ++_packetSequence, (uint)Environment.TickCount),
-                    ItemKey = stored.ItemKey,
-                    ValueType = stored.ValueType,
-                    Value = stored.Value
-                });
+                _replayQueue.Enqueue(new ReplayItem { IsPersistent = true, Persistent = stored });
             }
+
+            _nextReplaySendTime = 0f;
+        }
+
+        /// <summary>
+        /// Sends a bounded batch of queued world-state packets, pausing while the transport
+        /// still has many unacknowledged reliable packets. This keeps the stream contiguous
+        /// (the transport drops new reliable packets once its 512-packet window is full).
+        /// </summary>
+        private void PumpWorldReplay()
+        {
+            if (_replayQueue.Count == 0) return;
+            if (Time.unscaledTime < _nextReplaySendTime) return;
+
+            var transport = _plugin?.ActiveTransport;
+            if (transport == null) return;
+
+            if (transport.ReliableBacklogCount >= ReplayBacklogThreshold)
+            {
+                _nextReplaySendTime = Time.unscaledTime + 0.05f;
+                return;
+            }
+
+            for (int i = 0; i < ReplayBatchSize && _replayQueue.Count > 0; i++)
+            {
+                var item = _replayQueue.Dequeue();
+                if (item.IsPersistent)
+                {
+                    var stored = item.Persistent;
+                    SendPersistentPacket(new PersistentStatePacket
+                    {
+                        Header = new PacketHeader(PacketType.PersistentState, WorldChannel, ++_packetSequence, (uint)Environment.TickCount),
+                        ItemKey = stored.ItemKey,
+                        ValueType = stored.ValueType,
+                        Value = stored.Value
+                    });
+                }
+                else
+                {
+                    var stored = item.World;
+                    SendWorldPacket(new WorldEventPacket
+                    {
+                        Header = new PacketHeader(PacketType.WorldEvent, WorldChannel, ++_packetSequence, (uint)Environment.TickCount),
+                        ObjectKey = stored.ObjectKey,
+                        EventType = stored.EventType,
+                        PositionX = stored.PositionX,
+                        PositionY = stored.PositionY
+                    });
+                }
+
+                if (transport.ReliableBacklogCount >= ReplayBacklogThreshold)
+                    break;
+            }
+
+            // ~16 packets every 20 ms: fast enough for a late join, slow enough that the
+            // receiver's rate limiter and the sender's retransmit window are not flooded.
+            _nextReplaySendTime = Time.unscaledTime + 0.02f;
         }
 
         private void SendWorldPacket(WorldEventPacket packet)
@@ -451,33 +548,102 @@ namespace SilksongCoop.Mod.State
         }
 
         /// <summary>
-        /// Applies a permanent world change from the peer.
+        /// Applies a permanent world change from the peer. If the object lives in a scene that
+        /// is not loaded right now, the event is cached and retried after the next transition.
         /// </summary>
         public void ApplyRemoteWorldEvent(WorldEventPacket packet)
         {
             if (RemoteApplyScope.IsActive) return;
+            if (packet.ObjectKey == 0) return;
 
-            using (RemoteApplyScope.Begin())
+            if (!TryApplyWorldEvent(packet))
             {
-                try
+                CachePendingWorldEvent(packet);
+            }
+        }
+
+        private bool TryApplyWorldEvent(WorldEventPacket packet)
+        {
+            try
+            {
+                using (RemoteApplyScope.Begin())
                 {
                     switch (packet.EventType)
                     {
                         case WorldEventType.BreakableBroken:
                             var breakable = FindObjectByKey<Breakable>(packet.ObjectKey);
-                            breakable?.BreakSelf();
-                            break;
+                            if (breakable == null) return false;
+                            breakable.BreakSelf();
+                            return true;
 
                         case WorldEventType.GateOpened:
                             var gate = FindObjectByKey<Gate>(packet.ObjectKey);
-                            gate?.Open();
-                            break;
+                            if (gate == null) return false;
+                            gate.Open();
+                            return true;
                     }
                 }
-                catch (Exception ex)
+
+                // Unknown event types are validated away by PacketValidator; drop safely.
+                return true;
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[EnemySync] Failed applying world event: {ex.Message}");
+                return true;
+            }
+        }
+
+        private void CachePendingWorldEvent(WorldEventPacket packet)
+        {
+            if (!_pendingWorldEvents.ContainsKey(packet.ObjectKey))
+            {
+                while (_pendingWorldEvents.Count >= MaxPendingWorldEvents &&
+                       _pendingWorldEventOrder.Count > 0)
                 {
-                    SilksongCoopPlugin.LogWarn($"[EnemySync] Failed applying world event: {ex.Message}");
+                    ulong oldest = _pendingWorldEventOrder.Dequeue();
+                    if (_pendingWorldEvents.Remove(oldest)) break;
                 }
+
+                _pendingWorldEventOrder.Enqueue(packet.ObjectKey);
+            }
+
+            // Later events for the same object supersede earlier ones.
+            _pendingWorldEvents[packet.ObjectKey] = packet;
+            _pendingWorldRetryAttempts = MaxPendingRetryAttempts;
+            _pendingWorldRetryAt = Time.unscaledTime + 0.25f;
+        }
+
+        private void PumpPendingWorldEvents()
+        {
+            if (_pendingWorldEvents.Count == 0 || _pendingWorldRetryAttempts <= 0) return;
+            if (Time.unscaledTime < _pendingWorldRetryAt) return;
+
+            List<ulong>? applied = null;
+            foreach (var pair in _pendingWorldEvents)
+            {
+                if (!TryApplyWorldEvent(pair.Value)) continue;
+                (applied ??= new List<ulong>()).Add(pair.Key);
+            }
+
+            if (applied != null)
+            {
+                for (int i = 0; i < applied.Count; i++)
+                    _pendingWorldEvents.Remove(applied[i]);
+
+                _pendingWorldRetryAttempts = MaxPendingRetryAttempts;
+                _pendingWorldRetryAt = Time.unscaledTime + 0.5f;
+            }
+            else
+            {
+                _pendingWorldRetryAttempts--;
+                _pendingWorldRetryAt = Time.unscaledTime + 0.75f;
+            }
+
+            while (_pendingWorldEventOrder.Count > 0 &&
+                   !_pendingWorldEvents.ContainsKey(_pendingWorldEventOrder.Peek()))
+            {
+                _pendingWorldEventOrder.Dequeue();
             }
         }
 
@@ -524,68 +690,166 @@ namespace SilksongCoop.Mod.State
         public void ApplyRemotePersistentState(PersistentStatePacket packet)
         {
             if (RemoteApplyScope.IsActive) return;
+            if (packet.ItemKey == 0) return;
 
-            using (RemoteApplyScope.Begin())
+            EnsurePersistentIndex();
+
+            bool applied;
+            try
             {
-                try
-                {
-                    if (packet.ValueType == PersistentValueType.Bool)
-                    {
-                        var item = FindPersistentBool(packet.ItemKey);
-                        if (item == null) return;
+                applied = TryApplyPersistentState(packet);
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[EnemySync] Failed applying persistent state: {ex.Message}");
+                return;
+            }
 
-                        bool value = packet.Value != 0;
-                        if (item.GetCurrentValue() == value) return;
-
-                        item.SetValueOverride(value);
-                        item.SaveState();
-                    }
-                    else if (packet.ValueType == PersistentValueType.Int)
-                    {
-                        var item = FindPersistentInt(packet.ItemKey);
-                        if (item == null) return;
-
-                        if (item.GetCurrentValue() == packet.Value) return;
-
-                        item.SetValueOverride(packet.Value);
-                        item.SaveState();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    SilksongCoopPlugin.LogWarn($"[EnemySync] Failed applying persistent state: {ex.Message}");
-                }
+            if (!applied)
+            {
+                // The object lives in a scene that is not loaded right now. Keep the packet
+                // and retry after the next scene change instead of silently dropping it.
+                CachePendingPersistentState(packet);
             }
         }
 
-        private static PersistentItem<bool>? FindPersistentBool(ulong key)
+        /// <summary>
+        /// Applies one persistent value using the current scene's lookup index.
+        /// Returns false when the object is not present in the loaded scene.
+        /// </summary>
+        private bool TryApplyPersistentState(PersistentStatePacket packet)
         {
-            var items = UnityEngine.Object.FindObjectsByType<PersistentBoolItem>(FindObjectsSortMode.None);
-            for (int i = 0; i < items.Length; i++)
+            if (packet.ValueType == PersistentValueType.Bool)
             {
-                var item = items[i];
-                if (item == null) continue;
+                if (_boolItems == null || !_boolItems.TryGetValue(packet.ItemKey, out var item) || item == null)
+                    return false;
 
-                if (WorldObjectKey.ComputePersistent(item.GetSceneName(), item.GetId(), (int)PersistentValueType.Bool) == key)
-                    return item;
+                bool value = packet.Value != 0;
+                if (item.GetCurrentValue() == value) return true;
+
+                using (RemoteApplyScope.Begin())
+                {
+                    item.SetValueOverride(value);
+                    item.SaveState();
+                }
+                return true;
             }
 
-            return null;
+            if (packet.ValueType == PersistentValueType.Int)
+            {
+                if (_intItems == null || !_intItems.TryGetValue(packet.ItemKey, out var item) || item == null)
+                    return false;
+
+                if (item.GetCurrentValue() == packet.Value) return true;
+
+                using (RemoteApplyScope.Begin())
+                {
+                    item.SetValueOverride(packet.Value);
+                    item.SaveState();
+                }
+                return true;
+            }
+
+            // Unknown value type: acknowledged and discarded (the validator rejects new ones).
+            return true;
         }
 
-        private static PersistentItem<int>? FindPersistentInt(ulong key)
+        private void CachePendingPersistentState(PersistentStatePacket packet)
         {
-            var items = UnityEngine.Object.FindObjectsByType<PersistentIntItem>(FindObjectsSortMode.None);
-            for (int i = 0; i < items.Length; i++)
+            if (!_pendingPersistentStates.ContainsKey(packet.ItemKey))
             {
-                var item = items[i];
-                if (item == null) continue;
+                while (_pendingPersistentStates.Count >= MaxPendingPersistentStates &&
+                       _pendingPersistentOrder.Count > 0)
+                {
+                    ulong oldest = _pendingPersistentOrder.Dequeue();
+                    if (_pendingPersistentStates.Remove(oldest)) break;
+                }
 
-                if (WorldObjectKey.ComputePersistent(item.GetSceneName(), item.GetId(), (int)PersistentValueType.Int) == key)
-                    return item;
+                _pendingPersistentOrder.Enqueue(packet.ItemKey);
             }
 
-            return null;
+            _pendingPersistentStates[packet.ItemKey] = packet;
+            _pendingPersistentRetryAttempts = MaxPendingRetryAttempts;
+            _pendingPersistentRetryAt = Time.unscaledTime + 0.25f;
+        }
+
+        /// <summary>
+        /// Rebuilds the key → object indexes for the active scene once. Replaces the
+        /// per-packet <c>FindObjectsByType</c> scan (which was O(objects) for every packet,
+        /// and made a large catch-up replay extremely expensive).
+        /// </summary>
+        private void RebuildPersistentIndex()
+        {
+            var bools = new Dictionary<ulong, PersistentItem<bool>>();
+            var ints = new Dictionary<ulong, PersistentItem<int>>();
+
+            var boolItems = UnityEngine.Object.FindObjectsByType<PersistentBoolItem>(FindObjectsSortMode.None);
+            for (int i = 0; i < boolItems.Length; i++)
+            {
+                var item = boolItems[i];
+                if (item == null) continue;
+                ulong key = WorldObjectKey.ComputePersistent(item.GetSceneName(), item.GetId(), (int)PersistentValueType.Bool);
+                if (key != 0) bools[key] = item;
+            }
+
+            var intItems = UnityEngine.Object.FindObjectsByType<PersistentIntItem>(FindObjectsSortMode.None);
+            for (int i = 0; i < intItems.Length; i++)
+            {
+                var item = intItems[i];
+                if (item == null) continue;
+                ulong key = WorldObjectKey.ComputePersistent(item.GetSceneName(), item.GetId(), (int)PersistentValueType.Int);
+                if (key != 0) ints[key] = item;
+            }
+
+            _boolItems = bools;
+            _intItems = ints;
+            _persistentIndexScene = SceneManager.GetActiveScene().name;
+        }
+
+        private void EnsurePersistentIndex()
+        {
+            if (_boolItems == null || _intItems == null ||
+                !string.Equals(_persistentIndexScene, SceneManager.GetActiveScene().name, StringComparison.Ordinal))
+            {
+                RebuildPersistentIndex();
+            }
+        }
+
+        private void PumpPendingPersistentStates()
+        {
+            if (_pendingPersistentStates.Count == 0 || _pendingPersistentRetryAttempts <= 0) return;
+            if (Time.unscaledTime < _pendingPersistentRetryAt) return;
+
+            EnsurePersistentIndex();
+
+            List<ulong>? applied = null;
+            foreach (var pair in _pendingPersistentStates)
+            {
+                if (!TryApplyPersistentState(pair.Value)) continue;
+                (applied ??= new List<ulong>()).Add(pair.Key);
+            }
+
+            if (applied != null)
+            {
+                for (int i = 0; i < applied.Count; i++)
+                    _pendingPersistentStates.Remove(applied[i]);
+
+                _pendingPersistentRetryAttempts = MaxPendingRetryAttempts;
+                _pendingPersistentRetryAt = Time.unscaledTime + 0.5f;
+            }
+            else
+            {
+                // Give the scene a few more frames to finish loading, then wait for the
+                // next scene change instead of scanning the same scene forever.
+                _pendingPersistentRetryAttempts--;
+                _pendingPersistentRetryAt = Time.unscaledTime + 0.75f;
+            }
+
+            while (_pendingPersistentOrder.Count > 0 &&
+                   !_pendingPersistentStates.ContainsKey(_pendingPersistentOrder.Peek()))
+            {
+                _pendingPersistentOrder.Dequeue();
+            }
         }
 
         private void SendPersistentPacket(PersistentStatePacket packet)
@@ -695,8 +959,23 @@ namespace SilksongCoop.Mod.State
             _lastSnapshotDead.Clear();
             _deadEnemies.Clear();
             _worldEvents.Clear();
-            _worldReplayPending = false;
             _service.Reset();
+
+            // The scene lookup indexes are stale; the pending persistent-state cache is
+            // retried once the new scene has finished loading.
+            _boolItems = null;
+            _intItems = null;
+            _persistentIndexScene = string.Empty;
+            if (_pendingPersistentStates.Count > 0)
+            {
+                _pendingPersistentRetryAttempts = MaxPendingRetryAttempts;
+                _pendingPersistentRetryAt = Time.unscaledTime + 0.25f;
+            }
+            if (_pendingWorldEvents.Count > 0)
+            {
+                _pendingWorldRetryAttempts = MaxPendingRetryAttempts;
+                _pendingWorldRetryAt = Time.unscaledTime + 0.25f;
+            }
         }
 
         private ulong GetKey(HealthManager healthManager)
