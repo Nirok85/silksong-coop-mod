@@ -1,4 +1,4 @@
-# Hollow Knight: Silksong — Co-op Multiplayer Mod
+﻿# Hollow Knight: Silksong — Co-op Multiplayer Mod
 
 ![Platform](https://img.shields.io/badge/Platform-PC%20%7C%20Steam-blue)
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
@@ -34,9 +34,9 @@ A fully-featured cooperative mod for **Hollow Knight: Silksong**, allowing two p
 
 ### 1. Serverless Networking
 * **Steam P2P Matchmaking**: the host opens the world for network play and sends a direct invitation via the Steam overlay. Uses the game's built-in `com.rlabrecque.steamworks.net.dll`.
-* **Fallback (custom UDP transport)**: if the Steam overlay is unavailable, the host generates a short room code (e.g. `SK-A8B3-K9Q2`) or connects directly by IP:Port. The class is named `LiteNetLibTransport` for historical reasons, but this is a purpose-built UDP socket implementation — the LiteNetLib package is not used or bundled.
+* **Fallback (custom UDP transport)**: if the Steam overlay is unavailable, the host generates a short room code (e.g. `SK-A8B3-K9Q2-W1Z4-M4T7`) or connects directly by IP:Port. The class is named `LiteNetLibTransport` for historical reasons, but this is a purpose-built UDP socket implementation — the LiteNetLib package is not used or bundled.
 * **Movement Smoothing (Hermite Spline)**: position is replicated at 30 Hz with cubic Hermite spline interpolation (C¹ continuity) and a 64-frame snapshot buffer. No teleporting or jitter at latencies up to 150 ms.
-* **Secure sessions**: challenge-response authentication, packet validation, rate limiting and room-code codec protection against unauthorized joins. A host started from the menu requires the room code; a direct IP:Port join that does not present it is rejected.
+* **Secure sessions**: challenge-response authentication, packet validation, rate limiting and room-code codec protection against unauthorized joins. The menu-generated code carries 40 random bits that cannot be derived from the address; a host started from the menu requires that code and rejects a bare IP:Port join.
 
 ### 2. Visual Differentiation (Blue Hornet Cloak)
 * **Player 1**: original crimson Hornet cloak (`_HueShift = 0.0`).
@@ -129,7 +129,7 @@ In the main menu or in game, press **F10** to open the co-op interface.
 If the Steam overlay is disabled or unavailable:
 1. **Player 1 (Host)**:
    * Press **F10** → **"Host Session (Direct UDP)"**.
-   * A room code (e.g. `SK-A8B3-K9Q2`) and the local port (`7777`) are shown; the code is auto-copied to the clipboard. Share it with the partner.
+   * A room code (e.g. `SK-A8B3-K9Q2-W1Z4-M4T7`) and the local port (`7777`) are shown; the code is auto-copied to the clipboard. Share it with the partner.
 2. **Player 2 (Client)**:
    * Press **F10**, switch to the **"Join"** tab.
    * Paste the room code and press **"Connect"**. A bare `IP:Port` only works for hosts that do not require a code (the menu always creates one, so prefer the code).

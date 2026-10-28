@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol;
 using SilksongCoop.Core.Protocol.Packets;
@@ -122,6 +123,44 @@ namespace SilksongCoop.Tests
             Assert.False(clientWiped);
             Assert.Equal(DeathState.Alive, harness.ClientDeath.CurrentState);
             Assert.True(harness.ClientDeath.IsPartnerAlive);
+        }
+
+        // Issue #1.1 — the legacy code is a deterministic encoding of IP:port, so it is not
+        // a shared secret. The menu appends 40 random bits and the HMAC is keyed on the full
+        // canonical string: knowing the address alone must not satisfy the challenge.
+        [Fact]
+        public void RoomCode_WithSecret_IsNotDerivableFromAddress()
+        {
+            var ip = IPAddress.Parse("192.168.1.42");
+            string legacy = RoomCodeCodec.Encode(ip, 7777);
+            string withSecret = RoomCodeCodec.EncodeWithSecret(ip, 7777);
+
+            Assert.NotEqual(legacy, withSecret);
+            Assert.True(withSecret.Length > legacy.Length);
+            Assert.False(RoomCodeCodec.IsDeprecatedCode(withSecret));
+
+            Assert.True(RoomCodeCodec.TryDecode(withSecret, out IPAddress decodedIp, out int decodedPort));
+            Assert.Equal(ip, decodedIp);
+            Assert.Equal(7777, decodedPort);
+
+            // Fresh randomness on every host start.
+            Assert.NotEqual(withSecret, RoomCodeCodec.EncodeWithSecret(ip, 7777));
+
+            // Both peers must key the HMAC on the same canonical string.
+            Assert.True(RoomCodeCodec.TryCanonicalize(withSecret.ToLowerInvariant(), out string canonical));
+            Assert.Equal(withSecret, canonical);
+
+            // A client that only knows IP:port can rebuild the legacy code, but that
+            // signature is rejected by the host that uses the secret-bearing code.
+            var hostAuth = new ConnectionAuthenticator();
+            byte[] nonce = hostAuth.GenerateNonce();
+            byte[] attackerSignature = new ConnectionAuthenticator().ComputeSignature(nonce, legacy);
+            Assert.False(hostAuth.ValidateSignature(attackerSignature, withSecret));
+
+            var hostAuth2 = new ConnectionAuthenticator();
+            byte[] nonce2 = hostAuth2.GenerateNonce();
+            byte[] clientSignature = new ConnectionAuthenticator().ComputeSignature(nonce2, canonical);
+            Assert.True(hostAuth2.ValidateSignature(clientSignature, withSecret));
         }
 
         // Issue #1.5 — spawn type is independent from the facing flag. A checkpoint with

@@ -299,14 +299,17 @@ namespace SilksongCoop.Core.Networking
                     nameof(addressOrCode));
             }
 
-            if (RoomCodeCodec.TryDecode(addressOrCode, out IPAddress decodedIp, out int decodedPort))
+            if (RoomCodeCodec.TryCanonicalize(addressOrCode, out string canonicalCode))
             {
+                RoomCodeCodec.TryDecode(canonicalCode, out IPAddress decodedIp, out int decodedPort);
                 targetIp = decodedIp;
                 targetPort = decodedPort;
                 // BUG-B2: store the CANONICAL code form — the host HMACs against its own
                 // Encode() output, so both sides must key the challenge-response on the
                 // exact same string (the raw input may differ in case/hyphenation).
-                _roomCode = RoomCodeCodec.Encode(decodedIp, decodedPort);
+                // TryCanonicalize preserves the random secret suffix (issue #1.1): the
+                // legacy 12-character code is derivable from IP:port and is not a secret.
+                _roomCode = canonicalCode;
             }
             else
             {

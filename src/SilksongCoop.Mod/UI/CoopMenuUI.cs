@@ -1073,7 +1073,10 @@ namespace SilksongCoop.Mod.UI
                 }
 
                 int udpPort = plugin.DefaultUdpPortConfig?.Value ?? 7777;
-                string code = RoomCodeCodec.Encode(GetLocalIpAddress(), udpPort);
+                // Issue #1.1: the 12-character code is a deterministic encoding of IP:port,
+                // so it cannot serve as a shared secret. Append 40 random bits; the host
+                // HMACs the challenge against the full string and direct IP joins fail.
+                string code = RoomCodeCodec.EncodeWithSecret(GetLocalIpAddress(), udpPort);
 
                 // BUG-B2: arm the HMAC challenge-response — without SetRoomCode the host
                 // silently ran in unauthenticated mode and the room code was never verified.

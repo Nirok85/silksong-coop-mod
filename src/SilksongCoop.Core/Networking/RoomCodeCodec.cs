@@ -1,20 +1,35 @@
 using System;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace SilksongCoop.Core.Networking
 {
     /// <summary>
     /// Crockford Base32 room code encoder and decoder for peer-to-peer connection strings.
-    /// Packs IPv4 (4 bytes), Port (2 bytes), and CRC checksum (1 byte) into an easily shareable code.
-    /// Tolerates case insensitivity, hyphens, spaces, and ambiguous characters (I, L -> 1; O -> 0).
+    /// Packs IPv4 (4 bytes), Port (2 bytes), and CRC checksum (1 byte) into an easily shareable code,
+    /// optionally followed by a random 40-bit shared secret. Tolerates case insensitivity, hyphens,
+    /// spaces, and ambiguous characters (I, L -> 1; O -> 0).
     /// </summary>
+    /// <remarks>
+    /// The legacy 12-character code is a deterministic encoding of IP:port, so it is not a
+    /// secret: anyone who knows the address can rebuild it. <see cref="EncodeWithSecret"/> appends
+    /// 8 random Crockford characters (40 bits) that act as the actual pre-shared key for the
+    /// challenge-response handshake, while the first 12 characters still carry the address.
+    /// </remarks>
     public static class RoomCodeCodec
     {
         #region Constants
 
         private const string CrockfordAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
         private const string Prefix = "SK-";
+
+        /// <summary>Number of random bytes appended by <see cref="EncodeWithSecret"/>.</summary>
+        public const int SecretBytes = 5;
+
+        private const int AddressCodeChars = 12;
+        private const int SecretCodeChars = 8;
+        private const int SecretCodeBodyLength = AddressCodeChars + SecretCodeChars;
 
         #endregion
 
@@ -69,6 +84,98 @@ namespace SilksongCoop.Core.Networking
         }
 
         /// <summary>
+        /// Encodes an IP address and port with a fresh cryptographically random 40-bit secret.
+        /// The result is <c>SK-XXXX-XXXX-XXXX-YYYY-YYYY</c>: the first part addresses the host,
+        /// the second is the pre-shared key for the HMAC handshake. Because the secret is not
+        /// derivable from the address, knowing IP:port is no longer enough to join.
+        /// </summary>
+        /// <param name="ip">The IPv4 address to encode.</param>
+        /// <param name="port">The port number (0-65535).</param>
+        /// <returns>A room code with a random secret component.</returns>
+        public static string EncodeWithSecret(IPAddress ip, int port)
+        {
+            var secret = new byte[SecretBytes];
+            using var rng = RandomNumberGenerator.Create();
+            rng.GetBytes(secret);
+            return Encode(ip, port, secret);
+        }
+
+        /// <summary>
+        /// Encodes an IP address and port with an explicit secret.
+        /// </summary>
+        /// <param name="ip">The IPv4 address to encode.</param>
+        /// <param name="port">The port number (0-65535).</param>
+        /// <param name="secret">Exactly <see cref="SecretBytes"/> random bytes.</param>
+        /// <returns>A room code with a secret component.</returns>
+        public static string Encode(IPAddress ip, int port, ReadOnlySpan<byte> secret)
+        {
+            if (secret.Length == 0)
+                return Encode(ip, port);
+            if (secret.Length != SecretBytes)
+                throw new ArgumentException($"Secret must be {SecretBytes} bytes", nameof(secret));
+
+            return AppendSecret(Encode(ip, port), secret);
+        }
+
+        /// <summary>
+        /// Encodes an IP address and port with a fresh cryptographically random secret.
+        /// </summary>
+        /// <param name="ipAddress">The IPv4 address as a string.</param>
+        /// <param name="port">The port number (0-65535).</param>
+        /// <returns>A room code with a random secret component.</returns>
+        public static string EncodeWithSecret(string ipAddress, int port)
+        {
+            if (!IPAddress.TryParse(ipAddress, out var ip))
+                throw new ArgumentException($"Invalid IP address: {ipAddress}", nameof(ipAddress));
+            return EncodeWithSecret(ip, port);
+        }
+
+        private static string AppendSecret(string addressCode, ReadOnlySpan<byte> secret)
+        {
+            ulong value = 0;
+            for (int i = 0; i < SecretBytes; i++)
+                value = (value << 8) | secret[i];
+
+            var chars = new char[SecretCodeChars];
+            for (int i = SecretCodeChars - 1; i >= 0; i--)
+            {
+                chars[i] = CrockfordAlphabet[(int)(value & 0x1F)];
+                value >>= 5;
+            }
+
+            return addressCode + "-" + new string(chars, 0, 4) + "-" + new string(chars, 4, 4);
+        }
+
+        /// <summary>
+        /// Converts a room code into its canonical uppercase, hyphenated form without changing
+        /// which address/secret it carries. Both peers must key the HMAC handshake on the exact
+        /// same string, so a pasted code must be normalized before use.
+        /// </summary>
+        /// <param name="code">The room code to normalize.</param>
+        /// <param name="canonical">The canonical room code when successful.</param>
+        /// <returns>True when the input is a valid 12- or 20-character code.</returns>
+        public static bool TryCanonicalize(string? code, out string canonical)
+        {
+            canonical = string.Empty;
+            if (!TryDecode(code, out IPAddress ip, out int port))
+                return false;
+
+            string clean = NormalizeCode(code!);
+            string addressPart = Encode(ip, port);
+            if (clean.Length == SecretCodeBodyLength)
+            {
+                canonical = addressPart + "-" +
+                            clean.Substring(AddressCodeChars, 4) + "-" +
+                            clean.Substring(AddressCodeChars + 4, 4);
+            }
+            else
+            {
+                canonical = addressPart;
+            }
+            return true;
+        }
+
+        /// <summary>
         /// Attempts to decode a room code string into an IP address and port.
         /// </summary>
         /// <param name="code">The room code to decode.</param>
@@ -85,21 +192,22 @@ namespace SilksongCoop.Core.Networking
 
             // Normalize input: strip prefix, hyphens, spaces, and apply Crockford mapping
             string clean = NormalizeCode(code);
-            if (clean.Length == 12)
+            if (clean.Length == AddressCodeChars)
             {
-                // 56-bit payload (7 bytes)
-                if (!Base32Decode56(clean, out byte[] raw))
-                    return false;
+                return TryDecodeAddressPayload(clean, out ip, out port);
+            }
+            else if (clean.Length == SecretCodeBodyLength)
+            {
+                // New format: 12 address characters followed by an 8-character random secret.
+                // The secret is validated as Crockford Base32 but its value is irrelevant here;
+                // it only matters as the HMAC key of the full canonical string.
+                for (int i = AddressCodeChars; i < clean.Length; i++)
+                {
+                    if (CrockfordAlphabet.IndexOf(clean[i]) < 0)
+                        return false;
+                }
 
-                byte expectedCrc = ComputeCrc8(raw.AsSpan(0, 6));
-                if (raw[6] != expectedCrc)
-                    return false; // CRC mismatch
-
-                byte[] ipBytes = new byte[4];
-                Array.Copy(raw, 0, ipBytes, 0, 4);
-                ip = new IPAddress(ipBytes);
-                port = (raw[4] << 8) | raw[5];
-                return true;
+                return TryDecodeAddressPayload(clean.Substring(0, AddressCodeChars), out ip, out port);
             }
             else if (clean.Length == 8)
             {
@@ -120,6 +228,26 @@ namespace SilksongCoop.Core.Networking
             }
 
             return false;
+        }
+
+        private static bool TryDecodeAddressPayload(string payload, out IPAddress ip, out int port)
+        {
+            ip = IPAddress.None;
+            port = 0;
+
+            // 56-bit payload (7 bytes)
+            if (!Base32Decode56(payload, out byte[] raw))
+                return false;
+
+            byte expectedCrc = ComputeCrc8(raw.AsSpan(0, 6));
+            if (raw[6] != expectedCrc)
+                return false; // CRC mismatch
+
+            byte[] ipBytes = new byte[4];
+            Array.Copy(raw, 0, ipBytes, 0, 4);
+            ip = new IPAddress(ipBytes);
+            port = (raw[4] << 8) | raw[5];
+            return true;
         }
 
         /// <summary>
@@ -237,7 +365,7 @@ namespace SilksongCoop.Core.Networking
                     bodyLength++;
                 }
 
-                if (bodyLength == 12)
+                if (bodyLength == AddressCodeChars || bodyLength == SecretCodeBodyLength)
                     start = 2;
             }
 
