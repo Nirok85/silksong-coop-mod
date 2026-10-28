@@ -234,7 +234,7 @@ silksong_coop_mod/
 ├── SilksongCoop.sln
 ├── src/
 │   ├── SilksongCoop.Core/            # Платформонезависимое ядро (netstandard2.1)
-│   │   ├── Networking/               # Абстракция INetworkTransport, LiteNetLib UDP, RoomCodeCodec
+│   │   ├── Networking/               # Абстракция INetworkTransport, собственный UDP-транспорт, RoomCodeCodec
 │   │   │   ├── ConnectionAuthenticator.cs   # Challenge-response аутентификация
 │   │   │   └── RateLimiter.cs               # Ограничение скорости (token bucket)
 │   │   ├── Protocol/                 # 12-байтный бинарный протокол, PacketReader/Writer
@@ -318,7 +318,7 @@ dotnet test SilksongCoop.sln -c Release
 <details>
 <summary><b>Нужен ли проброс портов для прямого подключения по коду?</b></summary>
 
-Обычно нет — LiteNetLib пробивает NAT автоматически (UDP Hole Punching). Если соединение не устанавливается, хост может пробросить UDP-порт `7777` на роутере, либо оба игрока используют виртуальную LAN (Radmin VPN / Hamachi).
+Автоматического NAT traversal нет: собственный UDP-транспорт не делает UDP hole punching. Нужно пробросить UDP-порт `7777` на роутере хоста либо использовать виртуальную LAN (Radmin VPN / Hamachi). Путь через Steam P2P не требует проброса портов — трафик идёт через сеть Steam.
 </details>
 
 <details>

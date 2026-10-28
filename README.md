@@ -235,7 +235,7 @@ silksong_coop_mod/
 ├── SilksongCoop.sln
 ├── src/
 │   ├── SilksongCoop.Core/            # Platform-independent core (netstandard2.1)
-│   │   ├── Networking/               # INetworkTransport abstraction, LiteNetLib UDP, RoomCodeCodec
+│   │   ├── Networking/               # INetworkTransport abstraction, built-in UDP transport, RoomCodeCodec
 │   │   │   ├── ConnectionAuthenticator.cs   # Challenge-response authentication
 │   │   │   └── RateLimiter.cs               # Token-bucket rate limiting
 │   │   ├── Protocol/                 # 12-byte binary protocol, PacketReader/Writer
@@ -319,7 +319,7 @@ Enable the overlay in Steam settings (Game Properties → General → "Enable th
 <details>
 <summary><b>Is port forwarding required for direct room-code connection?</b></summary>
 
-Usually not — LiteNetLib punches through NAT automatically (UDP hole punching). If the connection fails, the host can forward UDP port `7777` on their router, or both players can use a virtual LAN (Radmin VPN / Hamachi).
+No automatic NAT traversal: the built-in UDP transport does not perform UDP hole punching. Forward UDP port `7777` on the host's router, or use a virtual LAN (Radmin VPN / Hamachi). The Steam P2P path does not need port forwarding because it goes through Steam's networking.
 </details>
 
 <details>
