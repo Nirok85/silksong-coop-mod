@@ -137,7 +137,14 @@
   кадр); привязки продолжают работать через New Input System.
 - История подключений выключается через `[Network] SaveConnectionHistory = false`.
 - CI workflow перенесён в `.github/workflows/ci.yml`; тестовый проект собирается перед
-  `dotnet test`.
+  `dotnet test`. Добавлена отдельная job сборки Mod на self-hosted runner (включается
+  переменными `ENABLE_MOD_CI=true` и `SILKSONG_MANAGED_DIR`).
+
+### Дистрибуция и лицензии
+- Добавлен `LICENSE` (MIT) для кода мода и `THIRD-PARTY-NOTICES.md` с полными текстами
+  лицензий BepInEx / UnityDoorstop (LGPL-2.1) и HarmonyX / MonoMod / Mono.Cecil (MIT).
+- Оба релизных архива теперь содержат `LICENSE`, `THIRD-PARTY-NOTICES.md` и `LICENSES/`.
+- `scripts/package-release.sh` кладёт лицензии в оба пакета автоматически.
 
 ### Тесты
 - Добавлены `IssueFixesVerificationTests` (15): сверка кошелька, отсутствие воскрешения

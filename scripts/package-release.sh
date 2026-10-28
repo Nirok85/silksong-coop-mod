@@ -56,6 +56,8 @@ cp "$MOD_BIN/SilksongCoop.Mod.dll" "$CORE_BIN/SilksongCoop.Core.dll" "$PLUGIN/Si
 cp "$ROOT/assets/com.silksong.coop.cfg" "$PLUGIN/"
 cp "$ROOT/README.md" "$PLUGIN/"
 cp "$ROOT/assets/INSTALL.txt" "$PLUGIN/"
+cp "$ROOT/LICENSE" "$ROOT/THIRD-PARTY-NOTICES.md" "$PLUGIN/"
+cp -r "$ROOT/LICENSES" "$PLUGIN/"
 sed -i "s/__VERSION__/$VERSION/g" "$PLUGIN/INSTALL.txt"
 (cd "$PLUGIN" && zip -qr "$OUT_DIR/SilksongCoop_v${VERSION}_plugin-only.zip" .)
 echo "  -> $OUT_DIR/SilksongCoop_v${VERSION}_plugin-only.zip"
@@ -79,6 +81,8 @@ mkdir -p "$WIN/BepInEx/plugins/SilksongCoop" "$WIN/BepInEx/config"
 cp "$MOD_BIN/SilksongCoop.Mod.dll" "$CORE_BIN/SilksongCoop.Core.dll" "$WIN/BepInEx/plugins/SilksongCoop/"
 cp "$ROOT/assets/com.silksong.coop.cfg" "$WIN/BepInEx/config/"
 cp "$ROOT/README.md" "$WIN/"
+cp "$ROOT/LICENSE" "$ROOT/THIRD-PARTY-NOTICES.md" "$WIN/"
+cp -r "$ROOT/LICENSES" "$WIN/"
 (cd "$WIN" && zip -qr "$OUT_DIR/SilksongCoop_v${VERSION}.zip" .)
 echo "  -> $OUT_DIR/SilksongCoop_v${VERSION}.zip"
 

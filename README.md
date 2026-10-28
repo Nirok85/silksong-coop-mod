@@ -386,6 +386,13 @@ See [CHANGELOG.md](CHANGELOG.md) for version history and [ROADMAP.md](ROADMAP.md
 
 ## License
 
+The mod's source code is released under the [MIT License](LICENSE).
+
+Bundled third-party components keep their own licenses: BepInEx 5.4.21 and
+UnityDoorstop are LGPL-2.1, HarmonyX / MonoMod / Mono.Cecil are MIT. Full texts
+and copyright notices are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
+and the [`LICENSES/`](LICENSES) directory.
+
 Developed for the Hollow Knight: Silksong community. Unofficial fan mod — contains no original game files or closed Team Cherry assets.
 
 Hollow Knight: Silksong © Team Cherry.

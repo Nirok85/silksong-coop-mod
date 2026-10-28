@@ -385,6 +385,13 @@ ManagedDir="/path/to/Hollow Knight Silksong_Data/Managed" bash scripts/package-r
 
 ## 📜 Лицензия
 
+Исходный код мода распространяется по лицензии [MIT](LICENSE).
+
+Встроенные сторонние компоненты сохраняют свои лицензии: BepInEx 5.4.21 и
+UnityDoorstop — LGPL-2.1, HarmonyX / MonoMod / Mono.Cecil — MIT. Полные тексты и
+уведомления об авторских правах — в [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
+и каталоге [`LICENSES/`](LICENSES).
+
 Разработано для сообщества Hollow Knight: Silksong. Неофициальный фанатский мод — не содержит оригинальных файлов игры или закрытых ассетов Team Cherry.
 
 Hollow Knight: Silksong © Team Cherry.
