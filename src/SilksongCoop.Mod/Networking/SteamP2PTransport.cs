@@ -19,6 +19,12 @@ namespace SilksongCoop.Mod.Networking
         private CSteamID _remoteSteamId = CSteamID.Nil;
         private long _connectionAttemptStartMs;
 
+        // Async CreateLobby/JoinLobby callbacks may arrive after the user has switched
+        // transports. Only the callback belonging to the latest operation may mutate state.
+        private int _sessionGeneration;
+        private int _lobbyRequestGeneration = -1;
+        private ulong _requestedLobbyId;
+
         // Monotonic clock: system-clock adjustments must not stretch or collapse the
         // Steam connection timeout.
         private static readonly Stopwatch Clock = Stopwatch.StartNew();
@@ -51,9 +57,12 @@ namespace SilksongCoop.Mod.Networking
         private const byte RttPong = 0x51;
         private const int RttPingIntervalMs = 1000;
         private const int RttLossWindowMs = 5000;
+        private const int SteamHeartbeatTimeoutMs = 15000;
+        private const int MaxSteamDatagramsPerPoll = 256;
         private int _rttMs;
         private int _packetLossPercent;
         private long _lastPingSentMs;
+        private long _lastPongReceivedMs;
         private long _lossWindowStartMs;
         private int _pingsSentInWindow;
         private int _pongsReceivedInWindow;
@@ -176,6 +185,8 @@ namespace SilksongCoop.Mod.Networking
             _remoteSteamId = CSteamID.Nil;
             _peerConnectNotified = false;
             _lobbyId = CSteamID.Nil;
+            _requestedLobbyId = 0;
+            _lobbyRequestGeneration = ++_sessionGeneration;
             SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, 2);
         }
 
@@ -215,6 +226,8 @@ namespace SilksongCoop.Mod.Networking
             _lobbyId = CSteamID.Nil;
             IsConnected = false;
             _connectionAttemptStartMs = NowMs();
+            _requestedLobbyId = lobbyIdVal;
+            _lobbyRequestGeneration = ++_sessionGeneration;
             SteamMatchmaking.JoinLobby(new CSteamID(lobbyIdVal));
         }
 
@@ -234,6 +247,10 @@ namespace SilksongCoop.Mod.Networking
         /// </summary>
         public void Disconnect()
         {
+            _sessionGeneration++;
+            _lobbyRequestGeneration = -1;
+            _requestedLobbyId = 0;
+
             if (_lobbyId != CSteamID.Nil)
             {
                 try
@@ -287,6 +304,7 @@ namespace SilksongCoop.Mod.Networking
             _rttMs = 0;
             _packetLossPercent = 0;
             _lastPingSentMs = 0;
+            _lastPongReceivedMs = NowMs();
             _lossWindowStartMs = 0;
             _pingsSentInWindow = 0;
             _pongsReceivedInWindow = 0;
@@ -321,6 +339,7 @@ namespace SilksongCoop.Mod.Networking
             _peerConnectNotified = false;
             _rttMs = 0;
             _packetLossPercent = 0;
+            _lastPongReceivedMs = 0;
 
             if (wasNotified)
             {
@@ -468,12 +487,31 @@ namespace SilksongCoop.Mod.Networking
                     _pongsReceivedInWindow = 0;
                     _lossWindowStartMs = now;
                 }
+
+                if (_lastPongReceivedMs == 0) _lastPongReceivedMs = now;
+                if (now - _lastPongReceivedMs > SteamHeartbeatTimeoutMs)
+                {
+                    Logger?.LogWarning("[Steam] Peer heartbeat timed out");
+                    if (_lobbyId != CSteamID.Nil)
+                    {
+                        try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
+                        _lobbyId = CSteamID.Nil;
+                    }
+                    if (_remoteSteamId != CSteamID.Nil)
+                    {
+                        try { SteamNetworking.CloseP2PSessionWithUser(_remoteSteamId); } catch { /* best-effort */ }
+                    }
+                    NotifyPeerDisconnected(DisconnectReason.Timeout);
+                    return;
+                }
             }
 
             // 2. Fix: Poll only the channels used by the protocol (2-4) and reuse buffer
+            int processedDatagrams = 0;
             for (int channel = MinChannel; channel <= MaxChannel; channel++)
             {
-                while (SteamNetworking.IsP2PPacketAvailable(out uint msgSize, channel))
+                while (processedDatagrams < MaxSteamDatagramsPerPoll &&
+                       SteamNetworking.IsP2PPacketAvailable(out uint msgSize, channel))
                 {
                     // Fix: Reuse buffer, expand only if necessary
                     if (msgSize > _readBuffer.Length)
@@ -483,6 +521,7 @@ namespace SilksongCoop.Mod.Networking
 
                     if (SteamNetworking.ReadP2PPacket(_readBuffer, msgSize, out uint bytesRead, out CSteamID remoteId, channel))
                     {
+                        processedDatagrams++;
                         try
                         {
                             // The dedicated control channel is reserved for RTT probes.
@@ -526,6 +565,10 @@ namespace SilksongCoop.Mod.Networking
                                 continue;
                             }
 
+                            // Any authenticated traffic proves the peer is alive; do not
+                            // require the RTT probe specifically to succeed.
+                            _lastPongReceivedMs = NowMs();
+
                             // Capture buffer reference to avoid aliasing if buffer is resized
                             byte[] dataBuffer = _readBuffer;
                             int dataLength = (int)bytesRead;
@@ -566,6 +609,7 @@ namespace SilksongCoop.Mod.Networking
             if (_remoteSteamId == CSteamID.Nil || remoteId != _remoteSteamId) return;
             if (bytesRead < 9) return;
 
+            _lastPongReceivedMs = NowMs();
             byte type = _readBuffer[0];
             if (type == RttPing)
             {
@@ -584,6 +628,7 @@ namespace SilksongCoop.Mod.Networking
             }
             else if (type == RttPong)
             {
+                _lastPongReceivedMs = NowMs();
                 long sentMs = BitConverter.ToInt64(_readBuffer, 1);
                 long rtt = NowMs() - sentMs;
                 if (rtt >= 0 && rtt < 5000)
@@ -600,9 +645,34 @@ namespace SilksongCoop.Mod.Networking
 
         private void OnLobbyCreated(LobbyCreated_t callback)
         {
+            var createdLobby = new CSteamID(callback.m_ulSteamIDLobby);
+
+            // Some Steam builds deliver LobbyEntered before LobbyCreated. If that already
+            // accepted this exact lobby, only publish its metadata.
+            if (callback.m_eResult == EResult.k_EResultOK &&
+                IsHost && _lobbyId != CSteamID.Nil && _lobbyId == createdLobby)
+            {
+                _lobbyRequestGeneration = -1;
+                _requestedLobbyId = createdLobby.m_SteamID;
+                SteamMatchmaking.SetLobbyData(_lobbyId, "mod_name", "SilksongCoop");
+                SteamMatchmaking.SetLobbyData(_lobbyId, "mod_version", SilksongCoopPlugin.PluginVersion);
+                return;
+            }
+
+            // A stale CreateLobby result after Disconnect/transport switch must not leave
+            // an orphan lobby open.
+            if (!IsHost || _lobbyRequestGeneration != _sessionGeneration)
+            {
+                try { SteamMatchmaking.LeaveLobby(createdLobby); } catch { /* best-effort */ }
+                return;
+            }
+
+            _lobbyRequestGeneration = -1;
+
             if (callback.m_eResult == EResult.k_EResultOK)
             {
-                _lobbyId = new CSteamID(callback.m_ulSteamIDLobby);
+                _lobbyId = createdLobby;
+                _requestedLobbyId = createdLobby.m_SteamID;
                 SteamMatchmaking.SetLobbyData(_lobbyId, "mod_name", "SilksongCoop");
                 // Real build version, not a hard-coded placeholder — the joining client
                 // compares it and refuses to mix incompatible protocol layouts.
@@ -618,14 +688,33 @@ namespace SilksongCoop.Mod.Networking
         private void OnLobbyEntered(LobbyEnter_t callback)
         {
             Logger?.LogInfo($"[Steam] OnLobbyEntered: response={callback.m_EChatRoomEnterResponse}, lobby={callback.m_ulSteamIDLobby}");
+
+            var enteredLobby = new CSteamID(callback.m_ulSteamIDLobby);
+            bool isOwnHostLobby = IsHost && _lobbyId != CSteamID.Nil && _lobbyId == enteredLobby;
+            if (!isOwnHostLobby)
+            {
+                // The user may have switched transports or started another join while
+                // JoinLobby was in flight; never let an old callback switch transports
+                // back or enter a lobby other than the one currently requested.
+                if (_lobbyRequestGeneration != _sessionGeneration ||
+                    (_requestedLobbyId != 0 && enteredLobby.m_SteamID != _requestedLobbyId))
+                {
+                    try { SteamMatchmaking.LeaveLobby(enteredLobby); } catch { /* best-effort */ }
+                    return;
+                }
+                _lobbyRequestGeneration = -1;
+            }
+
             if (callback.m_EChatRoomEnterResponse != (uint)EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess)
             {
                 Logger?.LogWarning($"Failed to enter lobby: {callback.m_EChatRoomEnterResponse}");
+                _requestedLobbyId = 0;
+                try { SteamMatchmaking.LeaveLobby(enteredLobby); } catch { /* best-effort */ }
                 OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.ConnectionFailed);
                 return;
             }
 
-            _lobbyId = new CSteamID(callback.m_ulSteamIDLobby);
+            _lobbyId = enteredLobby;
             if (!IsHost)
             {
                 // Refuse lobbies that were not created by this mod or that run a different
@@ -640,6 +729,7 @@ namespace SilksongCoop.Mod.Networking
                         $"[Steam] Refusing incompatible lobby: mod='{modName}', version='{modVersion}', local='{SilksongCoopPlugin.PluginVersion}'");
                     try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
                     _lobbyId = CSteamID.Nil;
+                    _requestedLobbyId = 0;
                     OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.VersionMismatch);
                     return;
                 }
@@ -703,7 +793,10 @@ namespace SilksongCoop.Mod.Networking
                 return;
 
             IsHost = false;
+            _requestedLobbyId = callback.m_steamIDLobby.m_SteamID;
+            _lobbyRequestGeneration = ++_sessionGeneration;
             SilksongCoopPlugin.Instance?.SetActiveTransport(this);
+            SilksongCoopPlugin.Instance?.PrepareForNewSession();
 
             // Accepting an invite while hosting/connected must not leak the old lobby.
             if (_lobbyId != CSteamID.Nil && _lobbyId != callback.m_steamIDLobby)
@@ -777,7 +870,7 @@ namespace SilksongCoop.Mod.Networking
                 {
                     Logger?.LogInfo($"[Steam] Remote peer left lobby: {leftUser.m_SteamID}");
                     try { SteamNetworking.CloseP2PSessionWithUser(leftUser); } catch { /* best-effort */ }
-                    NotifyPeerDisconnected(DisconnectReason.GracefulDisconnect);
+                    NotifyPeerDisconnected(DisconnectReason.PeerDisconnected);
                 }
             }
         }

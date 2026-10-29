@@ -4,7 +4,7 @@
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
 ![Loader](https://img.shields.io/badge/ModLoader-BepInEx%205.4.x-purple)
 ![Tests](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)
-![Version](https://img.shields.io/badge/Version-2.2.0-success)
+![Version](https://img.shields.io/badge/Version-2.2.1-success)
 
 **[🇬🇧 English version](README.md)**
 
@@ -81,7 +81,7 @@
 
 ### Способ A — Релизный пакет (Рекомендуется)
 
-Архив `SilksongCoop_v2.2.0.zip` со страницы [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) включает всё: BepInEx 5.4.21, HarmonyX и DLL мода.
+Архив `SilksongCoop_v2.2.1.zip` со страницы [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) включает всё: BepInEx 5.4.21, HarmonyX и DLL мода.
 
 1. Закройте игру, если она запущена.
 2. Откройте папку установки Silksong в Steam (Управление → Просмотреть локальные файлы). Типичный путь:
@@ -99,7 +99,7 @@
 ### Способ B — Ручная установка (сборка из исходников)
 
 Если BepInEx 5.4.x уже установлен (любая ОС, включая Linux/macOS), возьмите со страницы
-релизов `SilksongCoop_v2.2.0_plugin-only.zip` — там только две DLL, дефолтный конфиг и инструкция.
+релизов `SilksongCoop_v2.2.1_plugin-only.zip` — там только две DLL, дефолтный конфиг и инструкция.
 
 1. Установите [BepInEx 5.4.x (x64)](https://github.com/BepInEx/BepInEx/releases) в корень игры (чтобы появились `BepInEx\` и `winhttp.dll` рядом с exe).
 2. Соберите мод из исходников (см. [Разработка и сборка](#-разработка-и-сборка)) или возьмите DLL из релизного архива.
@@ -236,24 +236,32 @@ silksong_coop_mod/
 │   ├── SilksongCoop.Core/            # Платформонезависимое ядро (netstandard2.1)
 │   │   ├── Networking/               # Абстракция INetworkTransport, собственный UDP-транспорт, RoomCodeCodec
 │   │   │   ├── ConnectionAuthenticator.cs   # Challenge-response аутентификация
+│   │   │   ├── AdaptiveTickRate.cs          # Снижение тика 30→15 Гц при росте RTT/потерь
+│   │   │   ├── InterestManager.cs           # Area-of-interest фильтрация с гистерезисом
 │   │   │   └── RateLimiter.cs               # Ограничение скорости (token bucket)
 │   │   ├── Protocol/                 # 12-байтный бинарный протокол, PacketReader/Writer
+│   │   │   ├── PacketBatch.cs               # Кадрирование агрегированных датаграмм
 │   │   │   └── Packets/              # Пакеты: трансформации, здоровье, валюта, смерть, сцены
 │   │   ├── Interpolation/            # Сплайны Эрмита, буфер снапшотов, Dead Reckoning
-│   │   ├── State/                    # Стейт-машины сессии, смерти, здоровья и кошелька
+│   │   ├── DI/                        # Лёгкий DI-контейнер
+│   │   ├── Events/                    # Типизированная шина событий
+│   │   ├── Pooling/                   # Пулы объектов
+│   │   ├── State/                    # Стейт-машины сессии, смерти, здоровья и кошелька, desync detector
 │   │   └── Visuals/                  # Математика поворота цветового пространства HSV/Rodrigues
 │   │
 │   └── SilksongCoop.Mod/             # Плагин BepInEx / HarmonyX для Silksong
 │       ├── Clones/                   # RemoteHornetSpawner + RemotePlayerController
 │       ├── Visuals/                  # PaletteSwapController (CAN_HUESHIFT), DashTrailController
 │       ├── Hooks/                    # Harmony-хуки (HeroVitals, Currency, Death, Inventory)
-│       ├── Networking/               # SteamP2PTransport (Steamworks.NET P2P)
+│       ├── Networking/               # SteamP2PTransport (Steamworks.NET P2P), PacketBatcher
+│       ├── Services/                 # NetworkOrchestrator, менеджеры синхронизации
 │       ├── Settings/                 # KeybindManager, QualityPresetManager
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # Набор тестов xUnit (net8.0) — 687 тестов
+    └── SilksongCoop.Tests/           # Набор тестов xUnit (net8.0) — 713 тестов
         ├── TestHarness/              # DualClientTestHarness (симуляция 2 клиентов без Unity)
+        ├── EndToEnd/                 # Тесты реального UDP loopback: connect/reconnect
         ├── Tier1_FeatureTests/       # Покрытие требований (F01–F28)
         ├── Tier2_BoundaryTests/      # Граничные значения
         ├── Tier3_PairwiseTests/      # Пересечения механик
@@ -274,11 +282,11 @@ dotnet test SilksongCoop.sln -c Release
 Текущий результат:
 
 ```text
-Всего тестов:   687
-Пройдено:       687 (100.0%)
+Всего тестов:   713
+Пройдено:       713 (100.0%)
 Провалено:      0
 Пропущено:      0
-Время:          ~3 с
+Время:          ~6 с
 Сборка:         0 ошибок, 0 предупреждений (Debug + Release)
 ```
 
@@ -306,7 +314,7 @@ dotnet test SilksongCoop.sln -c Release
 * **F11** — оверлей сетевой диагностики (графики пинга/потерь/трафика, правый верхний угол).
 * Клавиши настраиваются в `BepInEx\config\com.silksong.coop.cfg`, секция `[Keybinds]`.
 
-Если клавиши не отвечают: проверьте, что в `BepInEx\LogOutput.log` загружается плагин (строка `Initializing Silksong Co-op Multiplayer v2.2.0...`). Убедитесь, что ни другой мод, ни системная утилита (рекордеры, медиаплееры) не перехватывают F10/F11 глобально.
+Если клавиши не отвечают: проверьте, что в `BepInEx\LogOutput.log` загружается плагин (строка `Initializing Silksong Co-op Multiplayer v2.2.1...`). Убедитесь, что ни другой мод, ни системная утилита (рекордеры, медиаплееры) не перехватывают F10/F11 глобально.
 </details>
 
 <details>

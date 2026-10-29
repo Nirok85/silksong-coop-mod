@@ -254,8 +254,55 @@ namespace SilksongCoop.Mod.Settings
                     KeyCode.F11 => "f11Key",
                     KeyCode.F12 => "f12Key",
                     KeyCode.Escape => "escapeKey",
+                    KeyCode.Space => "spaceKey",
+                    KeyCode.Return => "enterKey",
+                    KeyCode.KeypadEnter => "enterKey",
+                    KeyCode.Tab => "tabKey",
+                    KeyCode.Backspace => "backspaceKey",
+                    KeyCode.Delete => "deleteKey",
+                    KeyCode.UpArrow => "upArrowKey",
+                    KeyCode.DownArrow => "downArrowKey",
+                    KeyCode.LeftArrow => "leftArrowKey",
+                    KeyCode.RightArrow => "rightArrowKey",
+                    KeyCode.LeftShift => "leftShiftKey",
+                    KeyCode.RightShift => "rightShiftKey",
+                    KeyCode.LeftControl => "leftCtrlKey",
+                    KeyCode.RightControl => "rightCtrlKey",
+                    KeyCode.LeftAlt => "leftAltKey",
+                    KeyCode.RightAlt => "rightAltKey",
+                    KeyCode.Minus => "minusKey",
+                    KeyCode.Equals => "equalsKey",
+                    KeyCode.LeftBracket => "leftBracketKey",
+                    KeyCode.RightBracket => "rightBracketKey",
+                    KeyCode.Semicolon => "semicolonKey",
+                    KeyCode.Quote => "quoteKey",
+                    KeyCode.Comma => "commaKey",
+                    KeyCode.Period => "periodKey",
+                    KeyCode.Slash => "slashKey",
+                    KeyCode.Backslash => "backslashKey",
+                    KeyCode.BackQuote => "backquoteKey",
                     _ => null
                 };
+
+                // Letters, top-row digits and the numeric keypad are the bindings users
+                // most often choose in the config. The Input System names these
+                // systematically (aKey..zKey, digit0Key..digit9Key, numpad0Key..).
+                if (keyPropName == null)
+                {
+                    int code = (int)key;
+                    if (code >= (int)KeyCode.A && code <= (int)KeyCode.Z)
+                    {
+                        keyPropName = (char)('a' + (code - (int)KeyCode.A)) + "Key";
+                    }
+                    else if (code >= (int)KeyCode.Alpha0 && code <= (int)KeyCode.Alpha9)
+                    {
+                        keyPropName = "digit" + (code - (int)KeyCode.Alpha0) + "Key";
+                    }
+                    else if (code >= (int)KeyCode.Keypad0 && code <= (int)KeyCode.Keypad9)
+                    {
+                        keyPropName = "numpad" + (code - (int)KeyCode.Keypad0) + "Key";
+                    }
+                }
 
                 if (keyPropName != null)
                 {

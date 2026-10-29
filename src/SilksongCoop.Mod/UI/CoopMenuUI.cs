@@ -155,7 +155,7 @@ namespace SilksongCoop.Mod.UI
             }
 
             // Update diagnostics
-            _diagnostics.Update(Time.deltaTime);
+            _diagnostics.Update(Time.unscaledDeltaTime);
 
             // Auto-switch to Status tab when connection state changes
             if (_sessionState != null && _sessionState.IsConnected && _activeTab == Tab.Host)
@@ -643,12 +643,16 @@ namespace SilksongCoop.Mod.UI
 
                 foreach (var entry in recent)
                 {
+                    bool steamEntry = IsSteamLobbyTarget(entry);
                     GUILayout.BeginHorizontal();
-                    GUILayout.Label($"  {entry}", GUILayout.ExpandWidth(true));
+                    GUILayout.Label($"  {(steamEntry ? "[Steam] " : "")}{entry}", GUILayout.ExpandWidth(true));
                     if (GUILayout.Button("Join", GUILayout.Width(50), GUILayout.Height(20)))
                     {
                         _inputAddressOrCode = entry;
-                        JoinUdpSession(entry);
+                        if (steamEntry)
+                            JoinSteamSession(entry);
+                        else
+                            JoinUdpSession(entry);
                     }
                     GUILayout.EndHorizontal();
                 }
@@ -669,7 +673,7 @@ namespace SilksongCoop.Mod.UI
                 GUILayout.Space(8);
                 if (GUILayout.Button($"Reconnect to {_lastConnectionTarget}", GUILayout.Height(26)))
                 {
-                    if (ulong.TryParse(_lastConnectionTarget, out _))
+                    if (IsSteamLobbyTarget(_lastConnectionTarget))
                         JoinSteamSession(_lastConnectionTarget);
                     else
                         JoinUdpSession(_lastConnectionTarget);
@@ -1096,13 +1100,14 @@ namespace SilksongCoop.Mod.UI
                 // IP joins that do not know it are rejected instead of silently accepted.
                 _udpTransport.SetRoomCode(code);
                 _udpTransport.RequireRoomCode = true;
+                plugin.SetActiveTransport(_udpTransport);
+                plugin.PrepareForNewSession();
                 _udpTransport.StartHost(udpPort);
 
                 _currentRoomCode = code;
                 _currentHostAddress = $"{GetLocalIpAddress()}:{udpPort}";
 
                 _sessionState?.SetHosting(_udpTransport.LocalPeerId, code);
-                plugin.SetActiveTransport(_udpTransport);
 
                 // Copy the room code (not just IP:port) — it is what the guest needs and
                 // it was previously never shown anywhere in the UI.
@@ -1224,6 +1229,19 @@ namespace SilksongCoop.Mod.UI
             return "127.0.0.1";
         }
 
+        /// <summary>
+        /// Steam lobby IDs are 64-bit integers. Room codes always start with "SK-" (and
+        /// contain letters when pasted without the prefix), while IP:port targets contain
+        /// a dot or colon, so a numeric target of realistic lobby length is a Steam ID.
+        /// </summary>
+        private static bool IsSteamLobbyTarget(string target)
+        {
+            return !string.IsNullOrWhiteSpace(target) &&
+                   target.Length >= 10 &&
+                   ulong.TryParse(target, out ulong lobbyId) &&
+                   lobbyId != 0;
+        }
+
         private static bool IsPrivateLanIp(string ip)
         {
             if (ip.StartsWith("10.")) return true;
@@ -1251,9 +1269,17 @@ namespace SilksongCoop.Mod.UI
                     _toasts.ShowError("Steam transport not available. Ensure Steam is running.");
                     return;
                 }
+                if (!SteamP2PTransport.IsSteamAvailable)
+                {
+                    // Check before switching transports: a failed StartHost would
+                    // otherwise have already torn down the current UDP session.
+                    _toasts.ShowError("Steam is offline. Start Steam and try again.");
+                    return;
+                }
 
-                _steamTransport.StartHost();
                 plugin.SetActiveTransport(_steamTransport);
+                plugin.PrepareForNewSession();
+                _steamTransport.StartHost();
                 _sessionState?.SetHosting(_steamTransport.LocalPeerId, "Steam-Lobby");
                 _currentRoomCode = "";
                 _currentHostAddress = "";
@@ -1300,8 +1326,9 @@ namespace SilksongCoop.Mod.UI
                     }
                 }
 
-                _udpTransport.Connect(connectAddress);
                 plugin.SetActiveTransport(_udpTransport);
+                plugin.PrepareForNewSession();
+                _udpTransport.Connect(connectAddress);
                 _lastConnectionTarget = connectAddress;
                 _history.Add(connectAddress);
                 _currentRoomCode = "";
@@ -1334,10 +1361,16 @@ namespace SilksongCoop.Mod.UI
                 plugin.CancelReconnect();
                 _steamTransport = plugin.SteamTransport;
                 if (_steamTransport == null) { _toasts.ShowError("Steam transport not available"); return; }
+                if (!SteamP2PTransport.IsSteamAvailable)
+                {
+                    _toasts.ShowError("Steam is offline. Start Steam and try again.");
+                    return;
+                }
 
                 string trimmed = lobbyIdString.Trim();
-                _steamTransport.Connect(trimmed);
                 plugin.SetActiveTransport(_steamTransport);
+                plugin.PrepareForNewSession();
+                _steamTransport.Connect(trimmed);
                 _lastConnectionTarget = trimmed;
                 _history.Add(trimmed);
 

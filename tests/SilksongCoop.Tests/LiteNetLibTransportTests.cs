@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using SilksongCoop.Core.Networking;
@@ -435,6 +436,128 @@ namespace SilksongCoop.Tests
             await Task.WhenAll(t1, t2, t3, t4);
 
             Assert.Empty(exceptions);
+        }
+
+        [Fact]
+        public void LiteNetLibTransport_ReliableUnordered_DeliversAndDrainsBacklog()
+        {
+            using var host = new LiteNetLibTransport(1, "Host");
+            using var client = new LiteNetLibTransport(2, "Client");
+
+            host.StartHost(0);
+            client.Connect($"127.0.0.1:{host.BoundPort}");
+
+            for (int i = 0; i < 30 && (!host.IsConnected || !client.IsConnected); i++)
+            {
+                host.PollEvents();
+                client.PollEvents();
+                Thread.Sleep(10);
+            }
+
+            Assert.True(host.IsConnected);
+            Assert.True(client.IsConnected);
+
+            var received = new List<int>();
+            client.OnDataReceived += (_, data, offset, _) =>
+            {
+                lock (received) received.Add(BitConverter.ToInt32(data, offset));
+            };
+
+            for (int i = 0; i < 10; i++)
+            {
+                byte[] payload = BitConverter.GetBytes(i);
+                host.Send(client.LocalPeerId, payload, 0, payload.Length, DeliveryMethod.ReliableUnordered, 2);
+            }
+
+            for (int i = 0; i < 100; i++)
+            {
+                host.PollEvents();
+                client.PollEvents();
+                lock (received)
+                {
+                    if (received.Count == 10) break;
+                }
+                Thread.Sleep(5);
+            }
+
+            lock (received)
+            {
+                Assert.Equal(10, received.Count);
+            }
+
+            // The ACKs must retire the ReliableUnordered sends from the retransmit list;
+            // otherwise every packet would be retried until the session times out.
+            var unacknowledgedField = typeof(LiteNetLibTransport).GetField(
+                "_unacknowledged", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(unacknowledgedField);
+
+            int pending = int.MaxValue;
+            for (int i = 0; i < 100 && pending != 0; i++)
+            {
+                host.PollEvents();
+                client.PollEvents();
+                Thread.Sleep(5);
+                object list = unacknowledgedField!.GetValue(host)!;
+                pending = (int)list.GetType().GetProperty("Count")!.GetValue(list)!;
+            }
+
+            Assert.Equal(0, pending);
+        }
+
+        [Fact]
+        public void LiteNetLibTransport_StaleGenerationEvent_IsNotDispatched()
+        {
+            using var transport = new LiteNetLibTransport(1, "Host");
+            transport.StartHost(0);
+
+            int disconnected = 0;
+            transport.OnPeerDisconnected += (_, _) => disconnected++;
+
+            const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
+            var eventType = typeof(LiteNetLibTransport).GetNestedType("DeferredEvent", BindingFlags.NonPublic);
+            var kindType = typeof(LiteNetLibTransport).GetNestedType("DeferredEventKind", BindingFlags.NonPublic);
+            var queueField = typeof(LiteNetLibTransport).GetField("_pendingEvents", flags);
+            var generationField = typeof(LiteNetLibTransport).GetField("_sessionGeneration", flags);
+            var drain = typeof(LiteNetLibTransport).GetMethod("DrainPendingEvents", flags);
+
+            Assert.NotNull(eventType);
+            Assert.NotNull(kindType);
+            Assert.NotNull(queueField);
+            Assert.NotNull(generationField);
+            Assert.NotNull(drain);
+
+            object peerDisconnected = Enum.Parse(kindType!, "PeerDisconnected");
+            ConstructorInfo? ctor = null;
+            foreach (var candidate in eventType!.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                if (candidate.GetParameters().Length == 5)
+                {
+                    ctor = candidate;
+                    break;
+                }
+            }
+            Assert.NotNull(ctor);
+
+            object queue = queueField!.GetValue(transport)!;
+            var enqueue = queue.GetType().GetMethod("Enqueue")!;
+
+            long staleGeneration = (long)generationField!.GetValue(transport)! - 1;
+            object stale = ctor!.Invoke(new object?[]
+            {
+                peerDisconnected, new NetworkPeerId(2), DisconnectReason.Timeout, null, staleGeneration
+            });
+            enqueue.Invoke(queue, new[] { stale });
+            drain!.Invoke(transport, null);
+            Assert.Equal(0, disconnected);
+
+            long currentGeneration = (long)generationField.GetValue(transport)!;
+            object current = ctor.Invoke(new object?[]
+            {
+                peerDisconnected, new NetworkPeerId(2), DisconnectReason.Timeout, null, currentGeneration
+            });
+            enqueue.Invoke(queue, new[] { current });
+            drain.Invoke(transport, null);
+            Assert.Equal(1, disconnected);
         }
     }
 }

@@ -5,7 +5,7 @@ using SilksongCoop.Mod;
 namespace SilksongCoop.Mod.UI
 {
     /// <summary>
-    /// Persisted list of recent connection targets (IP:port or room codes) for quick re-join.
+    /// Persisted list of recent connection targets (IP:port, room codes or Steam lobby IDs) for quick re-join.
     /// Stores up to 5 entries, deduplicating as items are added. Uses PlayerPrefs for persistence.
     /// </summary>
     public class ConnectionHistory

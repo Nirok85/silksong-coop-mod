@@ -11,6 +11,8 @@ namespace SilksongCoop.Core.Networking
         VersionMismatch,
         LobbyFull,
         ConnectionFailed,
-        Kicked
+        Kicked,
+        /// <summary>The remote peer closed the session (UDP disconnect frame or Steam lobby leave).</summary>
+        PeerDisconnected
     }
 }

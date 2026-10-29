@@ -11,6 +11,7 @@ namespace SilksongCoop.Core.Protocol
         Ping                = 0x03,
         Pong                = 0x04,
         Disconnect          = 0x05,
+        Batch               = 0x06,
 
         // Player Replication (0x10 - 0x1F)
         TransformSync       = 0x10,

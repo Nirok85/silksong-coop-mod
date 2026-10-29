@@ -262,6 +262,27 @@ namespace SilksongCoop.Tests
                 ValueType = PersistentValueType.Int,
                 Value = -5
             }));
+
+            Assert.True(PacketValidator.ValidatePersistentState(new PersistentStatePacket
+            {
+                ItemKey = 1,
+                ValueType = PersistentValueType.Int,
+                Value = PacketValidator.MaxPersistentIntValue
+            }));
+
+            Assert.False(PacketValidator.ValidatePersistentState(new PersistentStatePacket
+            {
+                ItemKey = 1,
+                ValueType = PersistentValueType.Int,
+                Value = PacketValidator.MaxPersistentIntValue + 1
+            }));
+
+            Assert.False(PacketValidator.ValidatePersistentState(new PersistentStatePacket
+            {
+                ItemKey = 1,
+                ValueType = PersistentValueType.Int,
+                Value = -PacketValidator.MaxPersistentIntValue - 1
+            }));
         }
 
         [Fact]
@@ -438,6 +459,27 @@ namespace SilksongCoop.Tests
                 CurrencyType.Rosaries, 10, 120, Guid.NewGuid(), pickupKey: 8, pickupX: 5.4f, pickupY: 5.2f);
 
             Assert.Equal(110, service.SharedRosaries);
+        }
+
+        [Fact]
+        public void EnemySyncService_RegistryOverflow_EvictsOldestInsteadOfClearingAll()
+        {
+            var service = new EnemySyncService();
+
+            // MaxTrackedEnemies is 1024; register more so the oldest entries must go.
+            for (ulong key = 1; key <= 1100; key++)
+            {
+                Assert.True(service.TryAcceptHit(key, 100, false));
+            }
+
+            Assert.Equal(1024, service.TrackedCount);
+
+            // A recent enemy is still tracked and its monotonic HP guard still applies.
+            Assert.False(service.TryAcceptHit(1100, 100, false));
+
+            // The oldest entry was evicted, so it can be learned again as a new enemy.
+            Assert.True(service.TryAcceptHit(1, 50, false));
+            Assert.Equal(1024, service.TrackedCount);
         }
     }
 }

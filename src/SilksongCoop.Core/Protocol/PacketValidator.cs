@@ -27,6 +27,12 @@ namespace SilksongCoop.Core.Protocol
         public const int MaxEnemyDamage = short.MaxValue;
 
         /// <summary>
+        /// Upper bound for a persistent int item. These counters encode small game
+        /// quantities (chests, caches, collectibles); an arbitrary int could corrupt state.
+        /// </summary>
+        public const int MaxPersistentIntValue = 1_000_000;
+
+        /// <summary>
         /// Validates a TransformSync packet's field values.
         /// </summary>
         public static bool ValidateTransformSync(TransformSyncPacket packet)
@@ -125,7 +131,7 @@ namespace SilksongCoop.Core.Protocol
         /// </summary>
         public static bool ValidateDeathLifecycle(DeathLifecyclePacket packet)
         {
-            if (!Enum.IsDefined(typeof(DeathEventType), packet.EventType))
+            if (!IsDefined(packet.EventType))
                 return false;
 
             if (float.IsNaN(packet.CoordinateX) || float.IsInfinity(packet.CoordinateX) ||
@@ -155,7 +161,7 @@ namespace SilksongCoop.Core.Protocol
             if (packet.ItemId.Length > 256)
                 return false;
 
-            if (!Enum.IsDefined(typeof(ItemCategory), packet.Category))
+            if (!IsDefined(packet.Category))
                 return false;
 
             if (packet.TransactionId == Guid.Empty)
@@ -186,7 +192,7 @@ namespace SilksongCoop.Core.Protocol
         /// </summary>
         public static bool ValidateActionTrigger(ActionTriggerPacket packet)
         {
-            if (!Enum.IsDefined(typeof(ActionType), packet.Action))
+            if (!IsDefined(packet.Action))
                 return false;
 
             if (float.IsNaN(packet.OriginX) || float.IsInfinity(packet.OriginX) ||
@@ -209,7 +215,7 @@ namespace SilksongCoop.Core.Protocol
             if (packet.EnemyKey == 0)
                 return false;
 
-            if (!Enum.IsDefined(typeof(EnemySyncEventType), packet.EventType))
+            if (!IsDefined(packet.EventType))
                 return false;
 
             if (packet.Hp < 0 || packet.Hp > MaxEnemyHp)
@@ -278,7 +284,7 @@ namespace SilksongCoop.Core.Protocol
             if (packet.ObjectKey == 0)
                 return false;
 
-            if (!Enum.IsDefined(typeof(WorldEventType), packet.EventType))
+            if (!IsDefined(packet.EventType))
                 return false;
 
             if (float.IsNaN(packet.PositionX) || float.IsInfinity(packet.PositionX) ||
@@ -299,10 +305,14 @@ namespace SilksongCoop.Core.Protocol
             if (packet.ItemKey == 0)
                 return false;
 
-            if (!Enum.IsDefined(typeof(PersistentValueType), packet.ValueType))
+            if (!IsDefined(packet.ValueType))
                 return false;
 
             if (packet.ValueType == PersistentValueType.Bool && packet.Value != 0 && packet.Value != 1)
+                return false;
+
+            if (packet.ValueType == PersistentValueType.Int &&
+                (packet.Value < -MaxPersistentIntValue || packet.Value > MaxPersistentIntValue))
                 return false;
 
             return true;
@@ -328,5 +338,65 @@ namespace SilksongCoop.Core.Protocol
 
             return true;
         }
+
+        // Explicit switches replace Enum.IsDefined on the per-packet path: the reflection
+        // overload boxes the value and is measurably slower on Mono. Add new enum members
+        // here as well as in their enum declaration.
+        private static bool IsDefined(DeathEventType value) => value switch
+        {
+            DeathEventType.SoloDeathOccurred => true,
+            DeathEventType.SpectatorCountdownSync => true,
+            DeathEventType.PartnerReviveTrigger => true,
+            DeathEventType.TeamWipeOccurred => true,
+            DeathEventType.BenchCheckpointUpdate => true,
+            DeathEventType.SoloBenchRespawn => true,
+            _ => false
+        };
+
+        private static bool IsDefined(ItemCategory value) => value switch
+        {
+            ItemCategory.Crest => true,
+            ItemCategory.Tool => true,
+            ItemCategory.Ability => true,
+            ItemCategory.KeyItem => true,
+            _ => false
+        };
+
+        private static bool IsDefined(ActionType value) => value switch
+        {
+            ActionType.SlashNormal => true,
+            ActionType.SlashUp => true,
+            ActionType.SlashDown => true,
+            ActionType.HarpoonDash => true,
+            ActionType.NeedleThrow => true,
+            ActionType.ThreadBindStart => true,
+            ActionType.ThreadBindComplete => true,
+            ActionType.ToolDeploy => true,
+            ActionType.Jump => true,
+            ActionType.AirDash => true,
+            ActionType.WallJump => true,
+            _ => false
+        };
+
+        private static bool IsDefined(EnemySyncEventType value) => value switch
+        {
+            EnemySyncEventType.Hit => true,
+            EnemySyncEventType.Death => true,
+            _ => false
+        };
+
+        private static bool IsDefined(WorldEventType value) => value switch
+        {
+            WorldEventType.BreakableBroken => true,
+            WorldEventType.GateOpened => true,
+            _ => false
+        };
+
+        private static bool IsDefined(PersistentValueType value) => value switch
+        {
+            PersistentValueType.Bool => true,
+            PersistentValueType.Int => true,
+            _ => false
+        };
 }
 }

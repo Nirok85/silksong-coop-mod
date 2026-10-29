@@ -10,7 +10,8 @@ namespace SilksongCoop.Core.Networking
 {
     /// <summary>
     /// High-performance UDP socket network transport supporting unreliable, sequenced,
-    /// and reliable ordered delivery channels with room-code and direct IP:port connection.
+    /// reliable ordered and reliable unordered delivery with room-code and direct IP:port
+    /// connection.
     /// </summary>
     public class LiteNetLibTransport : INetworkTransport
     {
@@ -18,7 +19,7 @@ namespace SilksongCoop.Core.Networking
         /// Wire protocol revision. Bumped when packet layouts change incompatibly; both
         /// peers must match or the handshake is refused.
         /// </summary>
-        public const ushort ProtocolVersion = 4;
+        public const ushort ProtocolVersion = 6;
 
         private const byte FlagMacPresent = 0x01;
         private const int MacSizeBytes = 8;
@@ -42,6 +43,7 @@ namespace SilksongCoop.Core.Networking
         {
             public uint Sequence;
             public byte Channel;
+            public DeliveryMethod Method;
             public byte[] Envelope;
             public int EnvelopeLength;
             public long LastSentTimeMs;
@@ -70,14 +72,17 @@ namespace SilksongCoop.Core.Networking
             public readonly NetworkPeerId Peer;
             public readonly DisconnectReason Reason;
             public readonly byte[]? Data;
+            public readonly long Generation;
 
             public DeferredEvent(DeferredEventKind kind, NetworkPeerId peer,
-                DisconnectReason reason = DisconnectReason.None, byte[]? data = null)
+                DisconnectReason reason = DisconnectReason.None, byte[]? data = null,
+                long generation = 0)
             {
                 Kind = kind;
                 Peer = peer;
                 Reason = reason;
                 Data = data;
+                Generation = generation;
             }
         }
 
@@ -141,7 +146,7 @@ namespace SilksongCoop.Core.Networking
         private readonly HashSet<byte> _sequencedInitialized = new();
         private readonly Dictionary<byte, SortedDictionary<uint, byte[]>> _pendingReliable = new();
         private readonly LinkedList<SentReliablePacket> _unacknowledged = new();
-        private readonly Dictionary<(byte channel, uint sequence), LinkedListNode<SentReliablePacket>> _unacknowledgedIndex = new();
+        private readonly Dictionary<(byte channel, DeliveryMethod method, uint sequence), LinkedListNode<SentReliablePacket>> _unacknowledgedIndex = new();
         private const int MaxUnacknowledgedPackets = 512;
 
         private long _lastPingSentMs;
@@ -164,6 +169,14 @@ namespace SilksongCoop.Core.Networking
         // lock is released, because handler callbacks re-enter the transport
         // (Send / Disconnect / death-state chains) and must not run while it is held.
         private readonly Queue<DeferredEvent> _pendingEvents = new();
+        private long _sessionGeneration;
+
+        // ReliableUnordered has its own sequence space but no ordering window. Duplicates
+        // are possible because retransmissions are allowed, so remember recently delivered
+        // sequences (bounded) and still ACK duplicates.
+        private readonly HashSet<(byte Channel, uint Sequence)> _receivedUnordered = new();
+        private readonly Queue<(byte Channel, uint Sequence)> _receivedUnorderedOrder = new();
+        private const int MaxTrackedUnorderedPackets = 4096;
 
         // BUG-A3: last time the client sent its Handshake frame. The initial datagram and
         // the host's HandshakeAck both travel unreliably, so the client must retransmit
@@ -259,6 +272,12 @@ namespace SilksongCoop.Core.Networking
 
         private void ResetSessionState()
         {
+            // Any event already queued belongs to the session being torn down. It must not
+            // be delivered after a new StartHost/Connect (for example a stale disconnect
+            // event tearing down a freshly started session).
+            _pendingEvents.Clear();
+            _sessionGeneration++;
+
             foreach (var node in _unacknowledged)
             {
                 ReturnPooledBuffer(node.Envelope);
@@ -270,6 +289,8 @@ namespace SilksongCoop.Core.Networking
             _pendingReliable.Clear();
             _unacknowledged.Clear();
             _unacknowledgedIndex.Clear();
+            _receivedUnordered.Clear();
+            _receivedUnorderedOrder.Clear();
             _lastUnreliableSequences.Clear();
             _lossWindowStartMs = 0;
             _lossPacketsExpected = 0;
@@ -295,30 +316,50 @@ namespace SilksongCoop.Core.Networking
             {
                 CloseSocket();
                 ResetSessionState();
-                _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp)
-                {
-                    Blocking = false
-                };
 
-                // Enable socket reuse and avoid ICMP unreachable errors on Windows
-                _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                const int SIO_UDP_CONNRESET = -1744830452;
+                Socket? socket = null;
                 try
                 {
-                    _socket.IOControl(SIO_UDP_CONNRESET, new byte[] { 0 }, null);
-                }
-                catch (Exception ex)
-                {
-                    // Log but don't fail - this is Windows-specific optimization
-                    CoopLog.Warn($"Failed to set SIO_UDP_CONNRESET: {ex.Message}");
-                }
+                    socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp)
+                    {
+                        Blocking = false
+                    };
 
-                _socket.Bind(new IPEndPoint(IPAddress.Any, port));
-                _boundPort = ((IPEndPoint)_socket.LocalEndPoint!).Port;
-                _remoteEndPoint = null;
-                _remotePeerId = null;
-                _isHost = true;
-                _isConnected = false;
+                    // Enable socket reuse and avoid ICMP unreachable errors on Windows
+                    socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                    const int SIO_UDP_CONNRESET = -1744830452;
+                    try
+                    {
+                        socket.IOControl(SIO_UDP_CONNRESET, new byte[] { 0 }, null);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Log but don't fail - this is Windows-specific optimization
+                        CoopLog.Warn($"Failed to set SIO_UDP_CONNRESET: {ex.Message}");
+                    }
+
+                    socket.Bind(new IPEndPoint(IPAddress.Any, port));
+                    _boundPort = ((IPEndPoint)socket.LocalEndPoint!).Port;
+                    _socket = socket;
+                    _remoteEndPoint = null;
+                    _remotePeerId = null;
+                    _isHost = true;
+                    _isConnected = false;
+                }
+                catch
+                {
+                    if (socket != null)
+                    {
+                        try { socket.Close(); } catch { /* best effort */ }
+                    }
+                    _socket = null;
+                    _boundPort = 0;
+                    _remoteEndPoint = null;
+                    _remotePeerId = null;
+                    _isHost = false;
+                    _isConnected = false;
+                    throw;
+                }
             }
         }
 
@@ -394,35 +435,56 @@ namespace SilksongCoop.Core.Networking
             {
                 CloseSocket();
                 ResetSessionState();
-                _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp)
-                {
-                    Blocking = false
-                };
 
-                // Enable socket reuse and avoid ICMP unreachable errors on Windows
-                const int SIO_UDP_CONNRESET = -1744830452;
+                Socket? socket = null;
                 try
                 {
-                    _socket.IOControl(SIO_UDP_CONNRESET, new byte[] { 0 }, null);
+                    socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp)
+                    {
+                        Blocking = false
+                    };
+
+                    // Enable socket reuse and avoid ICMP unreachable errors on Windows
+                    const int SIO_UDP_CONNRESET = -1744830452;
+                    try
+                    {
+                        socket.IOControl(SIO_UDP_CONNRESET, new byte[] { 0 }, null);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Log but don't fail - this is Windows-specific optimization
+                        CoopLog.Warn($"Failed to set SIO_UDP_CONNRESET: {ex.Message}");
+                    }
+
+                    socket.Bind(new IPEndPoint(IPAddress.Any, 0));
+                    _boundPort = ((IPEndPoint)socket.LocalEndPoint!).Port;
+                    _socket = socket;
+
+                    _remoteEndPoint = new IPEndPoint(targetIp, targetPort);
+                    _remotePeerId = null;
+                    _isHost = false;
+                    _isConnected = false;
+                    _connectionAttemptStartMs = GetTimestampMs();
+                    _lastHandshakeSentMs = 0;
+
+                    // Send initial handshake
+                    SendEnvelope(UdpFrameType.Handshake, channel: 0, sequence: 0, method: DeliveryMethod.Unreliable, payload: BuildHandshakePayload());
                 }
-                catch (Exception ex)
+                catch
                 {
-                    // Log but don't fail - this is Windows-specific optimization
-                    CoopLog.Warn($"Failed to set SIO_UDP_CONNRESET: {ex.Message}");
+                    if (socket != null)
+                    {
+                        try { socket.Close(); } catch { /* best effort */ }
+                    }
+                    _socket = null;
+                    _boundPort = 0;
+                    _remoteEndPoint = null;
+                    _remotePeerId = null;
+                    _isHost = false;
+                    _isConnected = false;
+                    _connectionAttemptStartMs = 0;
+                    throw;
                 }
-
-                _socket.Bind(new IPEndPoint(IPAddress.Any, 0));
-                _boundPort = ((IPEndPoint)_socket.LocalEndPoint!).Port;
-
-                _remoteEndPoint = new IPEndPoint(targetIp, targetPort);
-                _remotePeerId = null;
-                _isHost = false;
-                _isConnected = false;
-                _connectionAttemptStartMs = GetTimestampMs();
-                _lastHandshakeSentMs = 0;
-
-                // Send initial handshake
-                SendEnvelope(UdpFrameType.Handshake, channel: 0, sequence: 0, method: DeliveryMethod.Unreliable, payload: BuildHandshakePayload());
             }
         }
 
@@ -473,7 +535,7 @@ namespace SilksongCoop.Core.Networking
 
                 if (wasConnected)
                 {
-                    _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerDisconnected, peer, reason));
+                    _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerDisconnected, peer, reason, generation: _sessionGeneration));
                 }
             }
         }
@@ -525,7 +587,7 @@ namespace SilksongCoop.Core.Networking
                 {
                     // BUG-02: defer the event - handlers re-enter the transport (Send /
                     // Disconnect / session teardown) and must not run while _lock is held.
-                    _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerDisconnected, peer, reason));
+                    _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerDisconnected, peer, reason, generation: _sessionGeneration));
                 }
             }
         }
@@ -558,7 +620,9 @@ namespace SilksongCoop.Core.Networking
                 // on the channel. Dropping the NEW packet (and not consuming a sequence
                 // number) keeps the reliable stream contiguous; the heartbeat will tear
                 // the session down if the backlog never drains.
-                if (method == DeliveryMethod.ReliableOrdered && _unacknowledged.Count >= MaxUnacknowledgedPackets)
+                bool isReliable = method == DeliveryMethod.ReliableOrdered ||
+                                  method == DeliveryMethod.ReliableUnordered;
+                if (isReliable && _unacknowledged.Count >= MaxUnacknowledgedPackets)
                 {
                     CoopLog.Warn($"[LiteNetLibTransport] Reliable backlog full ({MaxUnacknowledgedPackets}); dropping new packet on channel {channel}");
                     return;
@@ -595,18 +659,19 @@ namespace SilksongCoop.Core.Networking
                 catch (ObjectDisposedException ex) { CoopLog.Warn($"Socket disposed: {ex.Message}"); }
                 catch (Exception ex) { CoopLog.Warn($"Send error: {ex.Message}"); }
 
-                if (method == DeliveryMethod.ReliableOrdered)
+                if (isReliable)
                 {
                     var node = _unacknowledged.AddLast(new SentReliablePacket
                     {
                         Sequence = seq,
                         Channel = channel,
+                        Method = method,
                         Envelope = envelope,
                         EnvelopeLength = envelopeLength,
                         LastSentTimeMs = GetTimestampMs(),
                         Retries = 0
                     });
-                    _unacknowledgedIndex[(channel, seq)] = node;
+                    _unacknowledgedIndex[(channel, method, seq)] = node;
                 }
                 else
                 {
@@ -700,7 +765,7 @@ namespace SilksongCoop.Core.Networking
                             _connectionAttemptStartMs = 0;
                             ResetSessionState();
                             CloseSocket();
-                            _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerDisconnected, peer, DisconnectReason.Timeout));
+                            _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerDisconnected, peer, DisconnectReason.Timeout, generation: _sessionGeneration));
                             return;
                         }
                     }
@@ -833,20 +898,11 @@ namespace SilksongCoop.Core.Networking
                     return;
 
                 // Post-handshake frames must carry a valid MAC. This blocks spoofed
-                // Disconnect/Ack/Data datagrams from a forged source endpoint.
-                bool preAuthFrame = frameType == UdpFrameType.Handshake ||
-                                    frameType == UdpFrameType.HandshakeAck ||
-                                    frameType == UdpFrameType.Challenge ||
-                                    frameType == UdpFrameType.ChallengeResponse;
-                if (hasMac)
-                {
-                    if (!ValidateMac(datagram.Slice(0, macOffset), datagram.Slice(macOffset, MacSizeBytes)))
-                        return;
-                }
-                else if (_sessionKey != null && !preAuthFrame)
-                {
-                    return;
-                }
+                // Disconnect/Ack/Data datagrams from a forged source endpoint. The final
+                // handshake ack is also authenticated once the client has derived the key
+                // from the challenge; otherwise a spoofed ack could pin a false peer id.
+                bool macRequired = _sessionKey != null &&
+                                   (RequiresMac(frameType) || frameType == UdpFrameType.HandshakeAck);
 
                 // Sender validation FIRST: when connected, only accept from the known remote
                 // endpoint. BUG-N2: this must run before the rate limiter and before
@@ -861,15 +917,26 @@ namespace SilksongCoop.Core.Networking
                     }
                 }
 
-                // Track last received time for heartbeat timeout (validated sender only)
-                _lastReceivedMs = GetTimestampMs();
-
-                // Rate limiting: check if peer is allowed to send
+                // Rate limiting before MAC: an invalid-MAC flood from the known endpoint
+                // must not force an HMAC computation for every datagram.
                 if (_remotePeerId.HasValue && !_rateLimiter.TryConsume(_remotePeerId.Value))
                 {
                     CoopLog.Warn($"[LiteNetLibTransport] Rate limit exceeded for peer {_remotePeerId.Value}");
                     return;
                 }
+
+                if (hasMac)
+                {
+                    if (!ValidateMac(datagram.Slice(0, macOffset), datagram.Slice(macOffset, MacSizeBytes)))
+                        return;
+                }
+                else if (macRequired)
+                {
+                    return;
+                }
+
+                // Track last received time for heartbeat timeout (validated sender only)
+                _lastReceivedMs = GetTimestampMs();
 
                 switch (frameType)
                 {
@@ -970,7 +1037,7 @@ namespace SilksongCoop.Core.Networking
                                 _remotePeerId = candidatePeer;
                                 _isConnected = true;
                                 SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BuildHandshakeAckPayload());
-                                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, candidatePeer));
+                                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, candidatePeer, generation: _sessionGeneration));
                             }
                         }
                         break;
@@ -1019,7 +1086,7 @@ namespace SilksongCoop.Core.Networking
                                 _pendingHandshakes.Clear();
                                 _isConnected = true;
                                 SendEnvelopeTo(sender, UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BuildHandshakeAckPayload());
-                                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, _remotePeerId.Value));
+                                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, _remotePeerId.Value, generation: _sessionGeneration));
                             }
                             else
                             {
@@ -1065,7 +1132,7 @@ namespace SilksongCoop.Core.Networking
                             _remotePeerId = new NetworkPeerId(hostPeerValue, "Host");
                             _isConnected = true;
 
-                            _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, _remotePeerId.Value));
+                            _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, _remotePeerId.Value, generation: _sessionGeneration));
                         }
                         break;
 
@@ -1086,12 +1153,13 @@ namespace SilksongCoop.Core.Networking
                         // A reliable packet dropped because the reorder buffer was full must
                         // NOT be acknowledged: the sender still owns it and will retransmit
                         // once the missing sequence arrives.
-                        if (method == DeliveryMethod.ReliableOrdered && IsConnected && accepted)
+                        if ((method == DeliveryMethod.ReliableOrdered ||
+                             method == DeliveryMethod.ReliableUnordered) && IsConnected && accepted)
                         {
                             byte[] ackPayload = new byte[5];
                             ackPayload[0] = channel;
                             Buffer.BlockCopy(BitConverter.GetBytes(sequence), 0, ackPayload, 1, 4);
-                            SendEnvelope(UdpFrameType.Ack, channel, sequence, DeliveryMethod.Unreliable, ackPayload);
+                            SendEnvelope(UdpFrameType.Ack, channel, sequence, method, ackPayload);
                         }
                         break;
 
@@ -1101,13 +1169,9 @@ namespace SilksongCoop.Core.Networking
                             byte ackChannel = payload[0];
                             uint ackSeq = BitConverter.ToUInt32(payload.Slice(1, 4));
 
-                            // O(1) removal using index
-                            if (_unacknowledgedIndex.TryGetValue((ackChannel, ackSeq), out var node))
-                            {
-                                ReturnPooledBuffer(node.Value.Envelope);
-                                _unacknowledged.Remove(node);
-                                _unacknowledgedIndex.Remove((ackChannel, ackSeq));
-                            }
+                            // O(1) removal using index. The ACK envelope carries the
+                            // delivery method that owns the acknowledged sequence space.
+                            TryRemoveAcknowledged(ackChannel, method, ackSeq);
                         }
                         break;
 
@@ -1142,7 +1206,7 @@ namespace SilksongCoop.Core.Networking
                             // BUG-02: defer the event - the handler re-enters the transport
                             // (TriggerTeamWipe в†’ ExitSpectatorMode в†’ Disconnect) and must
                             // not run while _lock is held.
-                            _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerDisconnected, peer, DisconnectReason.GracefulDisconnect));
+                            _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerDisconnected, peer, DisconnectReason.PeerDisconnected, generation: _sessionGeneration));
                         }
                         break;
                 }
@@ -1230,6 +1294,26 @@ namespace SilksongCoop.Core.Networking
                     // If sequence < expected, it's a duplicate/old packet - drop silently
                     // but still ACK it so a sender that lost the original ACK can retire it.
                     return true;
+                }
+                else if (method == DeliveryMethod.ReliableUnordered)
+                {
+                    // No ordering window, but retransmissions may duplicate a packet.
+                    // Deliver once and remember the sequence so the duplicate can still
+                    // be ACKed without being applied twice.
+                    var key = (channel, sequence);
+                    if (!_receivedUnordered.Add(key))
+                    {
+                        return true;
+                    }
+
+                    _receivedUnorderedOrder.Enqueue(key);
+                    while (_receivedUnordered.Count > MaxTrackedUnorderedPackets &&
+                           _receivedUnorderedOrder.Count > 0)
+                    {
+                        _receivedUnordered.Remove(_receivedUnorderedOrder.Dequeue());
+                    }
+
+                    DispatchData(data);
                 }
                 else if (method == DeliveryMethod.Sequenced)
                 {
@@ -1342,12 +1426,31 @@ namespace SilksongCoop.Core.Networking
                 var peer = _remotePeerId.Value;
                 // BUG-03: defer dispatch - handlers call transport.Send() and must not
                 // execute while _lock is held.
-                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.DataReceived, peer, data: data));
+                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.DataReceived, peer, data: data, generation: _sessionGeneration));
             }
             catch (Exception ex)
             {
                 CoopLog.Warn($"[LiteNetLibTransport] DispatchData error: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Removes an acknowledged reliable packet. Older peers sent ACKs with the
+        /// Unreliable method byte, so fall back to both reliable sequence spaces.
+        /// </summary>
+        private bool TryRemoveAcknowledged(byte channel, DeliveryMethod method, uint sequence)
+        {
+            if (!_unacknowledgedIndex.TryGetValue((channel, method, sequence), out var node) &&
+                !_unacknowledgedIndex.TryGetValue((channel, DeliveryMethod.ReliableOrdered, sequence), out node) &&
+                !_unacknowledgedIndex.TryGetValue((channel, DeliveryMethod.ReliableUnordered, sequence), out node))
+            {
+                return false;
+            }
+
+            ReturnPooledBuffer(node.Value.Envelope);
+            _unacknowledged.Remove(node);
+            _unacknowledgedIndex.Remove((node.Value.Channel, node.Value.Method, node.Value.Sequence));
+            return true;
         }
 
         /// <summary>
@@ -1370,6 +1473,10 @@ namespace SilksongCoop.Core.Networking
 
                 foreach (var e in batch)
                 {
+                    // A handler in this batch may have started/stopped a session. Events
+                    // captured before that reset must never leak into the new session.
+                    if (e.Generation != _sessionGeneration) continue;
+
                     switch (e.Kind)
                     {
                         case DeferredEventKind.PeerConnected:
@@ -1466,7 +1573,7 @@ namespace SilksongCoop.Core.Networking
 
         private byte[] BuildEnvelope(UdpFrameType type, byte channel, uint sequence, DeliveryMethod method, ReadOnlySpan<byte> payload)
         {
-            bool includeMac = _sessionKey != null && RequiresMac(type);
+            bool includeMac = _sessionKey != null && NeedsMac(type);
             byte[] buffer = new byte[8 + payload.Length + (includeMac ? MacSizeBytes : 0)];
             buffer[0] = (byte)type;
             buffer[1] = channel;
@@ -1491,6 +1598,14 @@ namespace SilksongCoop.Core.Networking
             type == UdpFrameType.Ping ||
             type == UdpFrameType.Pong ||
             type == UdpFrameType.Disconnect;
+
+        /// <summary>
+        /// The handshake ack is normally a pre-auth frame, but once the challenge has
+        /// derived a session key it must be authenticated as well.
+        /// </summary>
+        private bool NeedsMac(UdpFrameType type) =>
+            RequiresMac(type) ||
+            (type == UdpFrameType.HandshakeAck && _sessionKey != null);
 
         private void AppendMac(byte[] buffer, int headerAndPayloadLength)
         {

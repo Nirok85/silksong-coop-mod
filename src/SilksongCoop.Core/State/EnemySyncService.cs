@@ -22,6 +22,7 @@ namespace SilksongCoop.Core.State
         private const int MaxTrackedEnemies = 1024;
 
         private readonly Dictionary<ulong, Entry> _enemies = new Dictionary<ulong, Entry>();
+        private readonly Queue<ulong> _enemyOrder = new Queue<ulong>();
         private readonly object _lock = new object();
 
         /// <summary>
@@ -40,6 +41,29 @@ namespace SilksongCoop.Core.State
             lock (_lock)
             {
                 _enemies.Clear();
+                _enemyOrder.Clear();
+            }
+        }
+
+        /// <summary>
+        /// Evicts the oldest tracked enemy instead of clearing every entry, which would
+        /// forget that earlier enemies are already dead.
+        /// </summary>
+        private void EnsureCapacity()
+        {
+            while (_enemies.Count >= MaxTrackedEnemies && _enemyOrder.Count > 0)
+            {
+                ulong oldest = _enemyOrder.Dequeue();
+                if (_enemies.Remove(oldest)) return;
+            }
+
+            if (_enemies.Count >= MaxTrackedEnemies && _enemies.Count > 0)
+            {
+                foreach (var key in _enemies.Keys)
+                {
+                    _enemies.Remove(key);
+                    return;
+                }
             }
         }
 
@@ -59,11 +83,8 @@ namespace SilksongCoop.Core.State
             {
                 if (!_enemies.TryGetValue(enemyKey, out var entry))
                 {
-                    if (_enemies.Count >= MaxTrackedEnemies)
-                    {
-                        _enemies.Clear();
-                    }
-
+                    EnsureCapacity();
+                    _enemyOrder.Enqueue(enemyKey);
                     entry = new Entry { HasState = false };
                 }
 
@@ -102,11 +123,8 @@ namespace SilksongCoop.Core.State
             {
                 if (!_enemies.TryGetValue(enemyKey, out var entry))
                 {
-                    if (_enemies.Count >= MaxTrackedEnemies)
-                    {
-                        _enemies.Clear();
-                    }
-
+                    EnsureCapacity();
+                    _enemyOrder.Enqueue(enemyKey);
                     entry = new Entry { HasState = false };
                 }
 

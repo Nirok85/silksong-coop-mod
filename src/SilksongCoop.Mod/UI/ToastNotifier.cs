@@ -119,7 +119,12 @@ namespace SilksongCoop.Mod.UI
             // Promote pending toasts into active slots
             while (_active.Count < MaxVisible && _pending.Count > 0)
             {
-                _active.Add(_pending.First!.Value);
+                // Start the lifetime when the toast actually becomes visible. Timestamping
+                // at Show() meant queued toasts could be culled instantly (or fade in
+                // already half-expired) after a burst of messages.
+                var toast = _pending.First!.Value;
+                toast.CreatedAt = now;
+                _active.Add(toast);
                 _pending.RemoveFirst();
             }
 

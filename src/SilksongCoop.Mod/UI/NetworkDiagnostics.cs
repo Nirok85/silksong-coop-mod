@@ -58,7 +58,7 @@ namespace SilksongCoop.Mod.UI
         public long BytesInPerSecond => (long)_bytesInPerSecond;
         public long PacketsOutPerSecond => (long)_packetsOutPerSecond;
         public long PacketsInPerSecond => (long)_packetsInPerSecond;
-        public float SessionDuration => _sessionActive ? (Time.time - _sessionStartTime) : _sessionDuration;
+        public float SessionDuration => _sessionActive ? (Time.unscaledTime - _sessionStartTime) : _sessionDuration;
         public float CurrentPing => _currentPing;
 
         /// <summary>
@@ -143,7 +143,7 @@ namespace SilksongCoop.Mod.UI
         public void OnSessionStarted()
         {
             _sessionActive = true;
-            _sessionStartTime = Time.time;
+            _sessionStartTime = Time.unscaledTime;
             _lastExpectedInSeq = uint.MaxValue;
             _packetsExpected = 0;
             _packetsReceived = 0;
@@ -158,7 +158,7 @@ namespace SilksongCoop.Mod.UI
         {
             if (_sessionActive)
             {
-                _sessionDuration = Time.time - _sessionStartTime;
+                _sessionDuration = Time.unscaledTime - _sessionStartTime;
             }
             _sessionActive = false;
             Reset();
@@ -288,8 +288,9 @@ namespace SilksongCoop.Mod.UI
                 _elapsed = 0f;
             }
 
-            // Sample historical data every second
-            float currentTime = Time.time;
+            // Sample historical data every second. Unscaled time keeps the graph and
+            // session timer running while the game is paused.
+            float currentTime = Time.unscaledTime;
             if (currentTime - _lastHistorySampleTime >= HistorySampleInterval)
             {
                 SampleHistory(currentTime);

@@ -234,7 +234,9 @@ namespace SilksongCoop.Mod.Visuals
         private IEnumerator ReturnGhostToPool(DashGhostInstance ghost, float delay)
         {
             // Note: yield cannot be used in try-catch blocks, so we use null checks instead
-            yield return new WaitForSeconds(delay);
+            // Realtime wait: WaitForSeconds is frozen while the game is paused, so a ghost
+            // emitted just before a pause would never return to the pool.
+            yield return new WaitForSecondsRealtime(delay);
             
             if (ghost == null || ghost.gameObject == null)
             {

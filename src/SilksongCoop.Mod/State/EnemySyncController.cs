@@ -55,8 +55,11 @@ namespace SilksongCoop.Mod.State
         private readonly Dictionary<ulong, int> _lastSnapshotHp = new Dictionary<ulong, int>();
         private readonly Dictionary<ulong, bool> _lastSnapshotDead = new Dictionary<ulong, bool>();
         private readonly Dictionary<ulong, DeadEnemy> _deadEnemies = new Dictionary<ulong, DeadEnemy>();
+        private readonly Queue<ulong> _deadEnemyOrder = new Queue<ulong>();
         private readonly Dictionary<ulong, WorldEventPacket> _worldEvents = new Dictionary<ulong, WorldEventPacket>();
+        private readonly Queue<ulong> _worldEventOrder = new Queue<ulong>();
         private readonly Dictionary<ulong, PersistentStatePacket> _persistentStates = new Dictionary<ulong, PersistentStatePacket>();
+        private readonly Queue<ulong> _persistentStateOrder = new Queue<ulong>();
         private readonly Dictionary<ulong, PersistentStatePacket> _persistentLastValue = new Dictionary<ulong, PersistentStatePacket>();
         // States that arrived while their scene was not loaded. They are retried after a
         // scene change instead of being dropped; a late joiner in another room otherwise
@@ -69,13 +72,10 @@ namespace SilksongCoop.Mod.State
         private Dictionary<ulong, PersistentItem<int>>? _intItems;
         private string _persistentIndexScene = string.Empty;
         private float _pendingPersistentRetryAt;
-        private int _pendingPersistentRetryAttempts;
         private float _pendingWorldRetryAt;
-        private int _pendingWorldRetryAttempts;
 
         private const int MaxPendingPersistentStates = 4096;
         private const int MaxPendingWorldEvents = 1024;
-        private const int MaxPendingRetryAttempts = 8;
 
         private readonly Queue<ReplayItem> _replayQueue = new Queue<ReplayItem>();
         private float _nextReplaySendTime;
@@ -106,8 +106,11 @@ namespace SilksongCoop.Mod.State
             _keyCache = new ConditionalWeakTable<HealthManager, KeyHolder>();
             _lastSnapshotHp.Clear();
             _lastSnapshotDead.Clear();
-            _sceneName = string.Empty;
             _snapshotTimer = 0f;
+
+            // Do NOT clear _sceneName here. Forcing a scene change on the next Update
+            // used to wipe the world-event/dead-enemy catch-up registries exactly when a
+            // new client connected, before they could be replayed.
 
             // The dead/world registries deliberately survive a reconnect: the next host
             // snapshot/world replay catches a newly connected client up.
@@ -119,15 +122,17 @@ namespace SilksongCoop.Mod.State
             _pendingPersistentOrder.Clear();
             _pendingWorldEvents.Clear();
             _pendingWorldEventOrder.Clear();
-            _pendingPersistentRetryAttempts = 0;
-            _pendingWorldRetryAttempts = 0;
         }
 
         private void Update()
         {
+            // Track scene changes even while disconnected. Otherwise the first connection
+            // looked like a scene change (empty _sceneName) and cleared dead enemies that
+            // were recorded while playing solo, just before their catch-up replay.
+            DetectSceneChange();
+
             if (_plugin?.SessionState?.IsConnected != true) return;
 
-            DetectSceneChange();
             PumpPendingPersistentStates();
             PumpPendingWorldEvents();
 
@@ -190,15 +195,21 @@ namespace SilksongCoop.Mod.State
             if (key == 0) return;
 
             // Register even before a peer connects so a later client is caught up.
+            if (!_deadEnemies.ContainsKey(key))
+            {
+                while (_deadEnemies.Count >= MaxDeadRegistry && _deadEnemyOrder.Count > 0)
+                {
+                    ulong oldest = _deadEnemyOrder.Dequeue();
+                    if (_deadEnemies.Remove(oldest)) break;
+                }
+                _deadEnemyOrder.Enqueue(key);
+            }
+
             _deadEnemies[key] = new DeadEnemy
             {
                 X = target.transform.position.x,
                 Y = target.transform.position.y
             };
-            if (_deadEnemies.Count > MaxDeadRegistry)
-            {
-                _deadEnemies.Clear();
-            }
 
             if (_plugin?.SessionState?.IsConnected != true) return;
 
@@ -440,9 +451,14 @@ namespace SilksongCoop.Mod.State
             };
 
             // Register even before a peer connects so a later client is caught up.
-            if (_worldEvents.Count >= 1024)
+            if (!_worldEvents.ContainsKey(key))
             {
-                _worldEvents.Clear();
+                while (_worldEvents.Count >= 1024 && _worldEventOrder.Count > 0)
+                {
+                    ulong oldest = _worldEventOrder.Dequeue();
+                    if (_worldEvents.Remove(oldest)) break;
+                }
+                _worldEventOrder.Enqueue(key);
             }
             _worldEvents[key] = packet;
 
@@ -571,13 +587,13 @@ namespace SilksongCoop.Mod.State
                     switch (packet.EventType)
                     {
                         case WorldEventType.BreakableBroken:
-                            var breakable = FindObjectByKey<Breakable>(packet.ObjectKey);
+                            var breakable = FindObjectByKey<Breakable>(packet.ObjectKey, packet.PositionX, packet.PositionY);
                             if (breakable == null) return false;
                             breakable.BreakSelf();
                             return true;
 
                         case WorldEventType.GateOpened:
-                            var gate = FindObjectByKey<Gate>(packet.ObjectKey);
+                            var gate = FindObjectByKey<Gate>(packet.ObjectKey, packet.PositionX, packet.PositionY);
                             if (gate == null) return false;
                             gate.Open();
                             return true;
@@ -590,7 +606,7 @@ namespace SilksongCoop.Mod.State
             catch (Exception ex)
             {
                 SilksongCoopPlugin.LogWarn($"[EnemySync] Failed applying world event: {ex.Message}");
-                return true;
+                return false;
             }
         }
 
@@ -610,13 +626,12 @@ namespace SilksongCoop.Mod.State
 
             // Later events for the same object supersede earlier ones.
             _pendingWorldEvents[packet.ObjectKey] = packet;
-            _pendingWorldRetryAttempts = MaxPendingRetryAttempts;
             _pendingWorldRetryAt = Time.unscaledTime + 0.25f;
         }
 
         private void PumpPendingWorldEvents()
         {
-            if (_pendingWorldEvents.Count == 0 || _pendingWorldRetryAttempts <= 0) return;
+            if (_pendingWorldEvents.Count == 0) return;
             if (Time.unscaledTime < _pendingWorldRetryAt) return;
 
             List<ulong>? applied = null;
@@ -631,13 +646,13 @@ namespace SilksongCoop.Mod.State
                 for (int i = 0; i < applied.Count; i++)
                     _pendingWorldEvents.Remove(applied[i]);
 
-                _pendingWorldRetryAttempts = MaxPendingRetryAttempts;
                 _pendingWorldRetryAt = Time.unscaledTime + 0.5f;
             }
             else
             {
-                _pendingWorldRetryAttempts--;
-                _pendingWorldRetryAt = Time.unscaledTime + 0.75f;
+                // Keep retrying at a slower cadence. The target may simply not be active
+                // yet (lazy room load), so giving up after a few attempts loses state.
+                _pendingWorldRetryAt = Time.unscaledTime + 5f;
             }
 
             while (_pendingWorldEventOrder.Count > 0 &&
@@ -670,10 +685,18 @@ namespace SilksongCoop.Mod.State
                 Value = value
             };
 
-            if (_persistentStates.Count >= 2048)
+            if (!_persistentStates.ContainsKey(key))
             {
-                _persistentStates.Clear();
-                _persistentLastValue.Clear();
+                while (_persistentStates.Count >= 2048 && _persistentStateOrder.Count > 0)
+                {
+                    ulong oldest = _persistentStateOrder.Dequeue();
+                    if (_persistentStates.Remove(oldest))
+                    {
+                        _persistentLastValue.Remove(oldest);
+                        break;
+                    }
+                }
+                _persistentStateOrder.Enqueue(key);
             }
 
             _persistentStates[key] = packet;
@@ -702,6 +725,7 @@ namespace SilksongCoop.Mod.State
             catch (Exception ex)
             {
                 SilksongCoopPlugin.LogWarn($"[EnemySync] Failed applying persistent state: {ex.Message}");
+                CachePendingPersistentState(packet);
                 return;
             }
 
@@ -719,39 +743,47 @@ namespace SilksongCoop.Mod.State
         /// </summary>
         private bool TryApplyPersistentState(PersistentStatePacket packet)
         {
-            if (packet.ValueType == PersistentValueType.Bool)
+            try
             {
-                if (_boolItems == null || !_boolItems.TryGetValue(packet.ItemKey, out var item) || item == null)
-                    return false;
-
-                bool value = packet.Value != 0;
-                if (item.GetCurrentValue() == value) return true;
-
-                using (RemoteApplyScope.Begin())
+                if (packet.ValueType == PersistentValueType.Bool)
                 {
-                    item.SetValueOverride(value);
-                    item.SaveState();
+                    if (_boolItems == null || !_boolItems.TryGetValue(packet.ItemKey, out var item) || item == null)
+                        return false;
+
+                    bool value = packet.Value != 0;
+                    if (item.GetCurrentValue() == value) return true;
+
+                    using (RemoteApplyScope.Begin())
+                    {
+                        item.SetValueOverride(value);
+                        item.SaveState();
+                    }
+                    return true;
                 }
+
+                if (packet.ValueType == PersistentValueType.Int)
+                {
+                    if (_intItems == null || !_intItems.TryGetValue(packet.ItemKey, out var item) || item == null)
+                        return false;
+
+                    if (item.GetCurrentValue() == packet.Value) return true;
+
+                    using (RemoteApplyScope.Begin())
+                    {
+                        item.SetValueOverride(packet.Value);
+                        item.SaveState();
+                    }
+                    return true;
+                }
+
+                // Unknown value type: acknowledged and discarded (the validator rejects new ones).
                 return true;
             }
-
-            if (packet.ValueType == PersistentValueType.Int)
+            catch (Exception ex)
             {
-                if (_intItems == null || !_intItems.TryGetValue(packet.ItemKey, out var item) || item == null)
-                    return false;
-
-                if (item.GetCurrentValue() == packet.Value) return true;
-
-                using (RemoteApplyScope.Begin())
-                {
-                    item.SetValueOverride(packet.Value);
-                    item.SaveState();
-                }
-                return true;
+                SilksongCoopPlugin.LogWarn($"[EnemySync] Failed applying persistent state: {ex.Message}");
+                return false;
             }
-
-            // Unknown value type: acknowledged and discarded (the validator rejects new ones).
-            return true;
         }
 
         private void CachePendingPersistentState(PersistentStatePacket packet)
@@ -769,7 +801,6 @@ namespace SilksongCoop.Mod.State
             }
 
             _pendingPersistentStates[packet.ItemKey] = packet;
-            _pendingPersistentRetryAttempts = MaxPendingRetryAttempts;
             _pendingPersistentRetryAt = Time.unscaledTime + 0.25f;
         }
 
@@ -817,7 +848,7 @@ namespace SilksongCoop.Mod.State
 
         private void PumpPendingPersistentStates()
         {
-            if (_pendingPersistentStates.Count == 0 || _pendingPersistentRetryAttempts <= 0) return;
+            if (_pendingPersistentStates.Count == 0) return;
             if (Time.unscaledTime < _pendingPersistentRetryAt) return;
 
             EnsurePersistentIndex();
@@ -834,15 +865,13 @@ namespace SilksongCoop.Mod.State
                 for (int i = 0; i < applied.Count; i++)
                     _pendingPersistentStates.Remove(applied[i]);
 
-                _pendingPersistentRetryAttempts = MaxPendingRetryAttempts;
                 _pendingPersistentRetryAt = Time.unscaledTime + 0.5f;
             }
             else
             {
-                // Give the scene a few more frames to finish loading, then wait for the
-                // next scene change instead of scanning the same scene forever.
-                _pendingPersistentRetryAttempts--;
-                _pendingPersistentRetryAt = Time.unscaledTime + 0.75f;
+                // Keep retrying at a slower cadence; the object may activate later in the
+                // same scene (lazy room loading) and must not be dropped permanently.
+                _pendingPersistentRetryAt = Time.unscaledTime + 5f;
             }
 
             while (_pendingPersistentOrder.Count > 0 &&
@@ -871,18 +900,34 @@ namespace SilksongCoop.Mod.State
             }
         }
 
-        private static T? FindObjectByKey<T>(ulong key) where T : Component
+        private static T? FindObjectByKey<T>(ulong key, float x, float y) where T : Component
         {
             var objects = UnityEngine.Object.FindObjectsByType<T>(FindObjectsSortMode.None);
+            T? nearest = null;
+            float nearestSq = 2.5f * 2.5f;
+
             for (int i = 0; i < objects.Length; i++)
             {
                 var component = objects[i];
                 if (component == null) continue;
                 if (WorldObjectKey.Compute(component.transform) == key)
                     return component;
+
+                if (float.IsNaN(x) || float.IsNaN(y)) continue;
+
+                float dx = component.transform.position.x - x;
+                float dy = component.transform.position.y - y;
+                float distanceSq = dx * dx + dy * dy;
+                if (distanceSq <= nearestSq)
+                {
+                    nearestSq = distanceSq;
+                    nearest = component;
+                }
             }
 
-            return null;
+            // A sibling-index mismatch can change the hash while the object is still at
+            // the authoritative position; use the same proximity fallback as enemies.
+            return nearest;
         }
 
         #endregion
@@ -958,8 +1003,13 @@ namespace SilksongCoop.Mod.State
             _lastSnapshotHp.Clear();
             _lastSnapshotDead.Clear();
             _deadEnemies.Clear();
-            _worldEvents.Clear();
+            _deadEnemyOrder.Clear();
             _service.Reset();
+
+            // WorldEvent records are permanent (breakables/gates survive scene loads), so
+            // they intentionally survive a scene change and remain available for late-join
+            // catch-up. Dead-enemy records are cleared because ordinary enemies respawn when
+            // their scene is reloaded.
 
             // The scene lookup indexes are stale; the pending persistent-state cache is
             // retried once the new scene has finished loading.
@@ -968,12 +1018,10 @@ namespace SilksongCoop.Mod.State
             _persistentIndexScene = string.Empty;
             if (_pendingPersistentStates.Count > 0)
             {
-                _pendingPersistentRetryAttempts = MaxPendingRetryAttempts;
                 _pendingPersistentRetryAt = Time.unscaledTime + 0.25f;
             }
             if (_pendingWorldEvents.Count > 0)
             {
-                _pendingWorldRetryAttempts = MaxPendingRetryAttempts;
                 _pendingWorldRetryAt = Time.unscaledTime + 0.25f;
             }
         }

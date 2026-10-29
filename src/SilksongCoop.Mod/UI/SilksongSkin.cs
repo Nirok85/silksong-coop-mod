@@ -90,6 +90,7 @@ namespace SilksongCoop.Mod.UI
 
         // ── Cached skin (built once) ───────────────────────────────────────────
         private static GUISkin? _cached;
+        private static Font? _font;
         private static Texture2D? _texBgDeepest, _texBgPanel, _texBgField, _texBgSubtle;
         private static Texture2D? _texGold, _texGoldBright, _texGoldDim;
         private static Texture2D? _texWhite; // 1x1 pure white for DrawTexture bars
@@ -124,7 +125,21 @@ namespace SilksongCoop.Mod.UI
         /// </summary>
         public static void Release()
         {
-            _cached = null;
+            // The skin is an Instantiate() clone and the font is created at runtime; both
+            // are native objects that outlive the managed references without an explicit
+            // Destroy.
+            if (_cached != null)
+            {
+                UnityEngine.Object.Destroy(_cached);
+                _cached = null;
+            }
+
+            if (_font != null)
+            {
+                UnityEngine.Object.Destroy(_font);
+                _font = null;
+            }
+
             DestroyTexture(ref _texBgDeepest);
             DestroyTexture(ref _texBgPanel);
             DestroyTexture(ref _texBgField);
@@ -175,7 +190,9 @@ namespace SilksongCoop.Mod.UI
             _texWhite     = MakeTex(Color.white);
 
             // ── Font setup (use Unity's default font at various sizes) ─────────
-            var font = Font.CreateDynamicFontFromOSFont("Segoe UI", 14);
+            // Cached so Release() can destroy the runtime-created font.
+            _font = Font.CreateDynamicFontFromOSFont("Segoe UI", 14);
+            var font = _font;
 
             // ── WINDOW ──────────────────────────────────────────────────────────
             skin.window = new GUIStyle(skin.window)

@@ -4,7 +4,7 @@
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
 ![Loader](https://img.shields.io/badge/ModLoader-BepInEx%205.4.x-purple)
 ![Tests](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)
-![Version](https://img.shields.io/badge/Version-2.2.0-success)
+![Version](https://img.shields.io/badge/Version-2.2.1-success)
 
 **[🇷🇺 Русская версия](README.ru.md)**
 
@@ -81,7 +81,7 @@ No other downloads required.
 
 ### Method A — Release Package (Recommended)
 
-The `SilksongCoop_v2.2.0.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21, HarmonyX and the mod DLLs.
+The `SilksongCoop_v2.2.1.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21, HarmonyX and the mod DLLs.
 
 1. Close the game if it is running.
 2. Open the Silksong install folder in Steam (Manage → Browse local files). Typical path:
@@ -99,7 +99,7 @@ The `SilksongCoop_v2.2.0.zip` from the [Releases](https://github.com/Nirok85/sil
 ### Method B — Manual Install (from source build)
 
 If you already have BepInEx 5.4.x installed (any OS, including Linux/macOS), grab
-`SilksongCoop_v2.2.0_plugin-only.zip` from the release page — it contains just the two DLLs,
+`SilksongCoop_v2.2.1_plugin-only.zip` from the release page — it contains just the two DLLs,
 a default config and these instructions.
 
 1. Install [BepInEx 5.4.x (x64)](https://github.com/BepInEx/BepInEx/releases) into the game root (so that `BepInEx\` and `winhttp.dll` appear next to the game exe).
@@ -237,24 +237,32 @@ silksong_coop_mod/
 │   ├── SilksongCoop.Core/            # Platform-independent core (netstandard2.1)
 │   │   ├── Networking/               # INetworkTransport abstraction, built-in UDP transport, RoomCodeCodec
 │   │   │   ├── ConnectionAuthenticator.cs   # Challenge-response authentication
+│   │   │   ├── AdaptiveTickRate.cs          # 30→15 Hz tick scaling on RTT/loss
+│   │   │   ├── InterestManager.cs           # Area-of-interest filtering with hysteresis
 │   │   │   └── RateLimiter.cs               # Token-bucket rate limiting
 │   │   ├── Protocol/                 # 12-byte binary protocol, PacketReader/Writer
+│   │   │   ├── PacketBatch.cs               # Aggregated datagram framing
 │   │   │   └── Packets/              # Transform, vitals, currency, death, scene packets
 │   │   ├── Interpolation/            # Hermite splines, snapshot buffer, Dead Reckoning
-│   │   ├── State/                    # Session, death, vitals & wallet state machines
+│   │   ├── DI/                        # Lightweight service container
+│   │   ├── Events/                    # Typed event bus
+│   │   ├── Pooling/                   # Object pool helpers
+│   │   ├── State/                    # Session, death, vitals & wallet state machines, desync detector
 │   │   └── Visuals/                  # HSV/Rodrigues color-space rotation math
 │   │
 │   └── SilksongCoop.Mod/             # BepInEx / HarmonyX plugin for Silksong
 │       ├── Clones/                   # RemoteHornetSpawner + RemotePlayerController
 │       ├── Visuals/                  # PaletteSwapController (CAN_HUESHIFT), DashTrailController
 │       ├── Hooks/                    # Harmony hooks (HeroVitals, Currency, Death, Inventory)
-│       ├── Networking/               # SteamP2PTransport (Steamworks.NET P2P)
+│       ├── Networking/               # SteamP2PTransport (Steamworks.NET P2P), PacketBatcher
+│       ├── Services/                 # NetworkOrchestrator, vitals/inventory/death sync managers
 │       ├── Settings/                 # KeybindManager, QualityPresetManager
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 687 tests
+    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 713 tests
         ├── TestHarness/              # DualClientTestHarness (2-client simulation, no Unity)
+        ├── EndToEnd/                 # Real UDP loopback connect/reconnect tests
         ├── Tier1_FeatureTests/       # Requirement coverage tests (F01–F28)
         ├── Tier2_BoundaryTests/      # Boundary value tests
         ├── Tier3_PairwiseTests/      # Mechanic interaction tests
@@ -275,11 +283,11 @@ dotnet test SilksongCoop.sln -c Release
 Current result:
 
 ```text
-Total tests:   687
-Passed:        687 (100.0%)
+Total tests:   713
+Passed:        713 (100.0%)
 Failed:        0
 Skipped:       0
-Duration:      ~3 s
+Duration:      ~6 s
 Build:         0 errors, 0 warnings (Debug + Release)
 ```
 
@@ -307,7 +315,7 @@ The mod is in active development. The following limitations are by design or are
 * **F11** — network diagnostics overlay (ping/loss/bandwidth graphs, top-right corner).
 * Keys are remappable in `BepInEx\config\com.silksong.coop.cfg`, section `[Keybinds]`.
 
-If keys don't respond: check that `BepInEx\LogOutput.log` shows the plugin loading (look for `Initializing Silksong Co-op Multiplayer v2.2.0...`). Ensure no other mod or OS utility (e.g. screen recorders, media players) binds F10/F11 globally.
+If keys don't respond: check that `BepInEx\LogOutput.log` shows the plugin loading (look for `Initializing Silksong Co-op Multiplayer v2.2.1...`). Ensure no other mod or OS utility (e.g. screen recorders, media players) binds F10/F11 globally.
 </details>
 
 <details>

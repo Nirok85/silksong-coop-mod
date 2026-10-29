@@ -1,5 +1,8 @@
 using System;
 using System.Net;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.State;
@@ -8,11 +11,55 @@ using Xunit;
 namespace SilksongCoop.Tests
 {
     /// <summary>
-    /// Regression coverage for protocol v4: 80-bit room-code secret, derived session key and
-    /// MAC-authenticated post-handshake datagrams.
+    /// Regression coverage for protocol v4/v5: 80-bit room-code secret, derived session key,
+    /// MAC-authenticated post-handshake datagrams and the authenticated handshake ack.
     /// </summary>
     public class ProtocolV4SecurityTests
     {
+        [Fact]
+        public void ProtocolVersion_IsSix_AndSessionKeyUsesV6DomainLabel()
+        {
+            Assert.Equal(6, LiteNetLibTransport.ProtocolVersion);
+
+            const string code = "SK-PROTOCOL-FIVE";
+            byte[] nonce = new byte[16];
+            for (int i = 0; i < nonce.Length; i++) nonce[i] = (byte)(i + 1);
+
+            byte[] key = new ConnectionAuthenticator().ComputeSessionKey(nonce, code);
+
+            using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(code));
+            byte[] label = Encoding.UTF8.GetBytes("SilksongCoop-Session-v6");
+            byte[] message = new byte[label.Length + nonce.Length];
+            Buffer.BlockCopy(label, 0, message, 0, label.Length);
+            Buffer.BlockCopy(nonce, 0, message, label.Length, nonce.Length);
+
+            Assert.Equal(hmac.ComputeHash(message), key);
+        }
+
+        [Fact]
+        public void HandshakeAck_RequiresMacOnceSessionKeyIsDerived()
+        {
+            using var transport = new LiteNetLibTransport(1, "Host");
+
+            const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
+            var keyField = typeof(LiteNetLibTransport).GetField("_sessionKey", flags);
+            var needsMac = typeof(LiteNetLibTransport).GetMethod("NeedsMac", flags);
+            var frameType = typeof(LiteNetLibTransport).GetNestedType("UdpFrameType", BindingFlags.NonPublic);
+            Assert.NotNull(keyField);
+            Assert.NotNull(needsMac);
+            Assert.NotNull(frameType);
+
+            object ackFrame = Enum.Parse(frameType!, "HandshakeAck");
+            Assert.False((bool)needsMac!.Invoke(transport, new[] { ackFrame })!);
+
+            // A no-code session never derives a key, so the legacy ack stays unauthenticated.
+            keyField!.SetValue(transport, new byte[32]);
+            Assert.True((bool)needsMac.Invoke(transport, new[] { ackFrame })!);
+
+            keyField.SetValue(transport, null);
+            Assert.False((bool)needsMac.Invoke(transport, new[] { ackFrame })!);
+        }
+
         [Fact]
         public void RoomCode_WithSecret_UsesTwentyEightCharactersAndRoundtrips()
         {

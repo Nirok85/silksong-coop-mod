@@ -117,6 +117,16 @@ namespace SilksongCoop.Core.Protocol
         }
 
         /// <summary>
+        /// Writes a raw byte span to the buffer.
+        /// </summary>
+        public void WriteRaw(ReadOnlySpan<byte> data)
+        {
+            EnsureCapacity(data.Length);
+            data.CopyTo(_buffer.Slice(_position));
+            _position += data.Length;
+        }
+
+        /// <summary>
         /// Writes a 64-bit unsigned integer to the buffer.
         /// </summary>
         /// <param name="value">The UInt64 value to write.</param>
