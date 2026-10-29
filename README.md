@@ -388,6 +388,9 @@ ManagedDir="/path/to/Hollow Knight Silksong_Data/Managed" bash scripts/package-r
 The script builds both projects in Release with warnings-as-errors, bundles BepInEx 5.4.21 x64 and
 writes the packages to `dist/`. The version is taken from `SilksongCoop.Mod.csproj`.
 
+The full tag-and-publish checklist (version bump, verification, `gh release create`) is in
+[docs/RELEASING.md](docs/RELEASING.md).
+
 See [CHANGELOG.md](CHANGELOG.md) for version history and [ROADMAP.md](ROADMAP.md) for the improvement plan.
 
 ---

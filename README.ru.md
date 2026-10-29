@@ -387,6 +387,9 @@ ManagedDir="/path/to/Hollow Knight Silksong_Data/Managed" bash scripts/package-r
 Скрипт собирает оба проекта в Release с `TreatWarningsAsErrors`, добавляет BepInEx 5.4.21 x64
 и складывает пакеты в `dist/`. Версия берётся из `SilksongCoop.Mod.csproj`.
 
+Полный чек-лист публикации (подъём версии, проверка, `gh release create`) —
+в [docs/RELEASING.md](docs/RELEASING.md).
+
 История версий — в [CHANGELOG.md](CHANGELOG.md), план улучшений — в [ROADMAP.md](ROADMAP.md).
 
 ---
