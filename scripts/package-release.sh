@@ -47,7 +47,10 @@ done
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# Absolutize: later steps `cd` into staging directories, so a relative OUT_DIR
+# would resolve against the wrong cwd and zip would fail.
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 
 # ---------------- plugin-only package ----------------
 PLUGIN="$WORK/plugin"
