@@ -55,18 +55,26 @@ namespace SilksongCoop.Mod.Clones
         private ushort _stateFlags;
         private int _currentClipHash;
         private float _currentNormalizedTime;
-        private uint _lastTimestampMs;
-        private bool _hasClockOffset;
-        private double _clockOffsetMs;
-        private bool _isInSameScene = true;
+        private readonly InterpolationClock _clock = new InterpolationClock();
+        private double _senderClockFrozenSinceUnscaled = -1.0;
+
+        // Unknown until the first transform or an explicit SceneTransition says otherwise.
+        // Starting optimistic made the first desync round compare scene names before any
+        // packet had confirmed that both players were in the same room.
+        private bool _isInSameScene;
+
+        // Death visibility is independent of scene evidence: a partner that died in this
+        // room is hidden, but that does not make their scene unknown.
+        private bool _partnerAlive = true;
 
         public NetworkPeerId PeerId => _peerId;
         public bool IsPlayer2 => _isPlayer2;
         public SnapshotBuffer Buffer => _buffer;
         public bool FacingRight => _facingRight;
         public ushort StateFlags => _stateFlags;
-        public uint LastTimestampMs => _lastTimestampMs;
+        public uint LastTimestampMs => _clock.LastTimestampMs;
         public bool IsInSameScene => _isInSameScene;
+        public bool IsPresentInScene => _isInSameScene && _partnerAlive;
 
         #endregion
 
@@ -89,10 +97,10 @@ namespace SilksongCoop.Mod.Clones
         {
             _peerId = peerId;
             _isPlayer2 = isPlayer2;
-            _lastTimestampMs = 0;
-            _hasClockOffset = false;
-            _clockOffsetMs = 0.0;
-            _isInSameScene = true;
+            _clock.Reset();
+            _senderClockFrozenSinceUnscaled = -1.0;
+            _isInSameScene = false;
+            _partnerAlive = true;
             _buffer.Clear();
             float hueShift = SilksongCoopPlugin.Instance?.Player2HueShiftConfig?.Value
                 ?? PaletteSwapMath.Player2HueShift;
@@ -103,7 +111,7 @@ namespace SilksongCoop.Mod.Clones
                 // BUG-N9: clones are ticked by this controller with real ground/wall flags.
                 _dashTrail.SelfTick = false;
             }
-            SetVisibility(true);
+            SetVisibility(false);
         }
 
         /// <summary>
@@ -130,12 +138,31 @@ namespace SilksongCoop.Mod.Clones
             if (present && !_isInSameScene)
             {
                 _isInSameScene = true;
-                SetVisibility(true);
+                SetVisibility(_partnerAlive);
             }
             else if (!present && _isInSameScene)
             {
                 _isInSameScene = false;
                 SetVisibility(false);
+                _buffer.Clear();
+            }
+        }
+
+        /// <summary>
+        /// Toggles visibility for the partner's death/revive lifecycle without changing
+        /// scene evidence. A revive in another room must not make the clone reappear there.
+        /// </summary>
+        /// <param name="alive">True when the partner is alive.</param>
+        public void SetPartnerAlive(bool alive)
+        {
+            if (_partnerAlive == alive) return;
+
+            _partnerAlive = alive;
+            SetVisibility(alive && _isInSameScene);
+            if (!alive)
+            {
+                // Dead players stop streaming transforms; buffered snapshots would keep
+                // interpolating their last velocity on the next revive.
                 _buffer.Clear();
             }
         }
@@ -189,6 +216,7 @@ namespace SilksongCoop.Mod.Clones
         /// <param name="normalizedTime">Normalized animation time.</param>
         /// <param name="timestampMs">Packet timestamp in milliseconds.</param>
         /// <param name="isSameScene">True if the remote player is in the same scene.</param>
+        /// <param name="sequence">Transform sequence; orders updates when the sender clock is frozen.</param>
         public void UpdateTransform(
             float posX, float posY,
             float velX, float velY,
@@ -197,7 +225,8 @@ namespace SilksongCoop.Mod.Clones
             int animClipHash,
             ushort normalizedTime,
             uint timestampMs,
-            bool isSameScene = true)
+            bool isSameScene = true,
+            uint sequence = 0)
         {
             // CRIT-01: If remote player is in a different room/scene, hide clone and ignore position
             if (!isSameScene)
@@ -208,6 +237,8 @@ namespace SilksongCoop.Mod.Clones
                     SetVisibility(false);
                     _buffer.Clear();
                 }
+                _clock.Reset();
+                _senderClockFrozenSinceUnscaled = -1.0;
                 return;
             }
             else
@@ -215,77 +246,93 @@ namespace SilksongCoop.Mod.Clones
                 if (!_isInSameScene)
                 {
                     _isInSameScene = true;
-                    SetVisibility(true);
+                    // Only show if alive
+                    SetVisibility(_partnerAlive);
                     transform.position = new Vector3(posX, posY, transform.position.z);
-                    _hasClockOffset = false;
+                    _clock.Reset();
                     _buffer.Clear();
                 }
             }
 
-            // Proper packet ordering: handle both normal progression and clock wrap detection
-            // A packet is newer if:
-            // 1. LastTimestampMs is 0 (first packet), OR
-            // 2. Timestamp is ahead (normal case), OR
-            // 3. Timestamp is behind by more than 10 seconds (clock wrap / session reset)
-            // The 10-second threshold prevents rejecting legitimate session resets while
-            // still filtering out stale packets from minor network jitter.
-            long diff = (long)timestampMs - (long)_lastTimestampMs;
-            bool isNewerPacket = !_hasClockOffset || diff > 0 || diff < -10000;
-            if (isNewerPacket)
+            // The sender stamps packets with its own game clock, which freezes while it is
+            // paused. InterpolationClock maps that clock onto this client's Time.timeAsDouble,
+            // re-anchors after a one-sided pause, and uses the sequence to accept updates that
+            // share a timestamp instead of dropping them.
+            double localNowMs = Time.timeAsDouble * 1000.0;
+            bool wasCalibrated = _clock.HasOffset;
+            if (!_clock.TryMap(
+                    timestampMs,
+                    sequence,
+                    localNowMs,
+                    Time.timeScale > 0f,
+                    out double mappedTimestampMs,
+                    out bool reanchored,
+                    out bool clockFrozen))
             {
-                // The sender's timestamps come from its own session clock. Map them into
-                // this client's local clock once so SnapshotBuffer can compare against
-                // Time.timeAsDouble during interpolation. Without this the buffer never
-                // brackets the render time and the clone freezes at its spawn point.
-                double localNowMs = Time.timeAsDouble * 1000.0;
-                if (!_hasClockOffset)
-                {
-                    _clockOffsetMs = localNowMs - timestampMs;
-                    _hasClockOffset = true;
-                    // Immediately snap position on first received packet to prevent staying at spawn/default coordinates
-                    transform.position = new Vector3(posX, posY, transform.position.z);
-                }
-                else if (diff < -10000)
-                {
-                    // Timestamp wrap (uint) or a sender-side clock reset: the old offset
-                    // would map every new packet far into the past and freeze the clone.
-                    _clockOffsetMs = localNowMs - timestampMs;
-                    _buffer.Clear();
-                }
-                double mappedTimestampMs = timestampMs + _clockOffsetMs;
-
-                _buffer.AddSnapshot(new TransformSnapshot
-                {
-                    Tick = timestampMs,
-                    TimestampMs = mappedTimestampMs,
-                    PositionX = posX,
-                    PositionY = posY,
-                    VelocityX = velX,
-                    VelocityY = velY,
-                    FacingRight = facingDirection != 0,
-                    Flags = stateFlags,
-                    AnimHash = animClipHash
-                });
-
-                _facingRight = facingDirection != 0;
-                _stateFlags = stateFlags;
-                _currentClipHash = animClipHash;
-                _currentNormalizedTime = AnimationClipHasher.DecodeNormalizedTime(normalizedTime);
-                _lastTimestampMs = timestampMs;
-
-                // Update facing direction scale immediately (scale.x: 1.0 for right, -1.0 for left)
-                transform.localScale = new Vector3(_facingRight ? 1f : -1f, 1f, 1f);
-
-                // Trigger dash trail if FlagDashing is set
-                if ((stateFlags & TransformSyncPacket.FlagDashing) != 0)
-                {
-                    bool isAirDash = (stateFlags & TransformSyncPacket.FlagGrounded) == 0;
-                    _dashTrail?.TriggerDash(isAirDash);
-                }
-
-                // Sync animation clip
-                SyncClip(animClipHash, normalizedTime);
+                return;
             }
+
+            if (!wasCalibrated)
+            {
+                // Immediately snap position on the first received packet to prevent staying at spawn/default coordinates.
+                transform.position = new Vector3(posX, posY, transform.position.z);
+            }
+            else if (reanchored)
+            {
+                // The old mapping would place every later snapshot far from the local render
+                // time; dropping stale snapshots is cheaper than interpolating across the gap.
+                _buffer.Clear();
+            }
+
+            // A live transform proves the partner is alive only if we haven't received a
+            // newer death signal. Rely on death packets as the source of truth; do not
+            // un-hide a clone that was explicitly marked dead.
+            if (!_partnerAlive)
+            {
+                // Do not auto-resurrect from stale transforms
+                return;
+            }
+
+            if (clockFrozen)
+            {
+                if (_senderClockFrozenSinceUnscaled < 0.0)
+                    _senderClockFrozenSinceUnscaled = Time.unscaledTimeAsDouble;
+            }
+            else
+            {
+                _senderClockFrozenSinceUnscaled = -1.0;
+            }            _buffer.AddSnapshot(new TransformSnapshot
+            {
+                // The sequence lets SnapshotBuffer replace the latest entry when the sender
+                // clock is frozen and several packets share one timestamp.
+                Tick = sequence != 0 ? sequence : timestampMs,
+                TimestampMs = mappedTimestampMs,
+                PositionX = posX,
+                PositionY = posY,
+                VelocityX = velX,
+                VelocityY = velY,
+                FacingRight = facingDirection != 0,
+                Flags = stateFlags,
+                AnimHash = animClipHash
+            });
+
+            _facingRight = facingDirection != 0;
+            _stateFlags = stateFlags;
+            _currentClipHash = animClipHash;
+            _currentNormalizedTime = AnimationClipHasher.DecodeNormalizedTime(normalizedTime);
+
+            // Update facing direction scale immediately (scale.x: 1.0 for right, -1.0 for left)
+            transform.localScale = new Vector3(_facingRight ? 1f : -1f, 1f, 1f);
+
+            // Trigger dash trail if FlagDashing is set
+            if ((stateFlags & TransformSyncPacket.FlagDashing) != 0)
+            {
+                bool isAirDash = (stateFlags & TransformSyncPacket.FlagGrounded) == 0;
+                _dashTrail?.TriggerDash(isAirDash);
+            }
+
+            // Sync animation clip
+            SyncClip(animClipHash, normalizedTime);
         }
 
         /// <summary>
@@ -478,8 +525,15 @@ namespace SilksongCoop.Mod.Clones
                     }
                     else
                     {
-                        // Extrapolate past newest snapshot via DeadReckoning
-                        float extrapDt = (float)(renderTime - s1.TimestampMs) / 1000f;
+                        // Extrapolate past newest snapshot via DeadReckoning, unless the
+                        // sender's game clock has been frozen for a while (paused peer).
+                        // Extrapolating a stale velocity for seconds made the clone slide
+                        // away from the paused player; hold the newest position instead.
+                        bool senderClockFrozen = _senderClockFrozenSinceUnscaled >= 0.0 &&
+                            Time.unscaledTimeAsDouble - _senderClockFrozenSinceUnscaled >= 0.3;
+                        float extrapDt = senderClockFrozen
+                            ? 0f
+                            : (float)(renderTime - s1.TimestampMs) / 1000f;
                         if (extrapDt > 0f)
                         {
                             var (extrapX, extrapY) = DeadReckoning.ExtrapolatePosition(

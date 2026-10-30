@@ -130,18 +130,6 @@ namespace SilksongCoop.Core.Protocol
         }
 
         /// <summary>
-        /// Reads a 64-bit signed integer from the buffer.
-        /// </summary>
-        /// <returns>The Int64 value.</returns>
-        public long ReadInt64()
-        {
-            EnsureAvailable(8);
-            long val = BinaryPrimitives.ReadInt64LittleEndian(_buffer.Slice(_position, 8));
-            _position += 8;
-            return val;
-        }
-
-        /// <summary>
         /// Reads a 64-bit unsigned integer from the buffer.
         /// </summary>
         /// <returns>The UInt64 value.</returns>
@@ -163,44 +151,6 @@ namespace SilksongCoop.Core.Protocol
             int intVal = BinaryPrimitives.ReadInt32LittleEndian(_buffer.Slice(_position, 4));
             _position += 4;
             return BitConverter.Int32BitsToSingle(intVal);
-        }
-
-        /// <summary>
-        /// Reads a 64-bit floating point value from the buffer.
-        /// </summary>
-        /// <returns>The double value.</returns>
-        public double ReadDouble()
-        {
-            EnsureAvailable(8);
-            long longVal = BinaryPrimitives.ReadInt64LittleEndian(_buffer.Slice(_position, 8));
-            _position += 8;
-            return BitConverter.Int64BitsToDouble(longVal);
-        }
-
-        /// <summary>
-        /// Reads a boolean value from the buffer.
-        /// </summary>
-        /// <returns>True if the byte is non-zero; otherwise, false.</returns>
-        public bool ReadBool()
-        {
-            return ReadByte() != 0;
-        }
-
-        #endregion
-
-        #region Complex Read Methods
-
-        /// <summary>
-        /// Reads a specified number of bytes from the buffer.
-        /// </summary>
-        /// <param name="count">Number of bytes to read.</param>
-        /// <returns>A span containing the bytes read.</returns>
-        public ReadOnlySpan<byte> ReadBytes(int count)
-        {
-            EnsureAvailable(count);
-            var slice = _buffer.Slice(_position, count);
-            _position += count;
-            return slice;
         }
 
         /// <summary>

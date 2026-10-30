@@ -112,7 +112,7 @@ namespace SilksongCoop.Core.State
                 if (tx == Guid.Empty) return;
 
                 uint seq;
-                uint ts = (uint)Environment.TickCount;
+                uint ts = NetworkClock.NowMs;
 
                 lock (_syncLock)
                 {
@@ -160,7 +160,7 @@ namespace SilksongCoop.Core.State
                 if (tx == Guid.Empty) return;
 
                 uint seq;
-                uint ts = (uint)Environment.TickCount;
+                uint ts = NetworkClock.NowMs;
 
                 lock (_syncLock)
                 {

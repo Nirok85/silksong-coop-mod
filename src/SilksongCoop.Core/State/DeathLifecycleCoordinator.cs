@@ -109,7 +109,7 @@ namespace SilksongCoop.Core.State
 
                     var packet = new DeathLifecyclePacket
                     {
-                        Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, (uint)Environment.TickCount),
+                        Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, NetworkClock.NowMs),
                         EventType = DeathEventType.SoloDeathOccurred,
                         CoordinateX = deathX,
                         CoordinateY = deathY,
@@ -128,7 +128,7 @@ namespace SilksongCoop.Core.State
 
                     var packet = new DeathLifecyclePacket
                     {
-                        Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, (uint)Environment.TickCount),
+                        Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, NetworkClock.NowMs),
                         EventType = DeathEventType.TeamWipeOccurred,
                         CoordinateX = deathX,
                         CoordinateY = deathY,
@@ -166,7 +166,7 @@ namespace SilksongCoop.Core.State
 
                     var packet = new DeathLifecyclePacket
                     {
-                        Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, (uint)Environment.TickCount),
+                        Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, NetworkClock.NowMs),
                         EventType = DeathEventType.TeamWipeOccurred,
                         CoordinateX = partnerDeathX,
                         CoordinateY = partnerDeathY,
@@ -228,7 +228,7 @@ namespace SilksongCoop.Core.State
 
                             var packet = new DeathLifecyclePacket
                             {
-                                Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, (uint)Environment.TickCount),
+                                Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, NetworkClock.NowMs),
                                 EventType = DeathEventType.PartnerReviveTrigger,
                                 CoordinateX = LastPartnerPosition.X,
                                 CoordinateY = LastPartnerPosition.Y,
@@ -404,7 +404,7 @@ namespace SilksongCoop.Core.State
 
             var packet = new DeathLifecyclePacket
             {
-                Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, (uint)Environment.TickCount),
+                Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, NetworkClock.NowMs),
                 EventType = notifyPartner
                     ? DeathEventType.TeamWipeOccurred
                     : DeathEventType.SoloBenchRespawn,
@@ -423,7 +423,7 @@ namespace SilksongCoop.Core.State
         {
             var packet = new DeathLifecyclePacket
             {
-                Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, (uint)Environment.TickCount),
+                Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, NetworkClock.NowMs),
                 EventType = DeathEventType.BenchCheckpointUpdate,
                 RemainingSeconds = 0f,
                 Epoch = CurrentEpoch

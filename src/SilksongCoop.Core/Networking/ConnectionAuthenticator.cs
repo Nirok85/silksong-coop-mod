@@ -50,7 +50,7 @@ namespace SilksongCoop.Core.Networking
         public byte[] ComputeSessionKey(byte[] nonce, string roomCode)
         {
             using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(roomCode));
-            byte[] label = Encoding.UTF8.GetBytes("SilksongCoop-Session-v6");
+            byte[] label = Encoding.UTF8.GetBytes(NetworkProtocol.SessionLabel);
             byte[] message = new byte[label.Length + nonce.Length];
             Buffer.BlockCopy(label, 0, message, 0, label.Length);
             Buffer.BlockCopy(nonce, 0, message, label.Length, nonce.Length);

@@ -66,28 +66,6 @@ namespace SilksongCoop.Mod.Settings
         }
 
         /// <summary>
-        /// Sets the keybind for the specified action and persists it to config.
-        /// </summary>
-        /// <param name="action">The action name.</param>
-        /// <param name="key">The key to bind.</param>
-        public void SetKeybind(string action, KeyCode key)
-        {
-            _keybinds[action] = key;
-            
-            // Persist to config
-            if (_plugin.Config != null)
-            {
-                var configEntry = _plugin.Config.Bind(
-                    "Keybinds",
-                    action,
-                    key,
-                    $"Keybind for {action}"
-                );
-                configEntry.Value = key;
-            }
-        }
-
-        /// <summary>
         /// Checks if the key for the specified action is currently pressed.
         /// </summary>
         /// <param name="action">The action name.</param>
@@ -138,39 +116,6 @@ namespace SilksongCoop.Mod.Settings
                 Debug.Log($"[Coop] New Input System detected key press: {key}");
             }
             return result;
-        }
-
-        /// <summary>
-        /// Gets a copy of all keybinds.
-        /// </summary>
-        /// <returns>Dictionary of action names to their bound keys.</returns>
-        public Dictionary<string, KeyCode> GetAllKeybinds()
-        {
-            return new Dictionary<string, KeyCode>(_keybinds);
-        }
-
-        /// <summary>
-        /// Resets all keybinds to their default values and persists them.
-        /// </summary>
-        public void ResetToDefaults()
-        {
-            InitializeDefaults();
-            
-            // Persist defaults to config
-            if (_plugin.Config != null)
-            {
-                var keys = new List<string>(_keybinds.Keys);
-                foreach (var action in keys)
-                {
-                    var configEntry = _plugin.Config.Bind(
-                        "Keybinds",
-                        action,
-                        _keybinds[action],
-                        $"Keybind for {action}"
-                    );
-                    configEntry.Value = _keybinds[action];
-                }
-            }
         }
 
         #endregion

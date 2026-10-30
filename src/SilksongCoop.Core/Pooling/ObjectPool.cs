@@ -47,15 +47,4 @@ namespace SilksongCoop.Core.Pooling
             _pool.Clear();
         }
     }
-
-    /// <summary>
-    /// Array pool helper for byte arrays.
-    /// </summary>
-    public static class ArrayPoolHelper
-    {
-        private static readonly System.Buffers.ArrayPool<byte> _bytePool = System.Buffers.ArrayPool<byte>.Shared;
-
-        public static byte[] Rent(int minimumLength) => _bytePool.Rent(minimumLength);
-        public static void Return(byte[] array) => _bytePool.Return(array);
-    }
 }

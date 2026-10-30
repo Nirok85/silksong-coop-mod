@@ -74,7 +74,6 @@ namespace SilksongCoop.Core.Protocol
             PacketType.EnemySnapshot => true,
             PacketType.WorldEvent => true,
             PacketType.PersistentState => true,
-            PacketType.Batch => true,
             _ => false
         };
 

@@ -48,13 +48,31 @@ namespace SilksongCoop.Core.Interpolation
         /// Adds a snapshot to the buffer, maintaining chronological order.
         /// Drops out-of-order or duplicate packets unless clock wrap is detected.
         /// </summary>
+        /// <remarks>
+        /// When the sender is paused its game clock stops, so several packets share one
+        /// timestamp. Those packets still carry state changes (facing, animation, position
+        /// after a one-frame nudge), and the sequence number in <see cref="TransformSnapshot.Tick"/>
+        /// identifies which is newest. The latest snapshot is replaced in place instead of
+        /// discarded; an exact duplicate leaves the buffer untouched.
+        /// </remarks>
         /// <param name="snapshot">The snapshot to add.</param>
         public void AddSnapshot(TransformSnapshot snapshot)
         {
             if (_count > 0)
             {
                 var latest = GetSnapshotAt(_count - 1);
-                if (snapshot.TimestampMs <= latest.TimestampMs)
+                if (snapshot.TimestampMs == latest.TimestampMs)
+                {
+                    if (snapshot.Tick != latest.Tick &&
+                        unchecked((int)(snapshot.Tick - latest.Tick)) > 0)
+                    {
+                        int latestIndex = _head == 0 ? _buffer.Length - 1 : _head - 1;
+                        _buffer[latestIndex] = snapshot;
+                    }
+                    return;
+                }
+
+                if (snapshot.TimestampMs < latest.TimestampMs)
                 {
                     // Fix: Check for clock wrap / session reset with proper uint wraparound handling
                     // If the new timestamp is significantly older (> 10 seconds), treat as session reset

@@ -391,7 +391,7 @@ namespace SilksongCoop.Core.State
 
             var packet = new CurrencySyncPacket
             {
-                Header = new PacketHeader(PacketType.CurrencySync, 3, 0, (uint)Environment.TickCount),
+                Header = new PacketHeader(PacketType.CurrencySync, 3, 0, NetworkClock.NowMs),
                 Currency = currency,
                 TotalWalletAmount = currentWallet,
                 DeltaAmount = (short)Math.Clamp(deltaAmount, short.MinValue, short.MaxValue),
@@ -628,7 +628,7 @@ namespace SilksongCoop.Core.State
                 }
                 var packet = new VitalsSyncPacket
                 {
-                    Header = new PacketHeader(PacketType.VitalsSync, 2, 0, (uint)Environment.TickCount),
+                    Header = new PacketHeader(PacketType.VitalsSync, 2, 0, NetworkClock.NowMs),
                     CurrentHealth = (byte)Math.Clamp(health, 0, 255),
                     CurrentSilk = (byte)Math.Clamp(silk, 0, 255),
                     MaxHealth = (byte)Math.Clamp(maxHp, 0, 255),
@@ -672,7 +672,7 @@ namespace SilksongCoop.Core.State
 
                     var packet = new CurrencySyncPacket
                     {
-                        Header = new PacketHeader(PacketType.CurrencySync, 3, 0, (uint)Environment.TickCount),
+                        Header = new PacketHeader(PacketType.CurrencySync, 3, 0, NetworkClock.NowMs),
                         Currency = CurrencyType.Rosaries,
                         TotalWalletAmount = currentRosaries,
                         DeltaAmount = 0, // Initial sync: delta 0 to avoid double-counting on receiver
@@ -695,7 +695,7 @@ namespace SilksongCoop.Core.State
 
                     var packet = new CurrencySyncPacket
                     {
-                        Header = new PacketHeader(PacketType.CurrencySync, 3, 0, (uint)Environment.TickCount),
+                        Header = new PacketHeader(PacketType.CurrencySync, 3, 0, NetworkClock.NowMs),
                         Currency = CurrencyType.ShellShards,
                         TotalWalletAmount = currentShards,
                         DeltaAmount = 0, // Initial sync: delta 0 to avoid double-counting on receiver
@@ -747,7 +747,7 @@ namespace SilksongCoop.Core.State
 
                     var packet = new CurrencySyncPacket
                     {
-                        Header = new PacketHeader(PacketType.CurrencySync, 3, 0, (uint)Environment.TickCount),
+                        Header = new PacketHeader(PacketType.CurrencySync, 3, 0, NetworkClock.NowMs),
                         Currency = claimed.Currency,
                         TotalWalletAmount = claimed.Currency == CurrencyType.Rosaries ? rosaries : shards,
                         DeltaAmount = 0,

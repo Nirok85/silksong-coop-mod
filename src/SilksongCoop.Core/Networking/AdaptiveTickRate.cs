@@ -15,13 +15,23 @@ namespace SilksongCoop.Core.Networking
         private float _lastUpdateTime;
 
         public float CurrentTickHz => _currentTickHz;
-        public float CurrentInterval => 1f / _currentTickHz;
+
+        /// <summary>
+        /// Seconds between network ticks. Never returns zero or infinity, even if the
+        /// configured tick rate was invalid.
+        /// </summary>
+        public float CurrentInterval => 1f / Math.Max(_minTickHz, _currentTickHz);
 
         public AdaptiveTickRate(float defaultHz = 30f)
         {
-            _defaultTickHz = defaultHz;
-            _currentTickHz = defaultHz;
-            _lastUpdateTime = 0f;
+            // A zero, negative or NaN rate would make CurrentInterval infinite and silently
+            // stop the transform stream, so fall back to the 30 Hz default.
+            if (float.IsNaN(defaultHz) || float.IsInfinity(defaultHz) || defaultHz <= 0f)
+                defaultHz = 30f;
+
+            _defaultTickHz = Math.Min(Math.Max(defaultHz, _minTickHz), _maxTickHz);
+            _currentTickHz = _defaultTickHz;
+            _lastUpdateTime = float.NegativeInfinity; // apply the first sample immediately
         }
 
         /// <summary>
@@ -63,6 +73,7 @@ namespace SilksongCoop.Core.Networking
         public void Reset()
         {
             _currentTickHz = _defaultTickHz;
+            _lastUpdateTime = float.NegativeInfinity;
         }
     }
 }

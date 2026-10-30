@@ -5,9 +5,9 @@ namespace SilksongCoop.Core.Networking
     /// </summary>
     /// <remarks>
     /// The values are part of the runtime contract between both peers, not of the packet
-    /// layout: Steam polls only a fixed range of channels, and the RTT probes must not
-    /// share a channel with game traffic (on Steam channel 1 is read as transport control
-    /// and is never dispatched to the game). Keep this list in sync with
+    /// layout. Steam polls the whole <see cref="Min"/>–<see cref="Max"/> range and forwards
+    /// every channel to the game layer; <see cref="Control"/> is intercepted inside the
+    /// transport for RTT probes and never carries game data. Keep this list in sync with
     /// <c>SteamP2PTransport</c> and <c>SilksongCoopPlugin</c>.
     /// </remarks>
     public static class NetworkChannels
@@ -33,10 +33,13 @@ namespace SilksongCoop.Core.Networking
         /// <summary>Transport-level control (Steam RTT probes). Never carries game data.</summary>
         public const byte Control = 6;
 
+        /// <summary>Desync checksums. Small, unreliable, and polled like any game channel.</summary>
+        public const byte Desync = 7;
+
         /// <summary>Lowest channel a transport has to poll.</summary>
         public const byte Min = Transform;
 
         /// <summary>Highest channel a transport has to poll.</summary>
-        public const byte Max = Control;
+        public const byte Max = Desync;
     }
 }

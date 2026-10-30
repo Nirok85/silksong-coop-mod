@@ -106,27 +106,6 @@ namespace SilksongCoop.Core.Protocol
         }
 
         /// <summary>
-        /// Writes a 64-bit signed integer to the buffer.
-        /// </summary>
-        /// <param name="value">The Int64 value to write.</param>
-        public void WriteInt64(long value)
-        {
-            EnsureCapacity(8);
-            BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position, 8), value);
-            _position += 8;
-        }
-
-        /// <summary>
-        /// Writes a raw byte span to the buffer.
-        /// </summary>
-        public void WriteRaw(ReadOnlySpan<byte> data)
-        {
-            EnsureCapacity(data.Length);
-            data.CopyTo(_buffer.Slice(_position));
-            _position += data.Length;
-        }
-
-        /// <summary>
         /// Writes a 64-bit unsigned integer to the buffer.
         /// </summary>
         /// <param name="value">The UInt64 value to write.</param>
@@ -149,41 +128,9 @@ namespace SilksongCoop.Core.Protocol
             _position += 4;
         }
 
-        /// <summary>
-        /// Writes a 64-bit floating-point value to the buffer.
-        /// </summary>
-        /// <param name="value">The double value to write.</param>
-        public void WriteDouble(double value)
-        {
-            EnsureCapacity(8);
-            long longVal = BitConverter.DoubleToInt64Bits(value);
-            BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position, 8), longVal);
-            _position += 8;
-        }
-
-        /// <summary>
-        /// Writes a boolean value to the buffer as a single byte.
-        /// </summary>
-        /// <param name="value">The boolean value to write.</param>
-        public void WriteBool(bool value)
-        {
-            WriteByte(value ? (byte)1 : (byte)0);
-        }
-
         #endregion
 
         #region Complex Type Writers
-
-        /// <summary>
-        /// Writes a sequence of bytes to the buffer.
-        /// </summary>
-        /// <param name="bytes">The bytes to write.</param>
-        public void WriteBytes(ReadOnlySpan<byte> bytes)
-        {
-            EnsureCapacity(bytes.Length);
-            bytes.CopyTo(_buffer.Slice(_position));
-            _position += bytes.Length;
-        }
 
         /// <summary>
         /// Writes a UTF-8 encoded string to the buffer with a length prefix.

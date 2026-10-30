@@ -17,9 +17,9 @@ namespace SilksongCoop.Tests
     public class ProtocolV4SecurityTests
     {
         [Fact]
-        public void ProtocolVersion_IsSix_AndSessionKeyUsesV6DomainLabel()
+        public void ProtocolVersion_IsSeven_AndSessionKeyUsesV7DomainLabel()
         {
-            Assert.Equal(6, LiteNetLibTransport.ProtocolVersion);
+            Assert.Equal(7, LiteNetLibTransport.ProtocolVersion);
 
             const string code = "SK-PROTOCOL-FIVE";
             byte[] nonce = new byte[16];
@@ -28,7 +28,7 @@ namespace SilksongCoop.Tests
             byte[] key = new ConnectionAuthenticator().ComputeSessionKey(nonce, code);
 
             using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(code));
-            byte[] label = Encoding.UTF8.GetBytes("SilksongCoop-Session-v6");
+            byte[] label = Encoding.UTF8.GetBytes("SilksongCoop-Session-v7");
             byte[] message = new byte[label.Length + nonce.Length];
             Buffer.BlockCopy(label, 0, message, 0, label.Length);
             Buffer.BlockCopy(nonce, 0, message, label.Length, nonce.Length);

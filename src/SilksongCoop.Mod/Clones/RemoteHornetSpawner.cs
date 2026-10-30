@@ -179,15 +179,21 @@ namespace SilksongCoop.Mod.Clones
 
         /// <summary>
         /// BUG-B4: reports whether the remote peer's clone is currently present in the local
-        /// scene. Used by revive logic to refuse cross-scene teleports.
+        /// scene (same scene and alive). Used by revive logic to refuse cross-scene teleports
+        /// and by the AOI/desync gates to skip stale or hidden clones.
         /// </summary>
         public bool IsRemoteInSameScene(NetworkPeerId peerId)
         {
             try
             {
-                return _activeClones.TryGetValue(peerId, out var controller) &&
-                       controller != null &&
-                       controller.IsInSameScene;
+                if (!_activeClones.TryGetValue(peerId, out var controller) || controller == null)
+                    return false;
+                if (!controller.IsPresentInScene)
+                    return false;
+                // Extra sanity: ensure the clone is actually visible/active
+                if (controller.gameObject == null || !controller.gameObject.activeInHierarchy)
+                    return false;
+                return true;
             }
             catch (Exception ex)
             {
@@ -215,6 +221,27 @@ namespace SilksongCoop.Mod.Clones
             catch (Exception ex)
             {
                 SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] SetRemoteScenePresence error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Toggles the clone for the partner's death/revive lifecycle without asserting which
+        /// scene the partner is in.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
+        /// <param name="alive">True when the partner is alive.</param>
+        public void SetRemotePartnerAlive(NetworkPeerId peerId, bool alive)
+        {
+            try
+            {
+                if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
+                {
+                    controller.SetPartnerAlive(alive);
+                }
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] SetRemotePartnerAlive error: {ex.Message}");
             }
         }
 
@@ -273,6 +300,38 @@ namespace SilksongCoop.Mod.Clones
             uint timestampMs,
             bool isSameScene)
         {
+            UpdateRemoteTransform(
+                peerId, posX, posY, velX, velY, facingDirection, stateFlags,
+                animClipHash, normalizedTime, timestampMs, isSameScene, sequence: 0);
+        }
+
+        /// <summary>
+        /// Updates the remote player's transform with interpolation and animation sync.
+        /// </summary>
+        /// <param name="peerId">The peer identifier.</param>
+        /// <param name="posX">X position.</param>
+        /// <param name="posY">Y position.</param>
+        /// <param name="velX">X velocity.</param>
+        /// <param name="velY">Y velocity.</param>
+        /// <param name="facingDirection">Facing direction (0 = left, 1 = right).</param>
+        /// <param name="stateFlags">State flags (grounded, dashing, etc.).</param>
+        /// <param name="animClipHash">Animation clip hash.</param>
+        /// <param name="normalizedTime">Normalized animation time.</param>
+        /// <param name="timestampMs">Packet timestamp in milliseconds.</param>
+        /// <param name="isSameScene">True if the remote player is in the same scene.</param>
+        /// <param name="sequence">Transform sequence for ordering while the sender clock is frozen.</param>
+        public void UpdateRemoteTransform(
+            NetworkPeerId peerId,
+            float posX, float posY,
+            float velX, float velY,
+            byte facingDirection,
+            ushort stateFlags,
+            int animClipHash,
+            ushort normalizedTime,
+            uint timestampMs,
+            bool isSameScene,
+            uint sequence)
+        {
             try
             {
                 if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
@@ -285,7 +344,8 @@ namespace SilksongCoop.Mod.Clones
                         animClipHash,
                         normalizedTime,
                         timestampMs,
-                        isSameScene);
+                        isSameScene,
+                        sequence);
                 }
             }
             catch (Exception ex)
@@ -315,7 +375,7 @@ namespace SilksongCoop.Mod.Clones
                 if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
                 {
                     // Never replay attacks while the clone is hidden in another scene.
-                    if (!controller.IsInSameScene)
+                    if (!controller.IsPresentInScene)
                     {
                         return;
                     }

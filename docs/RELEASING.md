@@ -38,7 +38,7 @@ export ManagedDir="$HOME/.steam/steam/steamapps/common/Hollow Knight Silksong/Ho
 
 ## 1. Bump the version
 
-The version lives in **six** files — a release that updates only some of them
+The version lives in **seven** files — a release that updates only some of them
 produces archives whose filenames disagree with the plugin version reported in
 `BepInEx/LogOutput.log`:
 
@@ -49,6 +49,7 @@ produces archives whose filenames disagree with the plugin version reported in
 | `src/SilksongCoop.Mod/SilksongCoopPlugin.cs` | `public const string PluginVersion` |
 | `CHANGELOG.md` | new `## [x.y.z] - YYYY-MM-DD` section |
 | `README.md`, `README.ru.md` | version badge, archive names, `Initializing ... vX.Y.Z` example |
+| `ROADMAP.md` | `Актуально на` line and the CI acceptance criterion |
 
 `assets/INSTALL.txt` needs no edit: `scripts/package-release.sh` substitutes
 `__VERSION__` while packaging.

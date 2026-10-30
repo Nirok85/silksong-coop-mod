@@ -4,7 +4,7 @@
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
 ![Loader](https://img.shields.io/badge/ModLoader-BepInEx%205.4.x-purple)
 ![Tests](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)
-![Version](https://img.shields.io/badge/Version-2.2.1-success)
+![Version](https://img.shields.io/badge/Version-2.2.2-success)
 
 **[🇬🇧 English version](README.md)**
 
@@ -81,7 +81,7 @@
 
 ### Способ A — Релизный пакет (Рекомендуется)
 
-Архив `SilksongCoop_v2.2.1.zip` со страницы [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) включает всё: BepInEx 5.4.21, HarmonyX и DLL мода.
+Архив `SilksongCoop_v2.2.2.zip` со страницы [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) включает всё: BepInEx 5.4.21, HarmonyX и DLL мода.
 
 1. Закройте игру, если она запущена.
 2. Откройте папку установки Silksong в Steam (Управление → Просмотреть локальные файлы). Типичный путь:
@@ -99,7 +99,7 @@
 ### Способ B — Ручная установка (сборка из исходников)
 
 Если BepInEx 5.4.x уже установлен (любая ОС, включая Linux/macOS), возьмите со страницы
-релизов `SilksongCoop_v2.2.1_plugin-only.zip` — там только две DLL, дефолтный конфиг и инструкция.
+релизов `SilksongCoop_v2.2.2_plugin-only.zip` — там только две DLL, дефолтный конфиг и инструкция.
 
 1. Установите [BepInEx 5.4.x (x64)](https://github.com/BepInEx/BepInEx/releases) в корень игры (чтобы появились `BepInEx\` и `winhttp.dll` рядом с exe).
 2. Соберите мод из исходников (см. [Разработка и сборка](#-разработка-и-сборка)) или возьмите DLL из релизного архива.
@@ -240,7 +240,6 @@ silksong_coop_mod/
 │   │   │   ├── InterestManager.cs           # Area-of-interest фильтрация с гистерезисом
 │   │   │   └── RateLimiter.cs               # Ограничение скорости (token bucket)
 │   │   ├── Protocol/                 # 12-байтный бинарный протокол, PacketReader/Writer
-│   │   │   ├── PacketBatch.cs               # Кадрирование агрегированных датаграмм
 │   │   │   └── Packets/              # Пакеты: трансформации, здоровье, валюта, смерть, сцены
 │   │   ├── Interpolation/            # Сплайны Эрмита, буфер снапшотов, Dead Reckoning
 │   │   ├── DI/                        # Лёгкий DI-контейнер
@@ -253,13 +252,13 @@ silksong_coop_mod/
 │       ├── Clones/                   # RemoteHornetSpawner + RemotePlayerController
 │       ├── Visuals/                  # PaletteSwapController (CAN_HUESHIFT), DashTrailController
 │       ├── Hooks/                    # Harmony-хуки (HeroVitals, Currency, Death, Inventory)
-│       ├── Networking/               # SteamP2PTransport (Steamworks.NET P2P), PacketBatcher
+│       ├── Networking/               # SteamP2PTransport (Steamworks.NET P2P)
 │       ├── Services/                 # NetworkOrchestrator, менеджеры синхронизации
 │       ├── Settings/                 # KeybindManager, QualityPresetManager
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # Набор тестов xUnit (net8.0) — 713 тестов
+    └── SilksongCoop.Tests/           # Набор тестов xUnit (net8.0) — 744 теста
         ├── TestHarness/              # DualClientTestHarness (симуляция 2 клиентов без Unity)
         ├── EndToEnd/                 # Тесты реального UDP loopback: connect/reconnect
         ├── Tier1_FeatureTests/       # Покрытие требований (F01–F28)
@@ -282,8 +281,8 @@ dotnet test SilksongCoop.sln -c Release
 Текущий результат:
 
 ```text
-Всего тестов:   713
-Пройдено:       713 (100.0%)
+Всего тестов:   744
+Пройдено:       744 (100.0%)
 Провалено:      0
 Пропущено:      0
 Время:          ~6 с
@@ -297,7 +296,7 @@ dotnet test SilksongCoop.sln -c Release
 Мод в активной разработке. Следующие ограничения — проектные или запланированы к устранению в будущих версиях:
 
 - **Только два игрока.** Мульти-пир (3+) — в планах (v3.0).
-- **Одинаковая версия игры и мода** на обеих сторонах обязательна; Steam-лобби сверяет полную версию мода, а UDP-handshake несёт ревизию протокола, поэтому несовместимые сборки отклоняются.
+- **Одинаковая версия игры и мода** на обеих сторонах обязательна; Steam-лобби сверяет полную версию мода и ревизию протокола, каждый Steam-пакет несёт эту ревизию, а UDP-handshake — свою, поэтому несовместимые сборки отклоняются.
 - **Краевые случаи фаз боссов.** HP врагов и боссов общий, хост раз в секунду присылает авторитетный снапшот, но фаза, которая реагирует только на событие `TookDamage` (а не на опрос HP), может отставать на один удар у напарника.
 - **Скриптовые двери.** `Breakable`-стены, `Gate.Open()` и состояние `PersistentBoolItem`/`PersistentIntItem` (рычаги, сундуки, тайники и большинство скриптовых дверей) зеркалируются, пока оба игрока в одной сцене. Дверь, состояние которой живёт только в PlayMaker FSM или флаге `PlayerData` без persistent-компонента, либо изменённая, пока напарник в другой сцене, остаётся локальной.
 - **Максимальные характеристики только растут.** `maxHealth`, `silkMax` и `nailUpgrades` монотонны; большее значение у одного пира никогда не понижает значение у другого.
@@ -314,7 +313,7 @@ dotnet test SilksongCoop.sln -c Release
 * **F11** — оверлей сетевой диагностики (графики пинга/потерь/трафика, правый верхний угол).
 * Клавиши настраиваются в `BepInEx\config\com.silksong.coop.cfg`, секция `[Keybinds]`.
 
-Если клавиши не отвечают: проверьте, что в `BepInEx\LogOutput.log` загружается плагин (строка `Initializing Silksong Co-op Multiplayer v2.2.1...`). Убедитесь, что ни другой мод, ни системная утилита (рекордеры, медиаплееры) не перехватывают F10/F11 глобально.
+Если клавиши не отвечают: проверьте, что в `BepInEx\LogOutput.log` загружается плагин (строка `Initializing Silksong Co-op Multiplayer v2.2.2...`). Убедитесь, что ни другой мод, ни системная утилита (рекордеры, медиаплееры) не перехватывают F10/F11 глобально.
 </details>
 
 <details>

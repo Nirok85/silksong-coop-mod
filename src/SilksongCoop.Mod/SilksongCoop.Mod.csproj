@@ -6,9 +6,9 @@
     <Nullable>enable</Nullable>
     <RootNamespace>SilksongCoop.Mod</RootNamespace>
     <AssemblyName>SilksongCoop.Mod</AssemblyName>
-    <Version>2.2.1</Version>
-    <AssemblyVersion>2.2.1.0</AssemblyVersion>
-    <FileVersion>2.2.1.0</FileVersion>
+    <Version>2.2.2</Version>
+    <AssemblyVersion>2.2.2.0</AssemblyVersion>
+    <FileVersion>2.2.2.0</FileVersion>
     <!-- 
       Configure the Managed directory path to your Silksong installation:
       Windows: D:\SteamLibrary\steamapps\common\Hollow Knight Silksong\Hollow Knight Silksong_Data\Managed

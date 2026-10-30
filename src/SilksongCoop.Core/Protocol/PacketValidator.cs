@@ -8,7 +8,11 @@ namespace SilksongCoop.Core.Protocol
     /// </summary>
     public static class PacketValidator
     {
-        // Field range limits
+        // Field range limits. Positions are in world units; the largest Silksong rooms are
+        // well below 10,000 units, so this rejects poisoned coordinates while leaving room
+        // for teleports and off-screen transitions. Velocity 1,000 units/s is far above the
+        // fastest legitimate dash/dive and blocks a modified client from injecting physics
+        // values that would destabilise Unity's solver.
         private const float MaxPositionValue = 10000f;
         private const float MaxVelocityValue = 1000f;
 

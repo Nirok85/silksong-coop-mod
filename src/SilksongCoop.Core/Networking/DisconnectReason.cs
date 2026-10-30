@@ -9,9 +9,7 @@ namespace SilksongCoop.Core.Networking
         GracefulDisconnect,
         Timeout,
         VersionMismatch,
-        LobbyFull,
         ConnectionFailed,
-        Kicked,
         /// <summary>The remote peer closed the session (UDP disconnect frame or Steam lobby leave).</summary>
         PeerDisconnected
     }

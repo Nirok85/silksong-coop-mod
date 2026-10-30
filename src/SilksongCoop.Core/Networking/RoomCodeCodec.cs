@@ -313,25 +313,6 @@ namespace SilksongCoop.Core.Networking
         }
 
         /// <summary>
-        /// Attempts to decode a secure room code (12-character format with CRC-8).
-        /// Rejects deprecated 8-character compact codes.
-        /// </summary>
-        public static bool TryDecodeSecure(string? code, out IPAddress ip, out int port)
-        {
-            ip = IPAddress.None;
-            port = 0;
-
-            if (string.IsNullOrWhiteSpace(code))
-                return false;
-
-            // Reject deprecated 8-character codes
-            if (IsDeprecatedCode(code))
-                return false;
-
-            return TryDecode(code, out ip, out port);
-        }
-
-        /// <summary>
         /// Computes an 8-bit CRC checksum for the specified data.
         /// </summary>
         /// <param name="data">The data to compute the checksum for.</param>

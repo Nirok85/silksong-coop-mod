@@ -1,19 +1,22 @@
 using System;
 using System.Buffers;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq.Expressions;
+using System.Reflection;
 using SilksongCoop.Core.Clones;
 using SilksongCoop.Core.Events;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol;
 using SilksongCoop.Core.Protocol.Packets;
 using SilksongCoop.Core.State;
-using SilksongCoop.Mod.Networking;
 using UnityEngine;
 
 namespace SilksongCoop.Mod.Services
 {
     /// <summary>
-    /// Orchestrates network broadcasting, adaptive tick rate, interest management and
-    /// packet batching. This extracts the transform/network hot-path from the main plugin.
+    /// Orchestrates network broadcasting, adaptive tick rate and interest management.
+    /// This extracts the transform/network hot-path from the main plugin.
     /// </summary>
     public class NetworkOrchestrator : ISyncOrchestrator
     {
@@ -23,17 +26,13 @@ namespace SilksongCoop.Mod.Services
         private readonly SilksongCoopPlugin _plugin;
         private readonly AdaptiveTickRate _tickRate;
         private readonly InterestManager _interestManager;
-        private PacketBatcher? _packetBatcher;
-        private NetworkPeerId _packetBatcherTarget;
 
         private float _transformSendAccumulator = 1f;
+        private float _lastFarTransformSend = float.NegativeInfinity;
         private uint _transformTick;
         private Rigidbody2D? _cachedHeroBody;
         private GameObject? _cachedHeroBodyOwner;
         private readonly System.Collections.Generic.Dictionary<string, int> _clipHashCache = new System.Collections.Generic.Dictionary<string, int>(64);
-
-        public float CurrentTickHz => _tickRate.CurrentTickHz;
-        public int InterestTrackedCount => _interestManager.GetEntitiesInRange(System.Numerics.Vector2.Zero, float.MaxValue).Count;
 
         public NetworkOrchestrator(ISessionService sessionService, ITransportService transportService, IEventBus eventBus, SilksongCoopPlugin plugin)
         {
@@ -56,18 +55,13 @@ namespace SilksongCoop.Mod.Services
         public void OnSessionStarted(bool isHost)
         {
             _tickRate.Reset();
-            // The batcher needs the remote peer id, which is only known once the handshake
-            // completes; it is created lazily in BroadcastLocalTransform.
-            _packetBatcher?.Flush();
-            _packetBatcher = null;
         }
 
         public void OnSessionEnded()
         {
-            _packetBatcher?.Flush();
-            _packetBatcher = null;
             _interestManager.Clear();
             _tickRate.Reset();
+            _lastFarTransformSend = float.NegativeInfinity;
         }
 
         public void Update()
@@ -78,13 +72,11 @@ namespace SilksongCoop.Mod.Services
             _tickRate.Update(Time.unscaledTime, transport.RoundTripTimeMs, transport.PacketLossPercent);
             UpdateTransportDiagnostics(transport);
             BroadcastLocalTransform(Time.unscaledDeltaTime);
-            _packetBatcher?.Update();
         }
 
         private void OnPeerConnected()
         {
-            _packetBatcher?.Flush();
-            _packetBatcher = null;
+            _interestManager.Clear();
         }
 
         private void UpdateTransportDiagnostics(INetworkTransport transport)
@@ -157,6 +149,10 @@ namespace SilksongCoop.Mod.Services
                 _transformTick++;
                 var packet = new TransformSyncPacket
                 {
+                    // The receiver maps this timestamp onto its own Time.timeAsDouble render
+                    // clock for interpolation, so it must stay in Unity's game-time domain:
+                    // a pause or time-scale change freezes both sides together. Event packets
+                    // use NetworkClock (monotonic real time) instead.
                     Header = new PacketHeader(PacketType.TransformSync, 0, _transformTick, (uint)(Time.timeAsDouble * 1000.0)),
                     PositionX = position.x,
                     PositionY = position.y,
@@ -174,17 +170,31 @@ namespace SilksongCoop.Mod.Services
                     new System.Numerics.Vector2(position.x, position.y),
                     active: true);
 
-                // Skip sending if remote peer is out of interest radius.
+                // Area-of-interest gate. The manager must know where the remote peer is:
+                // registering only the local player made every lookup for the remote id fail,
+                // which throttled the stream to one packet in eight. The gate only applies
+                // when both players share a scene: while they are apart the clone keeps its
+                // last position from a different room, so a distance check would throttle a
+                // reunion to the heartbeat rate and make the first seconds visibly steppy.
                 if (session.RemotePeerId.HasValue &&
                     _plugin.CloneSpawner != null &&
+                    _plugin.CloneSpawner.IsRemoteInSameScene(session.RemotePeerId.Value) &&
                     _plugin.CloneSpawner.TryGetRemotePosition(session.RemotePeerId.Value, out float remoteX, out float remoteY))
                 {
-                    if (!_interestManager.IsInInterest(transport.LocalPeerId.Value, new System.Numerics.Vector2(position.x, position.y), session.RemotePeerId.Value.Value))
-                    {
-                        // Still send occasionally so partner sees us on the map
-                        if ((_transformTick & 0x7) != 0) return;
-                    }
+                    var remoteId = session.RemotePeerId.Value.Value;
+                    _interestManager.UpdateEntity(remoteId, new System.Numerics.Vector2(remoteX, remoteY));
+
+                    bool inRange = _interestManager.IsInInterest(
+                        transport.LocalPeerId.Value,
+                        new System.Numerics.Vector2(position.x, position.y),
+                        remoteId);
+
+                    // Out of range: keep a slow heartbeat so the partner still sees us when
+                    // they come back, but bound it by time instead of tick parity.
+                    if (!inRange && Time.unscaledTime - _lastFarTransformSend < 0.5f)
+                        return;
                 }
+                _lastFarTransformSend = Time.unscaledTime;
 
                 byte[] buffer = ArrayPool<byte>.Shared.Rent(64);
                 try
@@ -192,21 +202,20 @@ namespace SilksongCoop.Mod.Services
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
 
-                    if (_packetBatcher == null || _packetBatcherTarget != session.RemotePeerId.Value)
-                    {
-                        _packetBatcher?.Flush();
-                        _packetBatcher = new PacketBatcher(transport, session.RemotePeerId.Value);
-                        _packetBatcherTarget = session.RemotePeerId.Value;
-                    }
-
-                    _packetBatcher.Enqueue(buffer, writer.Position, 0, DeliveryMethod.Unreliable);
+                    transport.Send(
+                        session.RemotePeerId.Value,
+                        buffer,
+                        0,
+                        writer.Position,
+                        DeliveryMethod.Unreliable,
+                        NetworkChannels.Transform);
 
                     session.RecordSent(writer.Position);
                     _plugin.MenuUI?.Diagnostics?.RecordSent(writer.Position);
                 }
                 finally
                 {
-                    ArrayPool<byte>.Shared.Return(buffer);
+                    ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
                 }
             }
             catch (Exception ex)
@@ -215,32 +224,121 @@ namespace SilksongCoop.Mod.Services
             }
         }
 
+        // Reflection metadata lookups are expensive and this runs on every transform tick
+        // (30-60 times per second with ~13 field probes each). Resolve each member once per
+        // runtime state type and compile a direct getter; the fallback keeps the mod working
+        // if the runtime rejects expression compilation (for example under a restrictive AOT
+        // host), but still avoids the metadata lookup on every frame.
+        private static readonly string[] StateFlagNames =
+        {
+            "onGround",
+            "dashing", "airDashing", "shadowDashing", "superDashing",
+            "wallSliding",
+            "jumping", "doubleJumping", "wallJumping",
+            "falling",
+            "attacking",
+            "invulnerable",
+            "swimming"
+        };
+
+        private static readonly ConcurrentDictionary<Type, IReadOnlyDictionary<string, Func<object, bool>>> StateAccessors =
+            new ConcurrentDictionary<Type, IReadOnlyDictionary<string, Func<object, bool>>>();
+
+        // Cache the factory delegate once: a method-group conversion inside GetOrAdd could
+        // allocate on every tick on runtimes that do not cache static method groups.
+        private static readonly Func<Type, IReadOnlyDictionary<string, Func<object, bool>>> BuildAccessorMapFactory =
+            BuildAccessorMap;
+
         private static ushort BuildStateFlags(object state)
         {
-            var type = state.GetType();
+            var accessors = StateAccessors.GetOrAdd(state.GetType(), BuildAccessorMapFactory);
             ushort flags = 0;
-            if (GetBool(type, state, "onGround")) flags |= TransformSyncPacket.FlagGrounded;
-            if (GetBool(type, state, "dashing") || GetBool(type, state, "airDashing") || GetBool(type, state, "shadowDashing") || GetBool(type, state, "superDashing"))
+            if (GetBool(accessors, state, "onGround")) flags |= TransformSyncPacket.FlagGrounded;
+            if (GetBool(accessors, state, "dashing") || GetBool(accessors, state, "airDashing") || GetBool(accessors, state, "shadowDashing") || GetBool(accessors, state, "superDashing"))
                 flags |= TransformSyncPacket.FlagDashing;
-            if (GetBool(type, state, "wallSliding")) flags |= TransformSyncPacket.FlagWallSliding;
-            if (GetBool(type, state, "jumping") || GetBool(type, state, "doubleJumping") || GetBool(type, state, "wallJumping"))
+            if (GetBool(accessors, state, "wallSliding")) flags |= TransformSyncPacket.FlagWallSliding;
+            if (GetBool(accessors, state, "jumping") || GetBool(accessors, state, "doubleJumping") || GetBool(accessors, state, "wallJumping"))
                 flags |= TransformSyncPacket.FlagJumping;
-            if (GetBool(type, state, "falling")) flags |= TransformSyncPacket.FlagFalling;
-            if (GetBool(type, state, "attacking")) flags |= TransformSyncPacket.FlagAttacking;
-            if (GetBool(type, state, "invulnerable")) flags |= TransformSyncPacket.FlagInvulnerable;
-            if (GetBool(type, state, "swimming")) flags |= TransformSyncPacket.FlagSwimming;
+            if (GetBool(accessors, state, "falling")) flags |= TransformSyncPacket.FlagFalling;
+            if (GetBool(accessors, state, "attacking")) flags |= TransformSyncPacket.FlagAttacking;
+            if (GetBool(accessors, state, "invulnerable")) flags |= TransformSyncPacket.FlagInvulnerable;
+            if (GetBool(accessors, state, "swimming")) flags |= TransformSyncPacket.FlagSwimming;
             return flags;
         }
 
-        private static bool GetBool(System.Type type, object instance, string name)
+        private static bool GetBool(IReadOnlyDictionary<string, Func<object, bool>> accessors, object instance, string name)
         {
-            var prop = type.GetProperty(name);
-            if (prop != null && prop.PropertyType == typeof(bool))
-                return (bool)prop.GetValue(instance)!;
-            var field = type.GetField(name);
-            if (field != null && field.FieldType == typeof(bool))
-                return (bool)field.GetValue(instance)!;
-            return false;
+            return accessors.TryGetValue(name, out var accessor) && accessor(instance);
+        }
+
+        private static IReadOnlyDictionary<string, Func<object, bool>> BuildAccessorMap(Type type)
+        {
+            var accessors = new Dictionary<string, Func<object, bool>>(StateFlagNames.Length, StringComparer.Ordinal);
+
+            foreach (string name in StateFlagNames)
+            {
+                var accessor = CreateBoolAccessor(type, name);
+                if (accessor != null)
+                    accessors[name] = accessor;
+            }
+
+            return accessors;
+        }
+
+        private static Func<object, bool>? CreateBoolAccessor(Type type, string name)
+        {
+            const BindingFlags Flags = BindingFlags.Public | BindingFlags.Instance;
+
+            try
+            {
+                // Keep the original lookup order (property before field) and public-only
+                // scope: the old reflection helper never read private members, and widening
+                // it could silently change which value a shadowing member reports.
+                var property = type.GetProperty(name, Flags);
+                if (property != null && property.PropertyType == typeof(bool))
+                    return CompilePropertyAccessor(type, property);
+
+                var field = type.GetField(name, Flags);
+                if (field != null && field.FieldType == typeof(bool))
+                    return CompileFieldAccessor(type, field);
+            }
+            catch (AmbiguousMatchException)
+            {
+                // A type with two same-named public members is malformed for our purpose;
+                // treat the flag as absent instead of aborting the transform send loop.
+            }
+
+            return null;
+        }
+
+        private static Func<object, bool> CompileFieldAccessor(Type type, FieldInfo field)
+        {
+            try
+            {
+                var instance = Expression.Parameter(typeof(object), "instance");
+                var typedInstance = Expression.Convert(instance, type);
+                var read = Expression.Field(typedInstance, field);
+                return Expression.Lambda<Func<object, bool>>(read, instance).Compile();
+            }
+            catch
+            {
+                return instance => field.GetValue(instance) is bool value && value;
+            }
+        }
+
+        private static Func<object, bool> CompilePropertyAccessor(Type type, PropertyInfo property)
+        {
+            try
+            {
+                var instance = Expression.Parameter(typeof(object), "instance");
+                var typedInstance = Expression.Convert(instance, type);
+                var read = Expression.Property(typedInstance, property);
+                return Expression.Lambda<Func<object, bool>>(read, instance).Compile();
+            }
+            catch
+            {
+                return instance => property.GetValue(instance) is bool value && value;
+            }
         }
     }
 }

@@ -168,7 +168,7 @@ namespace SilksongCoop.Mod.State
 
             var packet = new EnemySyncPacket
             {
-                Header = new PacketHeader(PacketType.EnemySync, WorldChannel, ++_packetSequence, (uint)Environment.TickCount),
+                Header = new PacketHeader(PacketType.EnemySync, WorldChannel, ++_packetSequence, NetworkClock.NowMs),
                 EnemyKey = key,
                 Hp = dead ? 0 : Math.Max(0, hpAfter),
                 Damage = (short)Math.Clamp(hit.DamageDealt, 0, short.MaxValue),
@@ -215,7 +215,7 @@ namespace SilksongCoop.Mod.State
 
             var packet = new EnemySyncPacket
             {
-                Header = new PacketHeader(PacketType.EnemySync, WorldChannel, ++_packetSequence, (uint)Environment.TickCount),
+                Header = new PacketHeader(PacketType.EnemySync, WorldChannel, ++_packetSequence, NetworkClock.NowMs),
                 EnemyKey = key,
                 Hp = 0,
                 Damage = 0,
@@ -282,7 +282,7 @@ namespace SilksongCoop.Mod.State
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(buffer);
+                ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
             }
         }
 
@@ -383,7 +383,7 @@ namespace SilksongCoop.Mod.State
         {
             var packet = new EnemySnapshotPacket
             {
-                Header = new PacketHeader(PacketType.EnemySnapshot, WorldChannel, ++_packetSequence, (uint)Environment.TickCount),
+                Header = new PacketHeader(PacketType.EnemySnapshot, WorldChannel, ++_packetSequence, NetworkClock.NowMs),
                 Entries = batch.ToArray(),
                 Count = batch.Count
             };
@@ -401,7 +401,7 @@ namespace SilksongCoop.Mod.State
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(buffer);
+                ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
             }
         }
 
@@ -443,7 +443,7 @@ namespace SilksongCoop.Mod.State
 
             var packet = new WorldEventPacket
             {
-                Header = new PacketHeader(PacketType.WorldEvent, WorldChannel, ++_packetSequence, (uint)Environment.TickCount),
+                Header = new PacketHeader(PacketType.WorldEvent, WorldChannel, ++_packetSequence, NetworkClock.NowMs),
                 ObjectKey = key,
                 EventType = eventType,
                 PositionX = transform.position.x,
@@ -516,7 +516,7 @@ namespace SilksongCoop.Mod.State
                     var stored = item.Persistent;
                     SendPersistentPacket(new PersistentStatePacket
                     {
-                        Header = new PacketHeader(PacketType.PersistentState, WorldChannel, ++_packetSequence, (uint)Environment.TickCount),
+                        Header = new PacketHeader(PacketType.PersistentState, WorldChannel, ++_packetSequence, NetworkClock.NowMs),
                         ItemKey = stored.ItemKey,
                         ValueType = stored.ValueType,
                         Value = stored.Value
@@ -527,7 +527,7 @@ namespace SilksongCoop.Mod.State
                     var stored = item.World;
                     SendWorldPacket(new WorldEventPacket
                     {
-                        Header = new PacketHeader(PacketType.WorldEvent, WorldChannel, ++_packetSequence, (uint)Environment.TickCount),
+                        Header = new PacketHeader(PacketType.WorldEvent, WorldChannel, ++_packetSequence, NetworkClock.NowMs),
                         ObjectKey = stored.ObjectKey,
                         EventType = stored.EventType,
                         PositionX = stored.PositionX,
@@ -559,7 +559,7 @@ namespace SilksongCoop.Mod.State
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(buffer);
+                ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
             }
         }
 
@@ -679,7 +679,7 @@ namespace SilksongCoop.Mod.State
 
             var packet = new PersistentStatePacket
             {
-                Header = new PacketHeader(PacketType.PersistentState, WorldChannel, ++_packetSequence, (uint)Environment.TickCount),
+                Header = new PacketHeader(PacketType.PersistentState, WorldChannel, ++_packetSequence, NetworkClock.NowMs),
                 ItemKey = key,
                 ValueType = valueType,
                 Value = value
@@ -896,7 +896,7 @@ namespace SilksongCoop.Mod.State
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(buffer);
+                ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
             }
         }
 

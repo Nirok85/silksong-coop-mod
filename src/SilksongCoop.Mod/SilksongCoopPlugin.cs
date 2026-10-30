@@ -44,7 +44,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "2.2.1";
+        public const string PluginVersion = "2.2.2";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -146,7 +146,7 @@ namespace SilksongCoop.Mod
         private int _lastSilkPartsBroadcast = -1;
 
         private Core.State.DesyncDetector? _desyncDetector;
-        private float _desyncCheckTimer;
+        private uint? _desyncRound;
         #endregion
 
         #region Unity Lifecycle
@@ -369,32 +369,6 @@ namespace SilksongCoop.Mod
             _reconnectPending = false;
             _reconnectAttempts = 0;
             _reconnectAddress = null;
-        }
-
-        /// <summary>
-        /// Schedules another automatic reconnect attempt after a failed one.
-        /// Backoff doubles per attempt (1s, 2s, 4s, ... capped at 16s).
-        /// </summary>
-        private void ScheduleReconnectRetry(string reason)
-        {
-            int maxAttempts = Math.Clamp(MaxReconnectAttemptsConfig?.Value ?? 5, 1, 10);
-            _reconnectAttempts++;
-
-            if (_reconnectAttempts < maxAttempts && !string.IsNullOrEmpty(_reconnectAddress))
-            {
-                float backoff = Math.Min((float)Math.Pow(2, _reconnectAttempts - 1), 16f);
-                _nextReconnectTime = Time.unscaledTime + backoff;
-                _reconnectPending = true;
-                Logger.LogWarning($"[Coop] {reason}; retrying in {backoff}s (attempt {_reconnectAttempts}/{maxAttempts})");
-                MenuUI?.SetStatusMessage($"Reconnect failed. Retrying in {backoff}s...");
-            }
-            else
-            {
-                _reconnectPending = false;
-                _reconnectAddress = null;
-                Logger.LogWarning($"[Coop] {reason}; max reconnect attempts ({maxAttempts}) reached.");
-                MenuUI?.SetStatusMessage("Connection lost. Max reconnect attempts reached.");
-            }
         }
 
         /// <summary>
@@ -847,11 +821,6 @@ namespace SilksongCoop.Mod
         private uint _actionTick;
 
         /// <summary>
-        /// Returns the current adaptive network tick rate in Hz from the orchestrator.
-        /// </summary>
-        public float CurrentNetworkTickHz => _networkOrchestrator?.CurrentTickHz ?? (TickRateHzConfig?.Value ?? 30f);
-
-        /// <summary>
         /// Broadcasts a player action trigger to the remote peer.
         /// </summary>
         /// <param name="action">The action type to broadcast.</param>
@@ -868,7 +837,7 @@ namespace SilksongCoop.Mod
                 _actionTick++;
                 var packet = new ActionTriggerPacket
                 {
-                    Header = new PacketHeader(PacketType.ActionTrigger, 0, _actionTick, (uint)(Time.timeAsDouble * 1000.0)),
+                    Header = new PacketHeader(PacketType.ActionTrigger, 0, _actionTick, NetworkClock.NowMs),
                     Action = action,
                     ActionSequenceId = _actionTick,
                     OriginX = pos.x,
@@ -894,7 +863,7 @@ namespace SilksongCoop.Mod
                 }
                 finally
                 {
-                    ArrayPool<byte>.Shared.Return(buffer);
+                    ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
                 }
             }
             catch (Exception ex)
@@ -904,11 +873,13 @@ namespace SilksongCoop.Mod
         }
 
         /// <summary>
-        /// Handles incoming checksum frames on channel 7 (desync detection).
+        /// Clears retained desync history and forces a fresh sample on the next update.
+        /// Round numbers themselves are wall-clock based and therefore shared by both peers.
         /// </summary>
-        private void HandleChecksumPacket(NetworkPeerId peer, byte[] data, int offset, int length)
+        private void ResetDesyncTracking()
         {
-            OnRemoteChecksumReceived(data, offset, length);
+            _desyncRound = null;
+            _desyncDetector?.Reset();
         }
 
         /// <summary>
@@ -926,7 +897,7 @@ namespace SilksongCoop.Mod
 
                 var packet = new BenchCheckpointSyncPacket
                 {
-                    Header = new PacketHeader(PacketType.BenchCheckpointSync, 0, 0, (uint)(Time.timeAsDouble * 1000.0)),
+                    Header = new PacketHeader(PacketType.BenchCheckpointSync, 0, 0, NetworkClock.NowMs),
                     SceneName = sceneName,
                     RespawnMarker = respawnMarker,
                     SpawnType = spawnType,
@@ -951,7 +922,7 @@ namespace SilksongCoop.Mod
                 }
                 finally
                 {
-                    ArrayPool<byte>.Shared.Return(buffer);
+                    ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
                 }
             }
             catch (Exception ex)
@@ -1345,6 +1316,7 @@ namespace SilksongCoop.Mod
 
                     Logger.LogInfo($"[Coop] Peer connected: {peer}");
                     SessionState?.SetConnected(peer, transport.IsHost ? SessionRole.Host : SessionRole.Client);
+                    ResetDesyncTracking();
                     EventBus?.Publish(new PeerConnectedEvent { PeerId = peer });
                     MenuUI?.Diagnostics?.OnSessionStarted();
                     MenuUI?.SetStatusMessage($"Connected to {peer.DisplayName}");
@@ -1431,6 +1403,7 @@ namespace SilksongCoop.Mod
                         DeathCoordinator?.CurrentState == DeathState.RespawningAtPartner;
 
                     SessionState?.SetDisconnected(reason);
+                    ResetDesyncTracking();
                     EventBus?.Publish(new PeerDisconnectedEvent { PeerId = peer, Reason = reason });
                     EventBus?.Publish(new SessionEndedEvent { Reason = reason });
                     MenuUI?.Diagnostics?.OnSessionEnded();
@@ -1462,6 +1435,12 @@ namespace SilksongCoop.Mod
                         MenuUI?.SetStatusMessage(reason == DisconnectReason.Timeout
                             ? "Partner timed out — still hosting. Share the same room code to reconnect."
                             : "Partner left — still hosting. Share the same room code to reconnect.");
+                    }
+                    else if (wasHost && reason == DisconnectReason.VersionMismatch)
+                    {
+                        // Don't keep hosting on version mismatch; user needs to update
+                        SessionState?.SetDisconnected();
+                        MenuUI?.SetStatusMessage("Version mismatch — update both players to the same version.");
                     }
 
                     // Schedule auto-reconnect on unexpected disconnect
@@ -1508,14 +1487,7 @@ namespace SilksongCoop.Mod
                     SessionState?.RecordReceived(length);
                     MenuUI?.Diagnostics?.RecordReceived(length);
 
-                    if (length < PacketHeader.HeaderSize)
-                    {
-                        // Checksum frames are short raw strings; anything below the header
-                        // size can only belong to that channel.
-                        HandleChecksumPacket(peer, data, offset, length);
-                        return;
-                    }
-                    ProcessPacket(peer, new ReadOnlySpan<byte>(data, offset, length), 0);
+                    ProcessPacket(peer, new ReadOnlySpan<byte>(data, offset, length));
                 }
                 catch (Exception ex)
                 {
@@ -1525,33 +1497,27 @@ namespace SilksongCoop.Mod
         }
 
         /// <summary>
-        /// Dispatches one framed packet. Batch envelopes are unwrapped and each entry is
-        /// dispatched through this same method (depth guards against nested batches).
+        /// Dispatches one framed packet.
         /// </summary>
-        private void ProcessPacket(NetworkPeerId peer, ReadOnlySpan<byte> span, int depth)
+        private void ProcessPacket(NetworkPeerId peer, ReadOnlySpan<byte> span)
         {
             try
             {
+                // Desync checksums use their own magic, so they are recognised before the
+                // regular header parser and never reach it as "garbage".
+                if (DesyncChecksumFrame.TryRead(span, out uint round, out uint checksum))
+                {
+                    _desyncDetector?.OnRemoteChecksumReceived(checksum, round, Time.unscaledTime);
+                    return;
+                }
+
                 if (span.Length < PacketHeader.HeaderSize) return;
 
                 if (!PacketHeader.TryReadFrom(span, out var header))
-                {
-                    // Channel 7 carries raw checksum frames without the standard header.
-                    HandleChecksumPacket(peer, span.ToArray(), 0, span.Length);
                     return;
-                }
 
                 if (!header.IsValidPacketType)
-                {
-                    HandleChecksumPacket(peer, span.ToArray(), 0, span.Length);
                     return;
-                }
-
-                if (header.PacketId == PacketType.Batch)
-                {
-                    ProcessBatch(peer, span, depth);
-                    return;
-                }
 
                 var reader = new PacketReader(span);
                 switch (header.PacketId)
@@ -1574,7 +1540,8 @@ namespace SilksongCoop.Mod
                             trans.AnimationClipHash,
                             trans.NormalizedTime,
                             header.Timestamp,
-                            isSameScene);
+                            isSameScene,
+                            header.TickSequence);
                         break;
 
                     case PacketType.BenchCheckpointSync:
@@ -1609,10 +1576,31 @@ namespace SilksongCoop.Mod
                         break;
 
                     case PacketType.PlayerDeath:
+                        if (SessionState?.RemotePeerId == null || SessionState.RemotePeerId.Value != peer) return;
                         var death = DeathLifecyclePacket.Deserialize(ref reader);
                         if (!PacketValidator.ValidateDeathLifecycle(death)) return;
-                        DeathCoordinator?.HandleDeathPacket(peer, death);
-                        ApplyRemoteDeathVisibility(peer, death.EventType);
+                        if (DeathCoordinator != null)
+                        {
+                            var before = DeathCoordinator.IsPartnerAlive;
+                            DeathCoordinator.HandleDeathPacket(peer, death);
+                            // Only apply visibility if the coordinator state actually changed
+                            if (DeathCoordinator.IsPartnerAlive != before)
+                            {
+                                ApplyRemoteDeathVisibility(peer, death.EventType);
+                            }
+                            else if (death.EventType == DeathEventType.PartnerReviveTrigger && DeathCoordinator.IsPartnerAlive)
+                            {
+                                ApplyRemoteDeathVisibility(peer, death.EventType);
+                            }
+                            else if ((death.EventType == DeathEventType.SoloDeathOccurred || death.EventType == DeathEventType.TeamWipeOccurred) && !DeathCoordinator.IsPartnerAlive)
+                            {
+                                ApplyRemoteDeathVisibility(peer, death.EventType);
+                            }
+                        }
+                        else
+                        {
+                            ApplyRemoteDeathVisibility(peer, death.EventType);
+                        }
                         break;
 
                     case PacketType.SceneTransition:
@@ -1668,24 +1656,6 @@ namespace SilksongCoop.Mod
             }
         }
 
-        /// <summary>
-        /// Splits a <see cref="PacketType.Batch"/> envelope and dispatches every entry.
-        /// </summary>
-        private void ProcessBatch(NetworkPeerId peer, ReadOnlySpan<byte> span, int depth)
-        {
-            // Nested batches are not produced by this build and would allow unbounded
-            // recursion, so only the outermost envelope is expanded.
-            if (depth > 0) return;
-
-            if (!PacketBatch.TryReadCount(span, out byte count)) return;
-
-            int position = PacketBatch.HeaderSize;
-            for (int i = 0; i < count; i++)
-            {
-                if (!PacketBatch.TryReadEntry(span, ref position, out var payload)) return;
-                ProcessPacket(peer, payload, depth + 1);
-            }
-        }
         #endregion
 
         #region Frame Update and Lifecycle
@@ -1708,7 +1678,7 @@ namespace SilksongCoop.Mod
                 int sceneHash = GameManager.instance != null ? GameManager.instance.sceneNameHash : 0;
                 var packet = new SceneTransitionPacket
                 {
-                    Header = new PacketHeader(PacketType.SceneTransition, 0, 0, (uint)(Time.timeAsDouble * 1000.0)),
+                    Header = new PacketHeader(PacketType.SceneTransition, 0, 0, NetworkClock.NowMs),
                     TargetScene = string.Empty,
                     EntryGate = string.Empty,
                     SceneNameHash = sceneHash,
@@ -1733,7 +1703,7 @@ namespace SilksongCoop.Mod
                 }
                 finally
                 {
-                    ArrayPool<byte>.Shared.Return(buffer);
+                    ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
                 }
             }
             catch (Exception ex)
@@ -1756,10 +1726,11 @@ namespace SilksongCoop.Mod
                 {
                     case DeathEventType.SoloDeathOccurred:
                     case DeathEventType.TeamWipeOccurred:
-                        CloneSpawner?.SetRemoteScenePresence(peer, false);
+                        CloneSpawner?.SetRemotePartnerAlive(peer, false);
                         break;
                     case DeathEventType.PartnerReviveTrigger:
-                        CloneSpawner?.SetRemoteScenePresence(peer, true);
+                    case DeathEventType.SoloBenchRespawn:
+                        CloneSpawner?.SetRemotePartnerAlive(peer, true);
                         break;
                 }
             }
@@ -1901,52 +1872,70 @@ namespace SilksongCoop.Mod
         }
 
         /// <summary>
-        /// Periodically computes a checksum of critical player state and compares it with
-        /// the peer. Runs on the local Update so it works with the existing transport loop.
+        /// Samples the shared state once per desync round and compares it with the peer.
+        /// The round number is derived from wall-clock time, so both peers label the same
+        /// time bucket even if one missed an interval or runs at a different frame rate.
         /// </summary>
         private void UpdateDesyncDetector()
         {
             if (_desyncDetector == null) return;
 
+            // While the partner is in a different scene, dead/spectating, or the clone does
+            // not exist yet, the shared-progress view is legitimately different (the scene
+            // name itself is part of the checksum) and would report a desync every cooldown.
+            // Detection resumes on the next round after the partner is visible again.
+            if (SessionState == null || !SessionState.RemotePeerId.HasValue) return;
+            var remotePeer = SessionState.RemotePeerId.Value;
+            if (CloneSpawner == null || !CloneSpawner.IsRemoteInSameScene(remotePeer)) return;
+
+            int intervalMs = (int)Math.Round(Math.Max(1f, _desyncDetector.CheckIntervalSeconds) * 1000.0);
+            uint round = Core.State.DesyncRoundSchedule.ComputeRound(
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                intervalMs);
+            if (_desyncRound == round) return;
+            _desyncRound = round;
+
             float now = Time.unscaledTime;
-            _desyncCheckTimer += Time.unscaledDeltaTime;
-            if (_desyncCheckTimer < _desyncDetector.CheckIntervalSeconds) return;
-            _desyncCheckTimer = 0f;
 
             var pd = PlayerData.instance;
             string scene = GameManager.instance != null ? GameManager.instance.sceneName : "unknown";
 
             // Only shared state may be part of the checksum: per-player health and position
             // legitimately differ between peers and would report a desync on every tick.
-            string signature = $"{scene}|{pd?.maxHealth ?? 0}|{pd?.nailUpgrades ?? 0}|{pd?.silkMax ?? 0}|{pd?.geo ?? 0}";
-            string checksum = _desyncDetector.ComputeChecksum(signature);
+            int sharedRosaries = VitalsSync?.SharedRosaries ?? 0;
+            int sharedShards = VitalsSync?.SharedShellShards ?? 0;
+            string signature = $"{scene}|{pd?.maxHealth ?? 0}|{pd?.nailUpgrades ?? 0}|{pd?.silkMax ?? 0}|{sharedRosaries}|{sharedShards}";
+            uint checksum = _desyncDetector.ComputeChecksumValue(signature);
 
-            _desyncDetector.Update(now, checksum);
+            _desyncDetector.Update(now, checksum, round);
 
-            if (ActiveTransport != null && SessionState?.IsConnected == true && SessionState.RemotePeerId.HasValue)
+            if (ActiveTransport == null || SessionState?.IsConnected != true || !SessionState.RemotePeerId.HasValue)
+                return;
+
+            byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(DesyncChecksumFrame.FrameSize);
+            try
             {
-                byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(64);
-                try
-                {
-                    var writer = new PacketWriter(buffer);
-                    writer.WriteRaw(System.Text.Encoding.UTF8.GetBytes(checksum));
-                    ActiveTransport.Send(SessionState.RemotePeerId.Value, buffer, 0, writer.Position, DeliveryMethod.Unreliable, 7);
-                }
-                finally
-                {
-                    System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
-                }
-            }
-        }
+                DesyncChecksumFrame.Write(
+                    new Span<byte>(buffer, 0, DesyncChecksumFrame.FrameSize),
+                    round,
+                    checksum);
 
-        /// <summary>
-        /// Called by the transport packet handler when a remote checksum frame arrives.
-        /// </summary>
-        public void OnRemoteChecksumReceived(byte[] data, int offset, int length)
-        {
-            if (_desyncDetector == null) return;
-            string remoteChecksum = System.Text.Encoding.UTF8.GetString(data, offset, length);
-            _desyncDetector.OnRemoteChecksumReceived(remoteChecksum, "state");
+                ActiveTransport.Send(
+                    SessionState.RemotePeerId.Value,
+                    buffer,
+                    0,
+                    DesyncChecksumFrame.FrameSize,
+                    DeliveryMethod.Unreliable,
+                    NetworkChannels.Desync);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed to send desync checksum: {ex.Message}");
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+            }
         }
 
         private void OnDestroy()

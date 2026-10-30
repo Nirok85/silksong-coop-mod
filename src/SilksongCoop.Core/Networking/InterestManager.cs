@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Numerics;
 
@@ -10,6 +9,8 @@ namespace SilksongCoop.Core.Networking
     public class InterestManager
     {
         private readonly Dictionary<ulong, TrackedEntity> _entities = new Dictionary<ulong, TrackedEntity>();
+        private readonly Dictionary<(ulong Observer, ulong Target), bool> _visibility =
+            new Dictionary<(ulong Observer, ulong Target), bool>();
         private readonly object _lock = new object();
 
         public float DefaultRadius { get; set; } = 40f;
@@ -17,11 +18,9 @@ namespace SilksongCoop.Core.Networking
 
         public struct TrackedEntity
         {
-            public ulong Id;
             public Vector2 Position;
             public float Radius;
             public bool IsActive;
-            public DateTime LastUpdate;
         }
 
         public void UpdateEntity(ulong id, Vector2 position, float radius = 0f, bool active = true)
@@ -30,55 +29,39 @@ namespace SilksongCoop.Core.Networking
             {
                 _entities[id] = new TrackedEntity
                 {
-                    Id = id,
                     Position = position,
                     Radius = radius > 0 ? radius : DefaultRadius,
-                    IsActive = active,
-                    LastUpdate = DateTime.UtcNow
+                    IsActive = active
                 };
             }
         }
 
-        public void RemoveEntity(ulong id)
-        {
-            lock (_lock)
-            {
-                _entities.Remove(id);
-            }
-        }
-
+        /// <summary>
+        /// Returns whether <paramref name="targetId"/> is within interest range of the given
+        /// observer. Hysteresis is tracked per observer/target pair: an object that is already
+        /// visible stays visible until it leaves the enlarged radius, which prevents the
+        /// "visible / hidden / visible" flicker right on the boundary.
+        /// </summary>
         public bool IsInInterest(ulong observerId, Vector2 observerPos, ulong targetId, float? customRadius = null)
         {
             lock (_lock)
             {
                 if (!_entities.TryGetValue(targetId, out var entity) || !entity.IsActive)
+                {
+                    _visibility.Remove((observerId, targetId));
                     return false;
+                }
 
                 float radius = customRadius ?? entity.Radius;
                 float distSq = Vector2.DistanceSquared(observerPos, entity.Position);
-                float enterRange = radius * radius;
-                float leaveRange = (radius + Hysteresis) * (radius + Hysteresis);
-                
-                // Use hysteresis to avoid flickering
-                return distSq <= enterRange || (distSq <= leaveRange && entity.Id == observerId);
-            }
-        }
 
-        public List<ulong> GetEntitiesInRange(Vector2 center, float radius)
-        {
-            var result = new List<ulong>();
-            lock (_lock)
-            {
-                float rangeSq = radius * radius;
-                foreach (var kv in _entities)
-                {
-                    var entity = kv.Value;
-                    if (!entity.IsActive) continue;
-                    if (Vector2.DistanceSquared(center, entity.Position) <= rangeSq)
-                        result.Add(entity.Id);
-                }
+                bool wasVisible = _visibility.TryGetValue((observerId, targetId), out bool seen) && seen;
+                float limit = wasVisible ? radius + Hysteresis : radius;
+                bool visible = distSq <= limit * limit;
+
+                _visibility[(observerId, targetId)] = visible;
+                return visible;
             }
-            return result;
         }
 
         public void Clear()
@@ -86,6 +69,7 @@ namespace SilksongCoop.Core.Networking
             lock (_lock)
             {
                 _entities.Clear();
+                _visibility.Clear();
             }
         }
     }

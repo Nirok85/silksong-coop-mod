@@ -19,7 +19,7 @@ namespace SilksongCoop.Core.Networking
         /// Wire protocol revision. Bumped when packet layouts change incompatibly; both
         /// peers must match or the handshake is refused.
         /// </summary>
-        public const ushort ProtocolVersion = 6;
+        public const ushort ProtocolVersion = NetworkProtocol.Version;
 
         private const byte FlagMacPresent = 0x01;
         private const int MacSizeBytes = 8;
@@ -249,16 +249,6 @@ namespace SilksongCoop.Core.Networking
         public LiteNetLibTransport(ulong peerId = 1, string displayName = "Player")
         {
             _localPeerId = new NetworkPeerId(peerId, displayName);
-        }
-
-        private bool ValidateRoomCode(string roomCode)
-        {
-            // Reject deprecated 8-character compact codes (weak 2-bit CRC)
-            if (RoomCodeCodec.IsDeprecatedCode(roomCode))
-                return false;
-
-            // Validate using secure decoder (12-character with CRC-8)
-            return RoomCodeCodec.TryDecodeSecure(roomCode, out _, out _);
         }
 
         /// <summary>
@@ -632,7 +622,6 @@ namespace SilksongCoop.Core.Networking
                 var sequenceKey = (channel, method);
                 if (!_sendSequences.TryGetValue(sequenceKey, out seq))
                     seq = 0;
-                _sendSequences[sequenceKey] = seq + 1;
 
                 // Build envelope into a pooled buffer to avoid per-packet heap allocations
                 // (BUG-P16). The rented buffer is returned immediately for unreliable
@@ -640,16 +629,29 @@ namespace SilksongCoop.Core.Networking
                 bool includeMac = _sessionKey != null;
                 int envelopeLength = 8 + length + (includeMac ? MacSizeBytes : 0);
                 byte[] envelope = ArrayPool<byte>.Shared.Rent(envelopeLength);
-                envelope[0] = (byte)UdpFrameType.Data;
-                envelope[1] = channel;
-                envelope[2] = (byte)method;
-                Buffer.BlockCopy(BitConverter.GetBytes(seq), 0, envelope, 3, 4);
-                envelope[7] = includeMac ? FlagMacPresent : (byte)0;
-                data.AsSpan(offset, length).CopyTo(envelope.AsSpan(8));
-                if (includeMac)
+                try
                 {
-                    AppendMac(envelope, 8 + length);
+                    envelope[0] = (byte)UdpFrameType.Data;
+                    envelope[1] = channel;
+                    envelope[2] = (byte)method;
+                    Buffer.BlockCopy(BitConverter.GetBytes(seq), 0, envelope, 3, 4);
+                    envelope[7] = includeMac ? FlagMacPresent : (byte)0;
+                    data.AsSpan(offset, length).CopyTo(envelope.AsSpan(8));
+                    if (includeMac)
+                    {
+                        AppendMac(envelope, 8 + length);
+                    }
                 }
+                catch (Exception ex)
+                {
+                    // A reliable ordered stream must not contain a sequence hole: consume
+                    // the sequence only after the envelope was built successfully.
+                    CoopLog.Warn($"[LiteNetLibTransport] Failed to build envelope: {ex.Message}");
+                    ReturnPooledBuffer(envelope);
+                    return;
+                }
+
+                _sendSequences[sequenceKey] = seq + 1;
 
                 try
                 {
@@ -740,8 +742,19 @@ namespace SilksongCoop.Core.Networking
                             int received = socket.ReceiveFrom(_recvBuffer, ref senderEp);
                             if (received == 0) break;
                             processedDatagrams++;
+                            if (received < 0) break;
+                            if (received > _recvBuffer.Length)
+                            {
+                                received = _recvBuffer.Length;
+                            }
                             if (received >= 8) // Minimum envelope header
                             {
+                                // Basic sanity check on frame type range
+                                byte frameTypeByte = _recvBuffer[0];
+                                if (frameTypeByte > 20)
+                                {
+                                    continue;
+                                }
                                 ProcessIncomingDatagram(_recvBuffer.AsSpan(0, received), senderEp);
                             }
                         }
@@ -1204,7 +1217,7 @@ namespace SilksongCoop.Core.Networking
                             _remotePeerId = null;
                             ResetSessionState();
                             // BUG-02: defer the event - the handler re-enters the transport
-                            // (TriggerTeamWipe в†’ ExitSpectatorMode в†’ Disconnect) and must
+                            // (TriggerTeamWipe -> ExitSpectatorMode -> Disconnect) and must
                             // not run while _lock is held.
                             _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerDisconnected, peer, DisconnectReason.PeerDisconnected, generation: _sessionGeneration));
                         }
@@ -1506,7 +1519,10 @@ namespace SilksongCoop.Core.Networking
         {
             if (buffer != null)
             {
-                ArrayPool<byte>.Shared.Return(buffer);
+                // Clear on return: pooled arrays may be handed to another subsystem that
+                // reads past the current envelope length. Wiping prevents stale packet data
+                // (including room-code-authenticated frames) from leaking into later traffic.
+                ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
             }
         }
 

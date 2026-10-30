@@ -17,6 +17,11 @@ namespace SilksongCoop.Mod.Networking
 
         private CSteamID _lobbyId = CSteamID.Nil;
         private CSteamID _remoteSteamId = CSteamID.Nil;
+
+        // A peer that failed protocol validation is kept out until it leaves the lobby.
+        // Otherwise the next datagram would re-adopt it and restart the reject/disconnect
+        // cycle several times per second.
+        private CSteamID _protocolRejectedPeer = CSteamID.Nil;
         private long _connectionAttemptStartMs;
 
         // Async CreateLobby/JoinLobby callbacks may arrive after the user has switched
@@ -38,6 +43,13 @@ namespace SilksongCoop.Mod.Networking
         
         // Fix: Reuse buffer to avoid allocation in hot path
         private byte[] _readBuffer = new byte[4096];
+
+        // Steam has no wire-level protocol negotiation, so every game datagram is prefixed
+        // with the protocol revision. A peer that does not speak the same revision is
+        // disconnected instead of appearing "connected" while all packets are unusable.
+        private byte[] _sendBuffer = new byte[4096];
+        private const int ProtocolPrefixSize = 2;
+        private const string LobbyProtocolKey = "protocol_version";
         
         // Channels actually used by the protocol. The RTT probes live on the dedicated
         // control channel; channel 1 carries ActionTrigger/SceneTransition game data and
@@ -50,7 +62,7 @@ namespace SilksongCoop.Mod.Networking
         // membership callback and the P2P session/packet paths observe the same peer.
         private bool _peerConnectNotified;
 
-        // Application-level ping/pong on the otherwise-unused channel 1. The legacy Steam
+        // Application-level ping/pong on the dedicated control channel. The legacy Steam
         // P2P API exposes no RTT/loss counters, so this is the only portable way to feed the
         // diagnostics overlay and adaptive interpolation.
         private const byte RttPing = 0x50;
@@ -170,6 +182,7 @@ namespace SilksongCoop.Mod.Networking
 
             IsHost = true;
             IsConnected = false;
+            _connectionAttemptStartMs = 0;
 
             // Re-hosting must not leak the previous lobby/P2P session: the fields are
             // about to be overwritten, so leave/close them explicitly first.
@@ -184,6 +197,7 @@ namespace SilksongCoop.Mod.Networking
 
             _remoteSteamId = CSteamID.Nil;
             _peerConnectNotified = false;
+            _protocolRejectedPeer = CSteamID.Nil;
             _lobbyId = CSteamID.Nil;
             _requestedLobbyId = 0;
             _lobbyRequestGeneration = ++_sessionGeneration;
@@ -223,6 +237,7 @@ namespace SilksongCoop.Mod.Networking
 
             _remoteSteamId = CSteamID.Nil;
             _peerConnectNotified = false;
+            _protocolRejectedPeer = CSteamID.Nil;
             _lobbyId = CSteamID.Nil;
             IsConnected = false;
             _connectionAttemptStartMs = NowMs();
@@ -250,6 +265,7 @@ namespace SilksongCoop.Mod.Networking
             _sessionGeneration++;
             _lobbyRequestGeneration = -1;
             _requestedLobbyId = 0;
+            _protocolRejectedPeer = CSteamID.Nil;
 
             if (_lobbyId != CSteamID.Nil)
             {
@@ -385,7 +401,7 @@ namespace SilksongCoop.Mod.Networking
         /// <param name="offset">Offset within the buffer.</param>
         /// <param name="length">Number of bytes to send.</param>
         /// <param name="method">Delivery method (reliable or unreliable).</param>
-        /// <param name="channel">Channel index (0-4).</param>
+        /// <param name="channel">Channel index (0–255).</param>
         public void Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
             if (!IsSteamAvailable || _remoteSteamId == CSteamID.Nil) return;
@@ -395,20 +411,19 @@ namespace SilksongCoop.Mod.Networking
                 ? EP2PSend.k_EP2PSendUnreliableNoDelay
                 : EP2PSend.k_EP2PSendReliable;
 
-            byte[] bufferToSend;
-            if (offset == 0 && length == data.Length)
-            {
-                bufferToSend = data;
-            }
-            else
-            {
-                bufferToSend = new byte[length];
-                Buffer.BlockCopy(data, offset, bufferToSend, 0, length);
-            }
+            int framedLength = ProtocolPrefixSize + length;
+            if (framedLength > _sendBuffer.Length)
+                _sendBuffer = new byte[framedLength];
+
+            // Protocol revision first; older builds sent an unprefixed packet, which the
+            // receiver now rejects before dispatching it to the game layer.
+            _sendBuffer[0] = (byte)(NetworkProtocol.Version & 0xFF);
+            _sendBuffer[1] = (byte)(NetworkProtocol.Version >> 8);
+            Buffer.BlockCopy(data, offset, _sendBuffer, ProtocolPrefixSize, length);
 
             try
             {
-                bool sent = SteamNetworking.SendP2PPacket(_remoteSteamId, bufferToSend, (uint)length, sendType, channel);
+                bool sent = SteamNetworking.SendP2PPacket(_remoteSteamId, _sendBuffer, (uint)framedLength, sendType, channel);
                 if (!sent && method == DeliveryMethod.ReliableOrdered)
                 {
                     Logger?.LogWarning($"Failed to send P2P packet to {_remoteSteamId.m_SteamID} on channel {channel}");
@@ -460,6 +475,7 @@ namespace SilksongCoop.Mod.Networking
                     }
                     IsConnected = false;
                     _peerConnectNotified = false;
+                    _protocolRejectedPeer = CSteamID.Nil;
                     OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.Timeout);
                 }
             }
@@ -492,7 +508,11 @@ namespace SilksongCoop.Mod.Networking
                 if (now - _lastPongReceivedMs > SteamHeartbeatTimeoutMs)
                 {
                     Logger?.LogWarning("[Steam] Peer heartbeat timed out");
-                    if (_lobbyId != CSteamID.Nil)
+
+                    // A host keeps its lobby: the plugin reports "still hosting" and the
+                    // partner can rejoin the same lobby after fixing the connection. Only a
+                    // client leaves, because its lobby membership belongs to the host.
+                    if (!IsHost && _lobbyId != CSteamID.Nil)
                     {
                         try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
                         _lobbyId = CSteamID.Nil;
@@ -524,10 +544,45 @@ namespace SilksongCoop.Mod.Networking
                         processedDatagrams++;
                         try
                         {
+                            // A peer rejected for an incompatible protocol stays rejected for
+                            // the rest of its lobby membership. Check before the RTT branch:
+                            // otherwise its control pings would keep the heartbeat alive and
+                            // mask a session whose game data is never accepted.
+                            if (_protocolRejectedPeer != CSteamID.Nil && remoteId == _protocolRejectedPeer)
+                            {
+                                try { SteamNetworking.CloseP2PSessionWithUser(remoteId); } catch { /* best-effort */ }
+                                if (_remoteSteamId == remoteId)
+                                    NotifyPeerDisconnected(DisconnectReason.VersionMismatch);
+                                continue;
+                            }
+
                             // The dedicated control channel is reserved for RTT probes.
                             if (channel == RttChannel)
                             {
                                 HandleRttControl(remoteId, bytesRead);
+                                continue;
+                            }
+
+                            // Legacy builds opened the P2P session with a one-byte ping on
+                            // a game channel. It carries no usable payload; ignore it instead
+                            // of treating it as a malformed game datagram.
+                            if (bytesRead == 1 && _readBuffer[0] == 0x01)
+                                continue;
+
+                            if (bytesRead < ProtocolPrefixSize)
+                            {
+                                Logger?.LogWarning($"[Steam] Dropped undersized packet from {remoteId.m_SteamID} ({bytesRead} bytes)");
+                                continue;
+                            }
+
+                            ushort remoteProtocol = (ushort)(_readBuffer[0] | (_readBuffer[1] << 8));
+                            if (remoteProtocol != NetworkProtocol.Version)
+                            {
+                                Logger?.LogWarning(
+                                    $"[Steam] Peer protocol {remoteProtocol} is incompatible with local {NetworkProtocol.Version}; disconnecting {remoteId.m_SteamID}");
+                                _protocolRejectedPeer = remoteId;
+                                try { SteamNetworking.CloseP2PSessionWithUser(remoteId); } catch { /* best-effort */ }
+                                NotifyPeerDisconnected(DisconnectReason.VersionMismatch);
                                 continue;
                             }
 
@@ -569,10 +624,11 @@ namespace SilksongCoop.Mod.Networking
                             // require the RTT probe specifically to succeed.
                             _lastPongReceivedMs = NowMs();
 
-                            // Capture buffer reference to avoid aliasing if buffer is resized
+                            // Capture buffer reference to avoid aliasing if buffer is resized.
+                            // Skip the protocol prefix: the game layer sees a bare packet.
                             byte[] dataBuffer = _readBuffer;
-                            int dataLength = (int)bytesRead;
-                            OnDataReceived?.Invoke(new NetworkPeerId(remoteId.m_SteamID), dataBuffer, 0, dataLength);
+                            int dataLength = (int)bytesRead - ProtocolPrefixSize;
+                            OnDataReceived?.Invoke(new NetworkPeerId(remoteId.m_SteamID), dataBuffer, ProtocolPrefixSize, dataLength);
                         }
                         catch (Exception ex)
                         {
@@ -656,6 +712,7 @@ namespace SilksongCoop.Mod.Networking
                 _requestedLobbyId = createdLobby.m_SteamID;
                 SteamMatchmaking.SetLobbyData(_lobbyId, "mod_name", "SilksongCoop");
                 SteamMatchmaking.SetLobbyData(_lobbyId, "mod_version", SilksongCoopPlugin.PluginVersion);
+                SteamMatchmaking.SetLobbyData(_lobbyId, LobbyProtocolKey, NetworkProtocol.Version.ToString());
                 return;
             }
 
@@ -677,10 +734,12 @@ namespace SilksongCoop.Mod.Networking
                 // Real build version, not a hard-coded placeholder — the joining client
                 // compares it and refuses to mix incompatible protocol layouts.
                 SteamMatchmaking.SetLobbyData(_lobbyId, "mod_version", SilksongCoopPlugin.PluginVersion);
+                SteamMatchmaking.SetLobbyData(_lobbyId, LobbyProtocolKey, NetworkProtocol.Version.ToString());
             }
             else
             {
                 IsHost = false;
+                _connectionAttemptStartMs = 0;
                 OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.ConnectionFailed);
             }
         }
@@ -709,6 +768,7 @@ namespace SilksongCoop.Mod.Networking
             {
                 Logger?.LogWarning($"Failed to enter lobby: {callback.m_EChatRoomEnterResponse}");
                 _requestedLobbyId = 0;
+                _connectionAttemptStartMs = 0;
                 try { SteamMatchmaking.LeaveLobby(enteredLobby); } catch { /* best-effort */ }
                 OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.ConnectionFailed);
                 return;
@@ -722,14 +782,20 @@ namespace SilksongCoop.Mod.Networking
                 // so 2.0.x and future incompatible builds joined each other blindly.
                 string modName = SteamMatchmaking.GetLobbyData(_lobbyId, "mod_name");
                 string modVersion = SteamMatchmaking.GetLobbyData(_lobbyId, "mod_version");
+                string protocolText = SteamMatchmaking.GetLobbyData(_lobbyId, LobbyProtocolKey);
+                bool protocolMatches = ushort.TryParse(protocolText, out ushort hostProtocol) &&
+                                       hostProtocol == NetworkProtocol.Version;
+
                 if (!string.Equals(modName, "SilksongCoop", StringComparison.Ordinal) ||
-                    !string.Equals(modVersion, SilksongCoopPlugin.PluginVersion, StringComparison.Ordinal))
+                    !string.Equals(modVersion, SilksongCoopPlugin.PluginVersion, StringComparison.Ordinal) ||
+                    !protocolMatches)
                 {
                     Logger?.LogWarning(
-                        $"[Steam] Refusing incompatible lobby: mod='{modName}', version='{modVersion}', local='{SilksongCoopPlugin.PluginVersion}'");
+                        $"[Steam] Refusing incompatible lobby: mod='{modName}', version='{modVersion}', protocol='{protocolText}' (local {NetworkProtocol.Version})");
                     try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
                     _lobbyId = CSteamID.Nil;
                     _requestedLobbyId = 0;
+                    _connectionAttemptStartMs = 0;
                     OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.VersionMismatch);
                     return;
                 }
@@ -739,18 +805,25 @@ namespace SilksongCoop.Mod.Networking
                 if (hostId == CSteamID.Nil)
                 {
                     Logger?.LogWarning("[Steam] Lobby owner is nil - cannot connect");
+                    _connectionAttemptStartMs = 0;
+                    try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
+                    _lobbyId = CSteamID.Nil;
+                    _requestedLobbyId = 0;
                     OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.ConnectionFailed);
                     return;
                 }
 
                 _remoteSteamId = hostId;
 
-                // Send an initial handshake packet to trigger P2P session acceptance on the host.
-                // Do NOT call NotifyPeerConnected yet - wait for P2P session to be established
-                // and for actual data to flow before marking as connected.
+                // Send the protocol revision to trigger P2P session acceptance on the host
+                // and let it verify compatibility before marking the session connected.
                 try
                 {
-                    byte[] handshake = new byte[] { 0x01 };
+                    byte[] handshake = new byte[]
+                    {
+                        (byte)(NetworkProtocol.Version & 0xFF),
+                        (byte)(NetworkProtocol.Version >> 8)
+                    };
                     bool sent = SteamNetworking.SendP2PPacket(hostId, handshake, (uint)handshake.Length, EP2PSend.k_EP2PSendReliable, 2);
                     if (!sent)
                         Logger?.LogWarning("[Steam] Failed to send handshake packet to host");
@@ -764,6 +837,14 @@ namespace SilksongCoop.Mod.Networking
 
         private void OnP2PSessionRequest(P2PSessionRequest_t callback)
         {
+            // A peer rejected for an incompatible protocol must not be re-adopted by a
+            // session request while it is still in the lobby.
+            if (_protocolRejectedPeer != CSteamID.Nil && _protocolRejectedPeer == callback.m_steamIDRemote)
+            {
+                SteamNetworking.CloseP2PSessionWithUser(callback.m_steamIDRemote);
+                return;
+            }
+
             // Only accept P2P traffic from the expected peer, or (on the host) from a
             // verified member of the current lobby. Being able to send a Steam packet to a
             // SteamID must not be enough to claim the single co-op slot.
@@ -793,6 +874,7 @@ namespace SilksongCoop.Mod.Networking
                 return;
 
             IsHost = false;
+            _protocolRejectedPeer = CSteamID.Nil;
             _requestedLobbyId = callback.m_steamIDLobby.m_SteamID;
             _lobbyRequestGeneration = ++_sessionGeneration;
             SilksongCoopPlugin.Instance?.SetActiveTransport(this);
@@ -835,15 +917,36 @@ namespace SilksongCoop.Mod.Networking
                 // Host: detect client joining the lobby
                 if (IsHost)
                 {
+                    // This callback can arrive after the first game datagram, so the peer
+                    // may already have been rejected for an incompatible protocol. Do not
+                    // re-adopt it.
+                    if (_protocolRejectedPeer != CSteamID.Nil && _protocolRejectedPeer == joinedUser)
+                    {
+                        try { SteamNetworking.CloseP2PSessionWithUser(joinedUser); } catch { /* best-effort */ }
+                        return;
+                    }
+
+                    if (_remoteSteamId != CSteamID.Nil && _remoteSteamId != joinedUser)
+                    {
+                        try { SteamNetworking.CloseP2PSessionWithUser(joinedUser); } catch { /* best-effort */ }
+                        Logger?.LogWarning($"[Steam] Ignoring additional lobby member {joinedUser.m_SteamID} - slot already taken");
+                        return;
+                    }
+
                     _remoteSteamId = joinedUser;
 
-                    // Accept the P2P session up front and send a handshake. Without this
-                    // the initial vitals broadcast can race ahead of session acceptance
-                    // and the client sees "connected" but no state.
+                    // Accept the P2P session up front and send a handshake.
                     try
                     {
                         SteamNetworking.AcceptP2PSessionWithUser(joinedUser);
-                        byte[] handshake = new byte[] { 0x01 };
+                        // Send the protocol revision so the peer can verify compatibility
+                        // before marking the session connected. A bare 0x01 ping carried
+                        // no version and could not gate the connection.
+                        byte[] handshake = new byte[]
+                        {
+                            (byte)(NetworkProtocol.Version & 0xFF),
+                            (byte)(NetworkProtocol.Version >> 8)
+                        };
                         SteamNetworking.SendP2PPacket(
                             joinedUser,
                             handshake,
@@ -856,13 +959,18 @@ namespace SilksongCoop.Mod.Networking
                         Logger?.LogWarning($"[Steam] Failed to prepare P2P session for {joinedUser.m_SteamID}: {ex.Message}");
                     }
 
-                    NotifyPeerConnected(joinedUser);
+                    // Don't notify connected until protocol verified on first valid packet
                 }
             }
             else if ((callback.m_rgfChatMemberStateChange & (uint)EChatMemberStateChange.k_EChatMemberStateChangeLeft) != 0 ||
                      (callback.m_rgfChatMemberStateChange & (uint)EChatMemberStateChange.k_EChatMemberStateChangeDisconnected) != 0)
             {
                 CSteamID leftUser = new CSteamID(callback.m_ulSteamIDUserChanged);
+
+                // Allow a peer that failed protocol validation to retry after it updates
+                // and rejoins; the rejection is scoped to one lobby membership.
+                if (_protocolRejectedPeer != CSteamID.Nil && _protocolRejectedPeer == leftUser)
+                    _protocolRejectedPeer = CSteamID.Nil;
 
                 // Role-agnostic: the client must also notice when the host leaves the
                 // lobby, otherwise it stays "connected" and streams into the void.

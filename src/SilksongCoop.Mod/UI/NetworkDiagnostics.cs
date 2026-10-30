@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Text;
 using UnityEngine;
 
 namespace SilksongCoop.Mod.UI
@@ -189,77 +187,6 @@ namespace SilksongCoop.Mod.UI
         {
             foreach (var (_, value) in _bandwidthHistory)
                 yield return value;
-        }
-
-        /// <summary>
-        /// Dump full diagnostics state to a file.
-        /// </summary>
-        public void DumpToFile(string filePath)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("=== Silksong Co-op Diagnostics Dump ===");
-            sb.AppendLine($"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-            sb.AppendLine();
-            
-            sb.AppendLine("--- Session Info ---");
-            sb.AppendLine($"Session Active: {_sessionActive}");
-            sb.AppendLine($"Session Duration: {SessionDuration:F1}s");
-            sb.AppendLine();
-            
-            sb.AppendLine("--- Current Metrics ---");
-            sb.AppendLine($"Bytes Out/s: {BytesOutPerSecond}");
-            sb.AppendLine($"Bytes In/s: {BytesInPerSecond}");
-            sb.AppendLine($"Packets Out/s: {PacketsOutPerSecond}");
-            sb.AppendLine($"Packets In/s: {PacketsInPerSecond}");
-            sb.AppendLine($"Current Ping: {_currentPing:F1}ms");
-            sb.AppendLine($"Packet Loss: {PacketLossPercent:F2}%");
-            sb.AppendLine();
-            
-            sb.AppendLine("--- Historical Data (60s) ---");
-            sb.AppendLine($"Ping samples: {_pingHistory.Count}");
-            sb.AppendLine($"Packet loss samples: {_packetLossHistory.Count}");
-            sb.AppendLine($"Bandwidth samples: {_bandwidthHistory.Count}");
-            
-            if (_pingHistory.Count > 0)
-            {
-                float minPing = float.MaxValue, maxPing = float.MinValue, sumPing = 0;
-                foreach (var (_, value) in _pingHistory)
-                {
-                    minPing = Math.Min(minPing, value);
-                    maxPing = Math.Max(maxPing, value);
-                    sumPing += value;
-                }
-                float avgPing = sumPing / _pingHistory.Count;
-                sb.AppendLine($"  Ping: min={minPing:F1}ms, avg={avgPing:F1}ms, max={maxPing:F1}ms");
-            }
-            
-            if (_packetLossHistory.Count > 0)
-            {
-                float minLoss = float.MaxValue, maxLoss = float.MinValue, sumLoss = 0;
-                foreach (var (_, value) in _packetLossHistory)
-                {
-                    minLoss = Math.Min(minLoss, value);
-                    maxLoss = Math.Max(maxLoss, value);
-                    sumLoss += value;
-                }
-                float avgLoss = sumLoss / _packetLossHistory.Count;
-                sb.AppendLine($"  Packet Loss: min={minLoss:F2}%, avg={avgLoss:F2}%, max={maxLoss:F2}%");
-            }
-            
-            if (_bandwidthHistory.Count > 0)
-            {
-                float minBw = float.MaxValue, maxBw = float.MinValue, sumBw = 0;
-                foreach (var (_, value) in _bandwidthHistory)
-                {
-                    minBw = Math.Min(minBw, value);
-                    maxBw = Math.Max(maxBw, value);
-                    sumBw += value;
-                }
-                float avgBw = sumBw / _bandwidthHistory.Count;
-                sb.AppendLine($"  Bandwidth: min={minBw:F0} B/s, avg={avgBw:F0} B/s, max={maxBw:F0} B/s");
-            }
-
-            File.WriteAllText(filePath, sb.ToString());
         }
 
         #endregion

@@ -112,15 +112,6 @@ namespace SilksongCoop.Mod.UI
         }
 
         /// <summary>
-        /// Force rebuild the skin (call if DPI / resolution changes dramatically).
-        /// Destroys the cached textures so a rebuild does not leak native memory.
-        /// </summary>
-        public static void Invalidate()
-        {
-            Release();
-        }
-
-        /// <summary>
         /// Destroys the cached skin textures. Call from the plugin's OnDestroy.
         /// </summary>
         public static void Release()

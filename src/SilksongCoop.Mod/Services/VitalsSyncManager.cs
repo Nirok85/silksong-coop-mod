@@ -96,7 +96,7 @@ namespace SilksongCoop.Mod.Services
                 }
                 finally
                 {
-                    System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+                    System.Buffers.ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
                 }
             }
             catch (Exception ex)
