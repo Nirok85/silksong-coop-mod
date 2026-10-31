@@ -513,7 +513,7 @@ namespace SilksongCoop.Mod.UI
                     GUILayout.Label($"<color=#D4A843><b>{_currentHostAddress}</b></color>");
                     DrawCopyButton(_currentHostAddress, "Copy");
                     GUILayout.EndHorizontal();
-                    GUILayout.Label("<color=#999999><i>Share the room code: it authenticates the session. Direct IP also works by LAN/VPN, but the host now requires the code.</i></color>");
+                    GUILayout.Label("<color=#ffaa44><i>Share the room code (with secret): it authenticates the session. Direct IP:port has no shared-secret barrier and should only be used with trusted peers on a private network.</i></color>");
                 }
 
                 if (_sessionState != null && _sessionState.SteamLobbyId.HasValue)

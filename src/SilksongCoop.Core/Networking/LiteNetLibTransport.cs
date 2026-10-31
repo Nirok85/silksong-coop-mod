@@ -127,6 +127,8 @@ namespace SilksongCoop.Core.Networking
         /// When true (and a room code is set), the host rejects handshakes from clients
         /// that did not announce a room code (direct-IP joins). Default false preserves
         /// the documented "direct IP:Port" join path.
+        /// WARNING: direct IP joins have no shared-secret barrier beyond the protocol.
+        /// Only enable RequireRoomCode if you want to restrict joins to room-code sessions.
         /// </summary>
         public bool RequireRoomCode
         {
@@ -1010,6 +1012,11 @@ namespace SilksongCoop.Core.Networking
                             // byte in the handshake payload). A direct-IP client has no shared
                             // secret and could never answer.
                             bool clientHasCode = payload.Length >= 9 && payload[8] != 0;
+                            if (_requireRoomCode && (_roomCode == null || !clientHasCode))
+                            {
+                                CoopLog.Warn("[LiteNetLibTransport] Rejecting handshake: RequireRoomCode enabled but no room code provided");
+                                break;
+                            }
                             if (_roomCode != null && clientHasCode)
                             {
                                 if (!(sender is IPEndPoint handshakeEndpoint))

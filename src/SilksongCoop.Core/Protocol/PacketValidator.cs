@@ -298,6 +298,11 @@ namespace SilksongCoop.Core.Protocol
             if (Math.Abs(packet.PositionX) > MaxPositionValue || Math.Abs(packet.PositionY) > MaxPositionValue)
                 return false;
 
+            // Revision/origin are transport-provided; bounds are generous to avoid breaking
+            // future extensions, but we still reject clearly impossible values.
+            if (packet.OriginPeerId == 0)
+                return false;
+
             return true;
         }
 
@@ -317,6 +322,9 @@ namespace SilksongCoop.Core.Protocol
 
             if (packet.ValueType == PersistentValueType.Int &&
                 (packet.Value < -MaxPersistentIntValue || packet.Value > MaxPersistentIntValue))
+                return false;
+
+            if (packet.OriginPeerId == 0)
                 return false;
 
             return true;

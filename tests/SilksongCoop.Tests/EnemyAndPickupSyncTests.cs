@@ -254,42 +254,48 @@ namespace SilksongCoop.Tests
             {
                 ItemKey = 0,
                 ValueType = PersistentValueType.Bool,
-                Value = 1
+                Value = 1,
+                OriginPeerId = 12345UL
             }));
 
             Assert.False(PacketValidator.ValidatePersistentState(new PersistentStatePacket
             {
                 ItemKey = 1,
                 ValueType = PersistentValueType.Bool,
-                Value = 2
+                Value = 2,
+                OriginPeerId = 12345UL
             }));
 
             Assert.True(PacketValidator.ValidatePersistentState(new PersistentStatePacket
             {
                 ItemKey = 1,
                 ValueType = PersistentValueType.Int,
-                Value = -5
+                Value = -5,
+                OriginPeerId = 12345UL
             }));
 
             Assert.True(PacketValidator.ValidatePersistentState(new PersistentStatePacket
             {
                 ItemKey = 1,
                 ValueType = PersistentValueType.Int,
-                Value = PacketValidator.MaxPersistentIntValue
+                Value = PacketValidator.MaxPersistentIntValue,
+                OriginPeerId = 12345UL
             }));
 
             Assert.False(PacketValidator.ValidatePersistentState(new PersistentStatePacket
             {
                 ItemKey = 1,
                 ValueType = PersistentValueType.Int,
-                Value = PacketValidator.MaxPersistentIntValue + 1
+                Value = PacketValidator.MaxPersistentIntValue + 1,
+                OriginPeerId = 12345UL
             }));
 
             Assert.False(PacketValidator.ValidatePersistentState(new PersistentStatePacket
             {
                 ItemKey = 1,
                 ValueType = PersistentValueType.Int,
-                Value = -PacketValidator.MaxPersistentIntValue - 1
+                Value = -PacketValidator.MaxPersistentIntValue - 1,
+                OriginPeerId = 12345UL
             }));
         }
 
