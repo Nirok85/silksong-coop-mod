@@ -24,9 +24,6 @@ jobs:
       - name: Build Core (warnings as errors)
         run: dotnet build src/SilksongCoop.Core/SilksongCoop.Core.csproj -c Release -p:TreatWarningsAsErrors=true
 
-      # Build the test project as part of `dotnet test` (no --no-build): it references
-      # SilksongCoop.Core, and a previous workflow built only Core then asked
-      # `dotnet test --no-build` to run an assembly that was never built.
       - name: Run tests
         run: dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj -c Release --logger "trx;LogFileName=results.trx"
 
@@ -38,19 +35,46 @@ jobs:
           path: '**/results.trx'
           if-no-files-found: ignore
 
-  # The Mod project needs the game's managed assemblies (Assembly-CSharp, UnityEngine,
-  # TeamCherry.TK2D, ...), which cannot be redistributed. Build it only on a self-hosted
-  # runner that has Silksong installed; enable this job there.
   mod:
-    name: Mod - compile against game assemblies (self-hosted only)
-    runs-on: ubuntu-latest
-    if: false
+    name: Mod - compile against game assemblies (self-hosted)
+    if: ${{ vars.ENABLE_MOD_CI == 'true' && github.event_name != 'pull_request' }}
+    runs-on: [self-hosted, linux, silksong]
+    environment: silksong-mod-build
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - name: Build Mod
-        run: dotnet build src/SilksongCoop.Mod/SilksongCoop.Mod.csproj -c Release -p:TreatWarningsAsErrors=true -p:ManagedDir="${{ env.MANAGED_DIR }}"
+
+      - name: Validate Managed directory
         env:
-          MANAGED_DIR: /path/to/Hollow Knight Silksong/Hollow Knight Silksong_Data/Managed
+          MANAGED_DIR: ${{ vars.SILKSONG_MANAGED_DIR }}
+        run: |
+          if [ -z "$MANAGED_DIR" ]; then
+            echo "::error::SILKSONG_MANAGED_DIR repository variable is not set"
+            exit 1
+          fi
+          case "$MANAGED_DIR" in
+            /home/*|/opt/*|/usr/local/*)
+              ;;
+            *)
+              echo "::error::SILKSONG_MANAGED_DIR must be an absolute path under /home, /opt, or /usr/local"
+              exit 1
+              ;;
+          esac
+          case "$MANAGED_DIR" in
+            *$GITHUB_WORKSPACE*|*$RUNNER_WORKSPACE*)
+              echo "::error::SILKSONG_MANAGED_DIR must not be inside the workspace"
+              exit 1
+              ;;
+          esac
+          test -f "$MANAGED_DIR/Assembly-CSharp.dll" || { echo "::error::Assembly-CSharp.dll not found in $MANAGED_DIR"; exit 1; }
+          test -f "$MANAGED_DIR/UnityEngine.CoreModule.dll" || { echo "::error::UnityEngine.CoreModule.dll not found in $MANAGED_DIR"; exit 1; }
+          test -f "$MANAGED_DIR/TeamCherry.TK2D.dll" || { echo "::error::TeamCherry.TK2D.dll not found in $MANAGED_DIR"; exit 1; }
+
+      - name: Build Mod (warnings as errors)
+        env:
+          MANAGED_DIR: ${{ vars.SILKSONG_MANAGED_DIR }}
+        run: dotnet build src/SilksongCoop.Mod/SilksongCoop.Mod.csproj -c Release -p:TreatWarningsAsErrors=true -p:ManagedDir="$MANAGED_DIR"
