@@ -223,6 +223,10 @@ namespace SilksongCoop.Core.Networking
         public bool IsConnected => _isConnected;
         public NetworkPeerId LocalPeerId => _localPeerId;
         public NetworkPeerId? RemotePeerId => _remotePeerId;
+        public System.Collections.Generic.IReadOnlyList<NetworkPeerId> ConnectedPeers =>
+            _remotePeerId.HasValue
+                ? new System.Collections.Generic.List<NetworkPeerId> { _remotePeerId.Value }
+                : new System.Collections.Generic.List<NetworkPeerId>();
         public int RoundTripTimeMs => _rttMs;
         /// <summary>
         /// Unreliable packet loss estimate (0-100) over the last few seconds, based on

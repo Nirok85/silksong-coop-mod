@@ -9,7 +9,7 @@ namespace SilksongCoop.Mod.UI
     /// packet rates, and session duration. Updated from the main Update loop each frame.
     /// Maintains 60-second rolling history for graph visualization.
     /// </summary>
-    public class NetworkDiagnostics
+    public class NetworkDiagnostics : SilksongCoop.Mod.Services.INetworkDiagnostics
     {
         #region Fields
 
@@ -160,6 +160,17 @@ namespace SilksongCoop.Mod.UI
             }
             _sessionActive = false;
             Reset();
+        }
+
+        /// <summary>
+        /// Exports a compact diagnostic snapshot as text for bug reports.
+        /// </summary>
+        public string ExportSnapshot()
+        {
+            return $"ping={CurrentPing:F1}ms loss={_externalLossPercent:F1}% " +
+                   $"bps_out={BytesOutPerSecond} bps_in={BytesInPerSecond} " +
+                   $"pps_out={PacketsOutPerSecond} pps_in={PacketsInPerSecond} " +
+                   $"session={SessionDuration:F1}s";
         }
 
         /// <summary>

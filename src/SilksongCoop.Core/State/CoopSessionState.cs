@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using SilksongCoop.Core.Networking;
 
 namespace SilksongCoop.Core.State
@@ -39,6 +40,7 @@ namespace SilksongCoop.Core.State
         private SessionRole _role = SessionRole.None;
         private NetworkPeerId? _localPeerId;
         private NetworkPeerId? _remotePeerId;
+        private readonly List<NetworkPeerId> _remotePeerIds = new List<NetworkPeerId>();
         private string? _currentRoomCode;
         private ulong? _steamLobbyId;
 
@@ -74,7 +76,43 @@ namespace SilksongCoop.Core.State
         public NetworkPeerId? RemotePeerId
         {
             get { lock (_lock) { return _remotePeerId; } }
-            set { lock (_lock) { _remotePeerId = value; } }
+            set
+            {
+                lock (_lock)
+                {
+                    _remotePeerId = value;
+                    _remotePeerIds.Clear();
+                    if (value.HasValue) _remotePeerIds.Add(value.Value);
+                }
+            }
+        }
+
+        /// <summary>
+        /// All connected remote peers (N-player foundation). For single-peer sessions this
+        /// mirrors <see cref="RemotePeerId"/>.
+        /// </summary>
+        public IReadOnlyList<NetworkPeerId> RemotePeerIds
+        {
+            get { lock (_lock) { return _remotePeerIds.ToArray(); } }
+        }
+
+        public void AddRemotePeer(NetworkPeerId peer)
+        {
+            lock (_lock)
+            {
+                if (!_remotePeerIds.Contains(peer)) _remotePeerIds.Add(peer);
+                if (!_remotePeerId.HasValue) _remotePeerId = peer;
+            }
+        }
+
+        public void RemoveRemotePeer(NetworkPeerId peer)
+        {
+            lock (_lock)
+            {
+                _remotePeerIds.Remove(peer);
+                if (_remotePeerId.HasValue && _remotePeerId.Value == peer)
+                    _remotePeerId = _remotePeerIds.Count > 0 ? _remotePeerIds[0] : (NetworkPeerId?)null;
+            }
         }
 
         public string? CurrentRoomCode

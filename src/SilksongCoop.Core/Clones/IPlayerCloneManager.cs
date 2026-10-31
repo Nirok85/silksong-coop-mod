@@ -60,6 +60,11 @@ namespace SilksongCoop.Core.Clones
         bool TryGetRemotePosition(NetworkPeerId peerId, out float posX, out float posY);
 
         /// <summary>
+        /// Returns true when the remote peer is present in the same scene as the local player.
+        /// </summary>
+        bool IsRemoteInSameScene(NetworkPeerId peerId);
+
+        /// <summary>
         /// Queries the complete interpolated state of the remote player clone.
         /// </summary>
         bool TryGetRemoteState(NetworkPeerId peerId, out RemoteCloneState state);

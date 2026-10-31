@@ -59,6 +59,8 @@ namespace SilksongCoop.Mod.State
         private readonly Dictionary<ulong, WorldEventPacket> _worldEvents = new Dictionary<ulong, WorldEventPacket>();
         private readonly Queue<ulong> _worldEventOrder = new Queue<ulong>();
         private readonly Dictionary<ulong, PersistentStatePacket> _persistentStates = new Dictionary<ulong, PersistentStatePacket>();
+        private readonly Dictionary<ulong, (uint Revision, ulong Origin)> _appliedWorldRevisions = new Dictionary<ulong, (uint Revision, ulong Origin)>();
+        private readonly Dictionary<ulong, (uint Revision, ulong Origin)> _appliedPersistentRevisions = new Dictionary<ulong, (uint Revision, ulong Origin)>();
         private readonly Queue<ulong> _persistentStateOrder = new Queue<ulong>();
         private readonly Dictionary<ulong, PersistentStatePacket> _persistentLastValue = new Dictionary<ulong, PersistentStatePacket>();
         // States that arrived while their scene was not loaded. They are retried after a
@@ -122,6 +124,10 @@ namespace SilksongCoop.Mod.State
             _pendingPersistentOrder.Clear();
             _pendingWorldEvents.Clear();
             _pendingWorldEventOrder.Clear();
+            // A new session may come from a different host whose revisions restart from a
+            // lower value, so applied revisions must not carry over.
+            _appliedWorldRevisions.Clear();
+            _appliedPersistentRevisions.Clear();
         }
 
         private void Update()
@@ -447,7 +453,9 @@ namespace SilksongCoop.Mod.State
                 ObjectKey = key,
                 EventType = eventType,
                 PositionX = transform.position.x,
-                PositionY = transform.position.y
+                PositionY = transform.position.y,
+                StateRevision = _packetSequence,
+                OriginPeerId = (ulong)(_plugin?.ActiveTransport?.LocalPeerId.Value ?? 0)
             };
 
             // Register even before a peer connects so a later client is caught up.
@@ -519,7 +527,9 @@ namespace SilksongCoop.Mod.State
                         Header = new PacketHeader(PacketType.PersistentState, WorldChannel, ++_packetSequence, NetworkClock.NowMs),
                         ItemKey = stored.ItemKey,
                         ValueType = stored.ValueType,
-                        Value = stored.Value
+                        Value = stored.Value,
+                        StateRevision = stored.StateRevision,
+                        OriginPeerId = stored.OriginPeerId
                     });
                 }
                 else
@@ -531,7 +541,9 @@ namespace SilksongCoop.Mod.State
                         ObjectKey = stored.ObjectKey,
                         EventType = stored.EventType,
                         PositionX = stored.PositionX,
-                        PositionY = stored.PositionY
+                        PositionY = stored.PositionY,
+                        StateRevision = stored.StateRevision,
+                        OriginPeerId = stored.OriginPeerId
                     });
                 }
 
@@ -572,9 +584,18 @@ namespace SilksongCoop.Mod.State
             if (RemoteApplyScope.IsActive) return;
             if (packet.ObjectKey == 0) return;
 
+            // Idempotency: drop stale or duplicate revisions. A revision is only meaningful
+            // together with its origin, and revision 0 means "unversioned" (legacy sender).
+            if (IsStaleRevision(_appliedWorldRevisions, packet.ObjectKey, packet.StateRevision, packet.OriginPeerId))
+                return;
+
             if (!TryApplyWorldEvent(packet))
             {
                 CachePendingWorldEvent(packet);
+            }
+            else
+            {
+                RecordRevision(_appliedWorldRevisions, packet.ObjectKey, packet.StateRevision, packet.OriginPeerId);
             }
         }
 
@@ -610,6 +631,32 @@ namespace SilksongCoop.Mod.State
             }
         }
 
+        /// <summary>
+        /// Compares an incoming revision with the last applied one for a world key.
+        /// Revisions from a different origin are not comparable, so they are applied.
+        /// </summary>
+        private static bool IsStaleRevision(
+            Dictionary<ulong, (uint Revision, ulong Origin)> applied,
+            ulong key,
+            uint revision,
+            ulong origin)
+        {
+            if (revision == 0) return false;
+            if (!applied.TryGetValue(key, out var last)) return false;
+            if (last.Origin != origin) return false;
+            return revision <= last.Revision;
+        }
+
+        private static void RecordRevision(
+            Dictionary<ulong, (uint Revision, ulong Origin)> applied,
+            ulong key,
+            uint revision,
+            ulong origin)
+        {
+            if (revision != 0)
+                applied[key] = (revision, origin);
+        }
+
         private void CachePendingWorldEvent(WorldEventPacket packet)
         {
             if (!_pendingWorldEvents.ContainsKey(packet.ObjectKey))
@@ -624,8 +671,14 @@ namespace SilksongCoop.Mod.State
                 _pendingWorldEventOrder.Enqueue(packet.ObjectKey);
             }
 
-            // Later events for the same object supersede earlier ones.
-            _pendingWorldEvents[packet.ObjectKey] = packet;
+            // Later events for the same object supersede earlier ones, but only if their
+            // revision is newer (idempotency guard).
+            if (!_pendingWorldEvents.TryGetValue(packet.ObjectKey, out var cached) ||
+                cached.StateRevision == 0 || packet.StateRevision == 0 ||
+                packet.StateRevision > cached.StateRevision)
+            {
+                _pendingWorldEvents[packet.ObjectKey] = packet;
+            }
             _pendingWorldRetryAt = Time.unscaledTime + 0.25f;
         }
 
@@ -638,6 +691,7 @@ namespace SilksongCoop.Mod.State
             foreach (var pair in _pendingWorldEvents)
             {
                 if (!TryApplyWorldEvent(pair.Value)) continue;
+                RecordRevision(_appliedWorldRevisions, pair.Key, pair.Value.StateRevision, pair.Value.OriginPeerId);
                 (applied ??= new List<ulong>()).Add(pair.Key);
             }
 
@@ -682,7 +736,9 @@ namespace SilksongCoop.Mod.State
                 Header = new PacketHeader(PacketType.PersistentState, WorldChannel, ++_packetSequence, NetworkClock.NowMs),
                 ItemKey = key,
                 ValueType = valueType,
-                Value = value
+                Value = value,
+                StateRevision = _packetSequence,
+                OriginPeerId = (ulong)(_plugin?.ActiveTransport?.LocalPeerId.Value ?? 0)
             };
 
             if (!_persistentStates.ContainsKey(key))
@@ -715,6 +771,11 @@ namespace SilksongCoop.Mod.State
             if (RemoteApplyScope.IsActive) return;
             if (packet.ItemKey == 0) return;
 
+            // Idempotency: drop stale or duplicate revisions. A revision is only meaningful
+            // together with its origin, and revision 0 means "unversioned" (legacy sender).
+            if (IsStaleRevision(_appliedPersistentRevisions, packet.ItemKey, packet.StateRevision, packet.OriginPeerId))
+                return;
+
             EnsurePersistentIndex();
 
             bool applied;
@@ -734,6 +795,10 @@ namespace SilksongCoop.Mod.State
                 // The object lives in a scene that is not loaded right now. Keep the packet
                 // and retry after the next scene change instead of silently dropping it.
                 CachePendingPersistentState(packet);
+            }
+            else
+            {
+                RecordRevision(_appliedPersistentRevisions, packet.ItemKey, packet.StateRevision, packet.OriginPeerId);
             }
         }
 
@@ -800,7 +865,12 @@ namespace SilksongCoop.Mod.State
                 _pendingPersistentOrder.Enqueue(packet.ItemKey);
             }
 
-            _pendingPersistentStates[packet.ItemKey] = packet;
+            if (!_pendingPersistentStates.TryGetValue(packet.ItemKey, out var cached) ||
+                cached.StateRevision == 0 || packet.StateRevision == 0 ||
+                packet.StateRevision > cached.StateRevision)
+            {
+                _pendingPersistentStates[packet.ItemKey] = packet;
+            }
             _pendingPersistentRetryAt = Time.unscaledTime + 0.25f;
         }
 
@@ -857,6 +927,7 @@ namespace SilksongCoop.Mod.State
             foreach (var pair in _pendingPersistentStates)
             {
                 if (!TryApplyPersistentState(pair.Value)) continue;
+                RecordRevision(_appliedPersistentRevisions, pair.Key, pair.Value.StateRevision, pair.Value.OriginPeerId);
                 (applied ??= new List<ulong>()).Add(pair.Key);
             }
 

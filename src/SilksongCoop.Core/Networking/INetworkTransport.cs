@@ -16,6 +16,12 @@ namespace SilksongCoop.Core.Networking
         NetworkPeerId LocalPeerId { get; }
 
         /// <summary>
+        /// All currently connected peers. Single-peer transports return a list with one
+        /// entry (or empty when disconnected); N-player transports may return more.
+        /// </summary>
+        System.Collections.Generic.IReadOnlyList<NetworkPeerId> ConnectedPeers { get; }
+
+        /// <summary>
         /// Current round-trip time in milliseconds, or 0 when the transport cannot
         /// measure it. Fed into the diagnostics overlay and adaptive interpolation.
         /// </summary>

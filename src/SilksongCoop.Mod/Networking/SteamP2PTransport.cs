@@ -90,6 +90,10 @@ namespace SilksongCoop.Mod.Networking
         public bool IsHost { get; private set; }
         public bool IsConnected { get; private set; }
         public NetworkPeerId LocalPeerId { get; private set; }
+        public System.Collections.Generic.IReadOnlyList<NetworkPeerId> ConnectedPeers =>
+            IsConnected && _remoteSteamId != CSteamID.Nil
+                ? new System.Collections.Generic.List<NetworkPeerId> { new NetworkPeerId((ulong)_remoteSteamId) }
+                : new System.Collections.Generic.List<NetworkPeerId>();
         public CSteamID CurrentLobbyId => _lobbyId;
 
         // Steamworks.NET's P2P API exposes no RTT/loss counters for lobby networking, so

@@ -95,7 +95,9 @@ namespace SilksongCoop.Tests
                 ObjectKey = 987654321,
                 EventType = WorldEventType.GateOpened,
                 PositionX = 10f,
-                PositionY = 20f
+                PositionY = 20f,
+                StateRevision = 12345,
+                OriginPeerId = 76561198000000001UL
             };
 
             Span<byte> buffer = stackalloc byte[64];
@@ -109,6 +111,8 @@ namespace SilksongCoop.Tests
             Assert.Equal(original.EventType, roundtrip.EventType);
             Assert.Equal(original.PositionX, roundtrip.PositionX);
             Assert.Equal(original.PositionY, roundtrip.PositionY);
+            Assert.Equal(original.StateRevision, roundtrip.StateRevision);
+            Assert.Equal(original.OriginPeerId, roundtrip.OriginPeerId);
         }
 
         [Fact]
@@ -224,7 +228,9 @@ namespace SilksongCoop.Tests
                 Header = new PacketHeader(PacketType.PersistentState, 4, 11, 999),
                 ItemKey = 0xABCDEF,
                 ValueType = PersistentValueType.Int,
-                Value = 7
+                Value = 7,
+                StateRevision = 4096,
+                OriginPeerId = 76561198000000002UL
             };
 
             Span<byte> buffer = stackalloc byte[64];
@@ -237,6 +243,8 @@ namespace SilksongCoop.Tests
             Assert.Equal(original.ItemKey, roundtrip.ItemKey);
             Assert.Equal(original.ValueType, roundtrip.ValueType);
             Assert.Equal(original.Value, roundtrip.Value);
+            Assert.Equal(original.StateRevision, roundtrip.StateRevision);
+            Assert.Equal(original.OriginPeerId, roundtrip.OriginPeerId);
         }
 
         [Fact]

@@ -53,6 +53,10 @@ namespace SilksongCoop.Core.Networking
         public bool IsHost { get; private set; }
         public bool IsConnected { get; private set; }
         public NetworkPeerId LocalPeerId { get; private set; }
+        public System.Collections.Generic.IReadOnlyList<NetworkPeerId> ConnectedPeers =>
+            IsConnected && _peer != null
+                ? new System.Collections.Generic.List<NetworkPeerId> { _peer.LocalPeerId }
+                : new System.Collections.Generic.List<NetworkPeerId>();
 
         /// <summary>Simulated round-trip time (two one-way latencies).</summary>
         public int RoundTripTimeMs => LatencyMs * 2;

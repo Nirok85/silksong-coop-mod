@@ -22,6 +22,10 @@ namespace SilksongCoop.Core.Protocol.Packets
         public ulong ItemKey;
         public PersistentValueType ValueType;
         public int Value;
+        /// <summary>Monotonic revision of this persistent value.</summary>
+        public uint StateRevision;
+        /// <summary>Steam/transport id of the peer that originated this value.</summary>
+        public ulong OriginPeerId;
 
         /// <summary>
         /// Serializes this packet to the specified writer.
@@ -32,6 +36,8 @@ namespace SilksongCoop.Core.Protocol.Packets
             writer.WriteUInt64(ItemKey);
             writer.WriteByte((byte)ValueType);
             writer.WriteInt32(Value);
+            writer.WriteUInt32(StateRevision);
+            writer.WriteUInt64(OriginPeerId);
         }
 
         /// <summary>
@@ -44,7 +50,9 @@ namespace SilksongCoop.Core.Protocol.Packets
                 Header = reader.ReadHeader(),
                 ItemKey = reader.ReadUInt64(),
                 ValueType = (PersistentValueType)reader.ReadByte(),
-                Value = reader.ReadInt32()
+                Value = reader.ReadInt32(),
+                StateRevision = reader.ReadUInt32(),
+                OriginPeerId = reader.ReadUInt64()
             };
         }
     }

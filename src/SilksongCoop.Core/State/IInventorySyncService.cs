@@ -16,6 +16,7 @@ namespace SilksongCoop.Core.State
         bool IsEquippedLoadoutIsolated { get; }
 
         event Action<string, ItemCategory>? OnItemUnlocked;
+        event Action<string, ItemCategory>? OnRemoteItemUnlocked;
         event Action<ItemUnlockPacket>? OnOutgoingItemUnlockPacket;
 
         void OnLocalItemDiscovered(string itemId, ItemCategory category, Guid? transactionId = null);

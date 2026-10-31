@@ -38,6 +38,7 @@ namespace SilksongCoop.Mod.Clones
         private NetworkPeerId _peerId;
         private bool _isPlayer2;
         private readonly SnapshotBuffer _buffer = new SnapshotBuffer(64);
+        private Renderer[]? _cachedRenderers;
         private readonly Dictionary<int, tk2dSpriteAnimationClip> _clipHashLookup = new Dictionary<int, tk2dSpriteAnimationClip>();
 
         private tk2dSprite? _sprite;
@@ -120,10 +121,11 @@ namespace SilksongCoop.Mod.Clones
         /// <param name="visible">True to show, false to hide.</param>
         public void SetVisibility(bool visible)
         {
-            var renderers = GetComponentsInChildren<Renderer>(includeInactive: true);
-            for (int i = 0; i < renderers.Length; i++)
+            if (_cachedRenderers == null)
+                _cachedRenderers = GetComponentsInChildren<Renderer>(includeInactive: true);
+            for (int i = 0; i < _cachedRenderers.Length; i++)
             {
-                if (renderers[i] != null) renderers[i].enabled = visible;
+                if (_cachedRenderers[i] != null) _cachedRenderers[i].enabled = visible;
             }
         }
 

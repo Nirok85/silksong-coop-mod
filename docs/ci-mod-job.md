@@ -12,8 +12,9 @@ queue):
 ```yaml
   mod:
     name: Mod - compile against game assemblies (self-hosted)
-    if: ${{ vars.ENABLE_MOD_CI == 'true' }}
+    if: ${{ vars.ENABLE_MOD_CI == 'true' && github.event_name != 'pull_request' }}
     runs-on: [self-hosted, linux, silksong]
+    environment: silksong-mod-build
 ```
 
 ## Enabling it

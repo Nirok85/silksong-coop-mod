@@ -15,18 +15,20 @@ namespace SilksongCoop.Mod.Services
     {
         private readonly ISessionService _sessionService;
         private readonly ITransportService _transportService;
-        private readonly SilksongCoopPlugin _plugin;
+        private readonly IGameplayActions _gameplay;
         private readonly DeathLifecycleCoordinator _deathCoordinator;
+
+        public INetworkDiagnostics? Diagnostics { get; set; }
 
         public DeathSyncManager(
             ISessionService sessionService,
             ITransportService transportService,
-            SilksongCoopPlugin plugin,
+            IGameplayActions gameplay,
             DeathLifecycleCoordinator deathCoordinator)
         {
             _sessionService = sessionService;
             _transportService = transportService;
-            _plugin = plugin;
+            _gameplay = gameplay;
             _deathCoordinator = deathCoordinator;
 
             deathCoordinator.OnOutgoingDeathPacket += OnOutgoingDeathPacket;
@@ -58,7 +60,7 @@ namespace SilksongCoop.Mod.Services
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
                     transport.Send(session.RemotePeerId.Value, buffer, 0, writer.Position, method, channel);
-                    _plugin.MenuUI?.Diagnostics?.RecordSent(writer.Position);
+                    Diagnostics?.RecordSent(writer.Position);
                 }
                 finally
                 {
@@ -67,18 +69,18 @@ namespace SilksongCoop.Mod.Services
             }
             catch (Exception ex)
             {
-                SilksongCoopPlugin.LogWarn($"[DeathSyncManager] Failed sending death packet: {ex.Message}");
+                SilksongCoop.Core.CoopLog.Warn($"[DeathSyncManager] Failed sending death packet: {ex.Message}");
             }
         }
 
         private void OnReviveAtPartnerRequested(float x, float y)
         {
-            _plugin.ReviveAtPartner(x, y);
+            _gameplay.ReviveAtPartner(x, y);
         }
 
         private void OnTeamWipeTriggered()
         {
-            _plugin.TriggerTeamWipe();
+            _gameplay.TriggerTeamWipe();
         }
     }
 }

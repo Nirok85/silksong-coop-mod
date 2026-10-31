@@ -15,24 +15,22 @@ namespace SilksongCoop.Mod.Services
     {
         private readonly ISessionService _sessionService;
         private readonly ITransportService _transportService;
-        private readonly SilksongCoopPlugin _plugin;
+        private readonly IGameplayActions _gameplay;
         private readonly IInventorySyncService _inventorySync;
 
-        public InventorySyncManager(ISessionService sessionService, ITransportService transportService, SilksongCoopPlugin plugin, IInventorySyncService inventorySync)
+        public INetworkDiagnostics? Diagnostics { get; set; }
+
+        public InventorySyncManager(ISessionService sessionService, ITransportService transportService, IGameplayActions gameplay, IInventorySyncService inventorySync)
         {
             _sessionService = sessionService;
             _transportService = transportService;
-            _plugin = plugin;
+            _gameplay = gameplay;
             _inventorySync = inventorySync;
 
             _inventorySync.OnOutgoingItemUnlockPacket += OnOutgoingItemUnlock;
 
-            // OnRemoteItemUnlocked is only exposed by the concrete service: it fires for
-            // unlocks received from the partner and must be applied locally.
-            if (_inventorySync is Core.State.InventorySyncService concrete)
-            {
-                concrete.OnRemoteItemUnlocked += (itemId, category) => _plugin.ApplyRemoteItemUnlock(itemId, category);
-            }
+            // Fires for unlocks received from the partner and must be applied locally.
+            _inventorySync.OnRemoteItemUnlocked += (itemId, category) => _gameplay.ApplyRemoteItemUnlock(itemId, category);
         }
 
         public void Initialize() { }
@@ -54,7 +52,7 @@ namespace SilksongCoop.Mod.Services
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
                     transport.Send(session.RemotePeerId.Value, buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency);
-                    _plugin.MenuUI?.Diagnostics?.RecordSent(writer.Position);
+                    Diagnostics?.RecordSent(writer.Position);
                 }
                 finally
                 {
@@ -63,7 +61,7 @@ namespace SilksongCoop.Mod.Services
             }
             catch (Exception ex)
             {
-                SilksongCoopPlugin.LogWarn($"[InventorySyncManager] Failed sending item unlock: {ex.Message}");
+                SilksongCoop.Core.CoopLog.Warn($"[InventorySyncManager] Failed sending item unlock: {ex.Message}");
             }
         }
     }

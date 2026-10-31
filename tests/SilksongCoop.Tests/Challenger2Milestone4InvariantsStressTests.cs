@@ -574,10 +574,14 @@ namespace SilksongCoop.Tests
             // Verify that in SilksongCoopPlugin.cs within ReviveAtPartner, "hero.cState.dead = false" occurs
             // BEFORE "hero.RegainControl" in the revival sequence!
             string pluginPath = FindRepoFile(Path.Combine("src", "SilksongCoop.Mod", "SilksongCoopPlugin.cs"));
+            string revivePath = FindRepoFile(Path.Combine("src", "SilksongCoop.Mod", "SilksongCoopPlugin.ReviveFlow.cs"));
 
             Assert.True(File.Exists(pluginPath), $"SilksongCoopPlugin.cs must exist at {pluginPath}");
 
-            string[] lines = File.ReadAllLines(pluginPath);
+            var allLines = new List<string>(File.ReadAllLines(pluginPath));
+            if (File.Exists(revivePath))
+                allLines.AddRange(File.ReadAllLines(revivePath));
+            string[] lines = allLines.ToArray();
             int clearDeadLine = -1;
             int regainControlLine = -1;
             bool insideReviveAtPartner = false;

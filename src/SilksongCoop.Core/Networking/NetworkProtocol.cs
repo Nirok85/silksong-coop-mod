@@ -12,9 +12,9 @@ namespace SilksongCoop.Core.Networking
     public static class NetworkProtocol
     {
         /// <summary>Current wire protocol revision.</summary>
-        public const ushort Version = 7;
+        public const ushort Version = 8;
 
         /// <summary>Label mixed into the HMAC session key for this revision.</summary>
-        public const string SessionLabel = "SilksongCoop-Session-v7";
+        public const string SessionLabel = "SilksongCoop-Session-v8";
     }
 }

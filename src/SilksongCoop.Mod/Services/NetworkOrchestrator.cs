@@ -23,9 +23,14 @@ namespace SilksongCoop.Mod.Services
         private readonly ISessionService _sessionService;
         private readonly ITransportService _transportService;
         private readonly IEventBus _eventBus;
-        private readonly SilksongCoopPlugin _plugin;
+        private readonly IPlayerCloneManager _cloneManager;
         private readonly AdaptiveTickRate _tickRate;
         private readonly InterestManager _interestManager;
+
+        /// <summary>
+        /// Optional diagnostics sink, wired up after the Menu UI is created.
+        /// </summary>
+        public INetworkDiagnostics? Diagnostics { get; set; }
 
         private float _transformSendAccumulator = 1f;
         private float _lastFarTransformSend = float.NegativeInfinity;
@@ -34,13 +39,18 @@ namespace SilksongCoop.Mod.Services
         private GameObject? _cachedHeroBodyOwner;
         private readonly System.Collections.Generic.Dictionary<string, int> _clipHashCache = new System.Collections.Generic.Dictionary<string, int>(64);
 
-        public NetworkOrchestrator(ISessionService sessionService, ITransportService transportService, IEventBus eventBus, SilksongCoopPlugin plugin)
+        public NetworkOrchestrator(
+            ISessionService sessionService,
+            ITransportService transportService,
+            IEventBus eventBus,
+            IPlayerCloneManager cloneManager,
+            float defaultTickHz)
         {
             _sessionService = sessionService;
             _transportService = transportService;
             _eventBus = eventBus;
-            _plugin = plugin;
-            _tickRate = new Core.Networking.AdaptiveTickRate(plugin.TickRateHzConfig?.Value ?? 30f);
+            _cloneManager = cloneManager;
+            _tickRate = new Core.Networking.AdaptiveTickRate(defaultTickHz);
             _interestManager = new InterestManager { DefaultRadius = 50f, Hysteresis = 8f };
 
             _eventBus.Subscribe<PeerConnectedEvent>(_ => OnPeerConnected());
@@ -87,8 +97,8 @@ namespace SilksongCoop.Mod.Services
             int rtt = transport.RoundTripTimeMs;
             if (rtt > 0) session.RoundTripTimeMs = rtt;
 
-            _plugin.MenuUI?.Diagnostics?.RecordPing(rtt);
-            _plugin.MenuUI?.Diagnostics?.RecordLossPercent(transport.PacketLossPercent);
+            Diagnostics?.RecordPing(rtt);
+            Diagnostics?.RecordLossPercent(transport.PacketLossPercent);
         }
 
         private void BroadcastLocalTransform(float deltaTime)
@@ -97,6 +107,9 @@ namespace SilksongCoop.Mod.Services
             var session = _sessionService.SessionState;
             if (transport == null || session?.IsConnected != true || !session.RemotePeerId.HasValue) return;
             if (session.Status == SessionStatus.Spectating || session.Status == SessionStatus.TeamWipe) return;
+
+            var recipients = GetRecipients(transport, session);
+            if (recipients.Count == 0) return;
 
             var hero = HeroController.instance;
             if (hero == null || hero.gameObject == null) return;
@@ -170,29 +183,34 @@ namespace SilksongCoop.Mod.Services
                     new System.Numerics.Vector2(position.x, position.y),
                     active: true);
 
-                // Area-of-interest gate. The manager must know where the remote peer is:
+                // Area-of-interest gate. The manager must know where the remote peers are:
                 // registering only the local player made every lookup for the remote id fail,
                 // which throttled the stream to one packet in eight. The gate only applies
-                // when both players share a scene: while they are apart the clone keeps its
+                // when a peer shares the scene: while players are apart the clone keeps its
                 // last position from a different room, so a distance check would throttle a
                 // reunion to the heartbeat rate and make the first seconds visibly steppy.
-                if (session.RemotePeerId.HasValue &&
-                    _plugin.CloneSpawner != null &&
-                    _plugin.CloneSpawner.IsRemoteInSameScene(session.RemotePeerId.Value) &&
-                    _plugin.CloneSpawner.TryGetRemotePosition(session.RemotePeerId.Value, out float remoteX, out float remoteY))
+                // The gate is evaluated for the first same-scene peer only; the recipient
+                // list decides actual delivery, so one distant peer can never hide the
+                // stream from another one standing next to us.
+                for (int i = 0; i < recipients.Count; i++)
                 {
-                    var remoteId = session.RemotePeerId.Value.Value;
-                    _interestManager.UpdateEntity(remoteId, new System.Numerics.Vector2(remoteX, remoteY));
+                    var peer = recipients[i];
+                    if (!_cloneManager.IsRemoteInSameScene(peer) ||
+                        !_cloneManager.TryGetRemotePosition(peer, out float remoteX, out float remoteY))
+                        continue;
+
+                    _interestManager.UpdateEntity(peer.Value, new System.Numerics.Vector2(remoteX, remoteY));
 
                     bool inRange = _interestManager.IsInInterest(
                         transport.LocalPeerId.Value,
                         new System.Numerics.Vector2(position.x, position.y),
-                        remoteId);
+                        peer.Value);
 
                     // Out of range: keep a slow heartbeat so the partner still sees us when
                     // they come back, but bound it by time instead of tick parity.
                     if (!inRange && Time.unscaledTime - _lastFarTransformSend < 0.5f)
                         return;
+                    break;
                 }
                 _lastFarTransformSend = Time.unscaledTime;
 
@@ -211,7 +229,25 @@ namespace SilksongCoop.Mod.Services
                         NetworkChannels.Transform);
 
                     session.RecordSent(writer.Position);
-                    _plugin.MenuUI?.Diagnostics?.RecordSent(writer.Position);
+                    Diagnostics?.RecordSent(writer.Position);
+
+                    // N-player: single-peer transports report the same recipient list, so the
+                    // extra loop costs nothing while multi-peer transports reach everyone.
+                    for (int i = 0; i < recipients.Count; i++)
+                    {
+                        if (recipients[i] == session.RemotePeerId.Value) continue;
+
+                        transport.Send(
+                            recipients[i],
+                            buffer,
+                            0,
+                            writer.Position,
+                            DeliveryMethod.Unreliable,
+                            NetworkChannels.Transform);
+
+                        session.RecordSent(writer.Position);
+                        Diagnostics?.RecordSent(writer.Position);
+                    }
                 }
                 finally
                 {
@@ -222,6 +258,19 @@ namespace SilksongCoop.Mod.Services
             {
                 SilksongCoopPlugin.LogWarn($"[NetworkOrchestrator] Failed broadcasting local transform: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Remote peers that must receive transform updates. Multi-peer transports may
+        /// report several peers; single-peer transports report exactly one.
+        /// </summary>
+        private static IReadOnlyList<NetworkPeerId> GetRecipients(INetworkTransport transport, CoopSessionState session)
+        {
+            var connected = transport.ConnectedPeers;
+            if (connected.Count > 0) return connected;
+            return session.RemotePeerId.HasValue
+                ? new[] { session.RemotePeerId.Value }
+                : System.Array.Empty<NetworkPeerId>();
         }
 
         // Reflection metadata lookups are expensive and this runs on every transform tick

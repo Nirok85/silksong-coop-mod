@@ -5,6 +5,45 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/),
 и этот проект придерживается [Semantic Versioning](https://semver.org/).
 
+## [3.0.0] - не выпущено
+
+**Обе стороны должны обновиться:** протокол поднят до v8 (пакеты событий мира и
+persistent-состояния получили поля ревизии и источника), сборки 2.2.x отклоняются
+и по версии handshake, и по ключу сессии.
+
+### Добавлено
+- **Ревизии и идемпотентность состояний мира.** `WorldEventPacket` и
+  `PersistentStatePacket` несут `StateRevision` и `OriginPeerId`; получатель
+  отбрасывает устаревшие и повторные ревизии, сравнивая их только в пределах
+  одного источника. Ревизия фиксируется и тогда, когда отложенное событие
+  применяется позже, после загрузки сцены.
+- **Сброс учёта ревизий при новой сессии** (`EnemySyncController.ResetSession`),
+  чтобы ревизии предыдущего хоста не блокировали новый сеанс.
+- **N-player подготовка.** `INetworkTransport.ConnectedPeers`,
+  `CoopSessionState.RemotePeerIds` (добавление/удаление, синхронизация с
+  `RemotePeerId`); трансляция трансформов обходит список получателей транспорта.
+  Сами транспорты по-прежнему держат одно соединение.
+- **Структурный логгер** `ICoopLogger`, реализованный плагином.
+- **Diagnostics:** `NetworkDiagnostics.ExportSnapshot()`.
+- **Тесты:** `FakeSteamTransport` и проверки версии протокола v8, полей пакетов
+  и `RemotePeerIds` (750 тестов).
+- Документация: `docs/protocol-v8.md`, `docs/state-authority.md`,
+  `docs/reconnect-and-resync.md`, `docs/migration-2.x-to-3.0.md`,
+  `docs/testing.md`, `docs/game-compatibility.md`, `docs/release-checklist.md`.
+
+### Изменено
+- Версия плагина и сборок — 3.0.0; `NetworkProtocol.Version` — 8,
+  метка ключа сессии — `SilksongCoop-Session-v8`.
+- `NetworkOrchestrator` больше не зависит от `SilksongCoopPlugin` (получает
+  `IPlayerCloneManager`, частоту тика и `INetworkDiagnostics`).
+- Спектатор-состояние вынесено в `SpectatorState`.
+
+### Не реализовано (не ожидать от 3.0.0)
+- Подключение более двух игроков: транспорты UDP/Steam держат одно соединение.
+- Host-authoritative арбитраж и голосование между пирами.
+- Протокол `SessionId`/`ConnectionEpoch` и delta-resync.
+- `GameCompatibilityReport` со стартовой проверкой патчей Harmony.
+
 ## [2.2.2] - 2026-10-29
 
 Исправления по итогам разбора сетевого горячего пути.

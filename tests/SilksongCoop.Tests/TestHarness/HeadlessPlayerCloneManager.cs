@@ -291,6 +291,14 @@ namespace SilksongCoop.Core.Clones
             return _clones.ContainsKey(peerId);
         }
 
+        /// <summary>
+        /// Headless harness has no scene concept; assume same scene for spawned clones.
+        /// </summary>
+        public bool IsRemoteInSameScene(NetworkPeerId peerId)
+        {
+            return _clones.ContainsKey(peerId);
+        }
+
         #endregion
 
         #region Interpolation

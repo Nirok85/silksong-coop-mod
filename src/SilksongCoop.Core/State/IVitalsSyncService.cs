@@ -41,5 +41,8 @@ namespace SilksongCoop.Core.State
         event Action<CurrencyType, int, int>? OnSharedCurrencyChanged; // (type, delta, newTotal)
         event Action<VitalsSyncPacket>? OnOutgoingVitalsBroadcast;
         event Action<CurrencySyncPacket>? OnOutgoingCurrencyBroadcast;
+
+        // Raised when the remote peer claims a world pickup that this peer should remove.
+        event Action<CurrencyType, ulong, float, float>? OnRemotePickupClaimed;
     }
 }

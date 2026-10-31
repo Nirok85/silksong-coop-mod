@@ -25,6 +25,10 @@ namespace SilksongCoop.Core.Protocol.Packets
         public WorldEventType EventType;
         public float PositionX;
         public float PositionY;
+        /// <summary>Monotonic revision of this world event, used for idempotency/ordering.</summary>
+        public uint StateRevision;
+        /// <summary>Steam/transport id of the peer that originated this event.</summary>
+        public ulong OriginPeerId;
 
         /// <summary>
         /// Serializes this packet to the specified writer.
@@ -36,6 +40,8 @@ namespace SilksongCoop.Core.Protocol.Packets
             writer.WriteByte((byte)EventType);
             writer.WriteFloat(PositionX);
             writer.WriteFloat(PositionY);
+            writer.WriteUInt32(StateRevision);
+            writer.WriteUInt64(OriginPeerId);
         }
 
         /// <summary>
@@ -49,7 +55,9 @@ namespace SilksongCoop.Core.Protocol.Packets
                 ObjectKey = reader.ReadUInt64(),
                 EventType = (WorldEventType)reader.ReadByte(),
                 PositionX = reader.ReadFloat(),
-                PositionY = reader.ReadFloat()
+                PositionY = reader.ReadFloat(),
+                StateRevision = reader.ReadUInt32(),
+                OriginPeerId = reader.ReadUInt64()
             };
         }
     }

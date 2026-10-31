@@ -16,22 +16,24 @@ namespace SilksongCoop.Mod.Services
     {
         private readonly ISessionService _sessionService;
         private readonly ITransportService _transportService;
-        private readonly SilksongCoopPlugin _plugin;
         private readonly IVitalsSyncService _vitalsSync;
         private readonly DeathLifecycleCoordinator _deathCoordinator;
         private readonly EnemySyncController? _enemySync;
 
+        /// <summary>
+        /// Optional diagnostics sink, wired up after the Menu UI is created.
+        /// </summary>
+        public INetworkDiagnostics? Diagnostics { get; set; }
+
         public VitalsSyncManager(
             ISessionService sessionService,
             ITransportService transportService,
-            SilksongCoopPlugin plugin,
             IVitalsSyncService vitalsSync,
             DeathLifecycleCoordinator deathCoordinator,
             EnemySyncController? enemySync)
         {
             _sessionService = sessionService;
             _transportService = transportService;
-            _plugin = plugin;
             _vitalsSync = vitalsSync;
             _deathCoordinator = deathCoordinator;
             _enemySync = enemySync;
@@ -42,10 +44,7 @@ namespace SilksongCoop.Mod.Services
             _vitalsSync.OnSharedNeedleUpgradeChanged += OnSharedNeedleUpgradeChanged;
             _vitalsSync.OnSharedMaxSilkChanged += OnSharedMaxSilkChanged;
             _vitalsSync.OnSharedCurrencyChanged += OnSharedCurrencyChanged;
-            if (_vitalsSync is Core.State.VitalsSyncService concrete)
-            {
-                concrete.OnRemotePickupClaimed += OnRemotePickupClaimed;
-            }
+            _vitalsSync.OnRemotePickupClaimed += OnRemotePickupClaimed;
         }
 
         public void Initialize() { }
@@ -92,7 +91,7 @@ namespace SilksongCoop.Mod.Services
                     if (packet is VitalsSyncPacket v) v.Serialize(ref writer);
                     else if (packet is CurrencySyncPacket c) c.Serialize(ref writer);
                     transport.Send(session.RemotePeerId.Value, buffer, 0, writer.Position, method, channel);
-                    _plugin.MenuUI?.Diagnostics?.RecordSent(writer.Position);
+                    Diagnostics?.RecordSent(writer.Position);
                 }
                 finally
                 {
@@ -101,7 +100,7 @@ namespace SilksongCoop.Mod.Services
             }
             catch (Exception ex)
             {
-                SilksongCoopPlugin.LogWarn($"[VitalsSyncManager] Failed sending {type}: {ex.Message}");
+                SilksongCoop.Core.CoopLog.Warn($"[VitalsSyncManager] Failed sending {type}: {ex.Message}");
             }
         }
 
