@@ -105,6 +105,9 @@ comparison, revision `0` opt-out, cache behaviour, reset on new session).
 - Scripted doors whose state lives only in a PlayMaker FSM or a `PlayerData` flag
   are not replicated. Doors, chests and lifts backed by `PersistentBoolItem` /
   `PersistentIntItem` are covered by the event hook and the 1 Hz poll.
+- Dialogue and quest-progress interactions are not replicated in 3.2.0. Syncing
+  them safely requires understanding Yarn/PlayMaker quest state; a naive mirror can
+  skip or double-apply story flags.
 - A physical drop without a serialized persistent id can still be credited twice if
   its position diverges beyond the 0.5-unit dedup window; wallet reconciliation
   converges to the higher value. Drops with a `PersistentBoolItem` use its stable id
