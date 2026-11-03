@@ -40,6 +40,7 @@ namespace SilksongCoop.Mod.Networking
         private readonly Callback<P2PSessionRequest_t> _p2pSessionRequestCallback;
         private readonly Callback<GameLobbyJoinRequested_t> _gameLobbyJoinRequestedCallback;
         private readonly Callback<LobbyChatUpdate_t> _lobbyChatUpdateCallback;
+        private bool _disposed;
         
         // Fix: Reuse buffer to avoid allocation in hot path
         private byte[] _readBuffer = new byte[4096];
@@ -71,6 +72,9 @@ namespace SilksongCoop.Mod.Networking
         private const int RttLossWindowMs = 5000;
         private const int SteamHeartbeatTimeoutMs = 15000;
         private const int MaxSteamDatagramsPerPoll = 256;
+        // Upper bound for one P2P datagram. The reported size is untrusted, so the receive
+        // buffer must never be resized to an attacker-controlled value.
+        private const int MaxSteamDatagramBytes = 64 * 1024;
         private int _rttMs;
         private int _packetLossPercent;
         private long _lastPingSentMs;
@@ -537,6 +541,15 @@ namespace SilksongCoop.Mod.Networking
                 while (processedDatagrams < MaxSteamDatagramsPerPoll &&
                        SteamNetworking.IsP2PPacketAvailable(out uint msgSize, channel))
                 {
+                    // Never allocate from an untrusted length. An oversized datagram stays
+                    // queued; skipping the channel keeps the poll bounded and lets the
+                    // heartbeat timeout remove the sender.
+                    if (msgSize > MaxSteamDatagramBytes)
+                    {
+                        Logger?.LogWarning($"[Steam] Dropped oversized packet on channel {channel} ({msgSize} bytes)");
+                        break;
+                    }
+
                     // Fix: Reuse buffer, expand only if necessary
                     if (msgSize > _readBuffer.Length)
                     {
@@ -579,18 +592,9 @@ namespace SilksongCoop.Mod.Networking
                                 continue;
                             }
 
-                            ushort remoteProtocol = (ushort)(_readBuffer[0] | (_readBuffer[1] << 8));
-                            if (remoteProtocol != NetworkProtocol.Version)
-                            {
-                                Logger?.LogWarning(
-                                    $"[Steam] Peer protocol {remoteProtocol} is incompatible with local {NetworkProtocol.Version}; disconnecting {remoteId.m_SteamID}");
-                                _protocolRejectedPeer = remoteId;
-                                try { SteamNetworking.CloseP2PSessionWithUser(remoteId); } catch { /* best-effort */ }
-                                NotifyPeerDisconnected(DisconnectReason.VersionMismatch);
-                                continue;
-                            }
-
                             // Fix: Validate that packets are from the expected remote peer
+                            // BEFORE interpreting their payload. A packet from another
+                            // lobby member must not be able to disconnect the real peer.
                             if (_remoteSteamId == CSteamID.Nil)
                             {
                                 // BUG-N5: only a host may adopt the first peer it hears from.
@@ -610,18 +614,33 @@ namespace SilksongCoop.Mod.Networking
                                     SteamNetworking.CloseP2PSessionWithUser(remoteId);
                                     continue;
                                 }
-
-                                _remoteSteamId = remoteId;
-                            }
-
-                            if (!_peerConnectNotified && _remoteSteamId == remoteId)
-                            {
-                                NotifyPeerConnected(remoteId);
                             }
                             else if (_remoteSteamId != remoteId)
                             {
                                 Logger?.LogWarning($"[Steam] Rejected packet from unexpected peer: {remoteId.m_SteamID}");
                                 continue;
+                            }
+
+                            ushort remoteProtocol = (ushort)(_readBuffer[0] | (_readBuffer[1] << 8));
+                            if (remoteProtocol != NetworkProtocol.Version)
+                            {
+                                Logger?.LogWarning(
+                                    $"[Steam] Peer protocol {remoteProtocol} is incompatible with local {NetworkProtocol.Version}; disconnecting {remoteId.m_SteamID}");
+                                _protocolRejectedPeer = remoteId;
+                                try { SteamNetworking.CloseP2PSessionWithUser(remoteId); } catch { /* best-effort */ }
+                                if (_remoteSteamId == remoteId)
+                                    NotifyPeerDisconnected(DisconnectReason.VersionMismatch);
+                                continue;
+                            }
+
+                            // The host adopts the peer only after it passed both lobby and
+                            // protocol validation.
+                            if (_remoteSteamId == CSteamID.Nil)
+                                _remoteSteamId = remoteId;
+
+                            if (!_peerConnectNotified && _remoteSteamId == remoteId)
+                            {
+                                NotifyPeerConnected(remoteId);
                             }
 
                             // Any authenticated traffic proves the peer is alive; do not
@@ -992,7 +1011,19 @@ namespace SilksongCoop.Mod.Networking
         /// </summary>
         public void Dispose()
         {
+            if (_disposed) return;
+            _disposed = true;
+
             Disconnect();
+
+            // Steamworks keeps the registered callbacks alive until they are disposed.
+            // Without this a recreated transport would still receive lobby/invite events
+            // from the previous instance.
+            _lobbyCreatedCallback?.Dispose();
+            _lobbyEnteredCallback?.Dispose();
+            _p2pSessionRequestCallback?.Dispose();
+            _gameLobbyJoinRequestedCallback?.Dispose();
+            _lobbyChatUpdateCallback?.Dispose();
         }
 
         #endregion // Steam Callback Handlers

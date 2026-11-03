@@ -1,6 +1,6 @@
 # State authority model
 
-## Current state (3.0.1)
+## Current state (3.0.2)
 
 | State | Behaviour today |
 |---|---|
@@ -17,7 +17,7 @@
 There is **no** host-authoritative arbitration: the mod does not vote, does not
 compare peers, and does not reject a peer's state because the local peer is the
 host. Any peer can send vitals, currency, world events and deaths, and the
-receiver applies them after field validation. Do not describe 3.0.1 as
+receiver applies them after field validation. Do not describe 3.0.2 as
 "host-authoritative".
 
 ## Revision rules

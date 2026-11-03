@@ -47,6 +47,21 @@ namespace SilksongCoop.Core.Networking
         }
 
         /// <summary>
+        /// Number of live buckets. Used by callers that key buckets by an untrusted
+        /// identifier (for example a source endpoint) and must keep the table bounded.
+        /// </summary>
+        public int BucketCount => _buckets.Count;
+
+        /// <summary>
+        /// Drops every bucket. A bounded endpoint limiter uses this when an attacker has
+        /// created too many source buckets; the reset only affects rate accounting.
+        /// </summary>
+        public void Clear()
+        {
+            _buckets.Clear();
+        }
+
+        /// <summary>
         /// Token bucket implementation with time-based refill.
         /// </summary>
         private class TokenBucket

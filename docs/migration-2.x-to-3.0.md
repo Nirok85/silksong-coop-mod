@@ -1,8 +1,8 @@
 # Migration guide: 2.x → 3.0.0
 
-> **Patch 3.0.1:** no protocol change and no extra migration step. Install 3.0.1
+> **Patch 3.0.2:** no protocol change and no extra migration step. Install 3.0.2
 > instead of 3.0.0; Steam lobbies compare the full mod version, so both players
-> should use 3.0.1.
+> should use 3.0.2.
 
 ## Breaking changes
 

@@ -67,16 +67,55 @@ namespace SilksongCoop.Core.State
 
             if (!_records.ContainsKey(key))
             {
-                while (_records.Count >= _capacity && _order.Count > 0)
+                while (_records.Count >= _capacity)
                 {
-                    ulong oldest = _order.Dequeue();
-                    if (_records.Remove(oldest)) break;
+                    if (!EvictOne()) break;
                 }
 
                 _order.Enqueue(key);
             }
 
             _records[key] = new DeadEnemyRecord(x, y, isBoss);
+        }
+
+        /// <summary>
+        /// Evicts one record, preferring an ordinary enemy over a boss. Boss records are
+        /// needed for late-join catch-up across the scene change that follows the kill, so
+        /// they must not be pushed out by a long tail of regular kills.
+        /// </summary>
+        private bool EvictOne()
+        {
+            if (_records.Count == 0) return false;
+
+            int count = _order.Count;
+            bool foundVictim = false;
+
+            // Walk the FIFO once: remove the oldest non-boss record, re-queue the rest.
+            for (int i = 0; i < count; i++)
+            {
+                ulong key = _order.Dequeue();
+                if (!foundVictim &&
+                    _records.TryGetValue(key, out var record) &&
+                    !record.IsBoss)
+                {
+                    _records.Remove(key);
+                    foundVictim = true;
+                    continue;
+                }
+
+                _order.Enqueue(key);
+            }
+
+            if (foundVictim) return true;
+
+            // Every record is a boss (or the queue is stale): fall back to the oldest.
+            while (_order.Count > 0)
+            {
+                ulong key = _order.Dequeue();
+                if (_records.Remove(key)) return true;
+            }
+
+            return false;
         }
 
         /// <summary>

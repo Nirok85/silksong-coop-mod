@@ -79,6 +79,7 @@ namespace SilksongCoop.Mod.State
         private Dictionary<ulong, PersistentItem<bool>>? _boolItems;
         private Dictionary<ulong, PersistentItem<int>>? _intItems;
         private string _persistentIndexScene = string.Empty;
+        private bool _persistentIndexDirty;
         private float _pendingPersistentRetryAt;
         private float _pendingWorldRetryAt;
 
@@ -243,10 +244,40 @@ namespace SilksongCoop.Mod.State
         public void ApplyRemoteHit(EnemySyncPacket packet)
         {
             bool dead = packet.EventType == EnemySyncEventType.Death;
-            if (!_service.TryAcceptHit(packet.EnemyKey, packet.Hp, dead)) return;
 
-            var target = FindEnemy(packet.EnemyKey, packet.PositionX, packet.PositionY);
-            if (target == null) return;
+            // A death must match the exact object: the packet may describe an enemy in a
+            // scene this peer has not loaded, and the proximity fallback could kill an
+            // unrelated enemy standing at similar coordinates in the current scene.
+            // Hits keep the fallback to tolerate a hierarchy-hash drift.
+            var target = FindEnemy(
+                packet.EnemyKey,
+                packet.PositionX,
+                packet.PositionY,
+                allowProximity: !dead);
+            if (target == null)
+            {
+                // Cache a death for a not-yet-loaded enemy instead of recording it as
+                // applied. Recording it here used to lose the kill forever and made the
+                // later duplicate look like a stale packet.
+                if (dead && packet.EnemyKey != 0)
+                {
+                    CachePendingDeadEnemy(
+                        new EnemySnapshotEntry
+                        {
+                            EnemyKey = packet.EnemyKey,
+                            Hp = 0,
+                            Flags = EnemySnapshotEntry.FlagDead,
+                            PositionX = packet.PositionX,
+                            PositionY = packet.PositionY
+                        },
+                        packet.Header.Timestamp);
+                }
+                return;
+            }
+
+            // Only mark the packet as applied once the target was found. Otherwise the
+            // service would reject every retry even though nothing was applied locally.
+            if (!_service.TryAcceptHit(packet.EnemyKey, packet.Hp, dead)) return;
 
             ApplyEnemyState(target, packet.Hp, dead, authoritative: false);
         }
@@ -428,7 +459,11 @@ namespace SilksongCoop.Mod.State
             for (int i = 0; i < count; i++)
             {
                 var entry = packet.Entries[i];
-                var target = FindEnemy(entry.EnemyKey, entry.PositionX, entry.PositionY);
+                var target = FindEnemy(
+                    entry.EnemyKey,
+                    entry.PositionX,
+                    entry.PositionY,
+                    allowProximity: !entry.IsDead);
 
                 // A dead boss may belong to a scene this peer has not loaded yet. Cache the
                 // death and apply it when that scene finishes loading; the snapshot itself
@@ -695,9 +730,11 @@ namespace SilksongCoop.Mod.State
             }
 
             // Later events for the same object supersede earlier ones, but only if their
-            // revision is newer (idempotency guard).
+            // revision is newer (idempotency guard). Revisions from different origins are
+            // not comparable, so an update from another peer must replace the cached one.
             if (!_pendingWorldEvents.TryGetValue(packet.ObjectKey, out var cached) ||
                 cached.StateRevision == 0 || packet.StateRevision == 0 ||
+                cached.OriginPeerId != packet.OriginPeerId ||
                 packet.StateRevision > cached.StateRevision)
             {
                 _pendingWorldEvents[packet.ObjectKey] = packet;
@@ -888,8 +925,11 @@ namespace SilksongCoop.Mod.State
                 _pendingPersistentOrder.Enqueue(packet.ItemKey);
             }
 
+            // Same rule as world events: revisions are only comparable within one origin,
+            // so a second peer's update replaces a cached entry instead of being discarded.
             if (!_pendingPersistentStates.TryGetValue(packet.ItemKey, out var cached) ||
                 cached.StateRevision == 0 || packet.StateRevision == 0 ||
+                cached.OriginPeerId != packet.OriginPeerId ||
                 packet.StateRevision > cached.StateRevision)
             {
                 _pendingPersistentStates[packet.ItemKey] = packet;
@@ -898,16 +938,18 @@ namespace SilksongCoop.Mod.State
         }
 
         /// <summary>
-        /// Rebuilds the key → object indexes for the active scene once. Replaces the
-        /// per-packet <c>FindObjectsByType</c> scan (which was O(objects) for every packet,
-        /// and made a large catch-up replay extremely expensive).
+        /// Rebuilds the key → object indexes for the active scene. Includes inactive objects
+        /// so a door/lever/chest that activates later is still found by the pending-state
+        /// pump instead of being retried forever.
         /// </summary>
         private void RebuildPersistentIndex()
         {
             var bools = new Dictionary<ulong, PersistentItem<bool>>();
             var ints = new Dictionary<ulong, PersistentItem<int>>();
 
-            var boolItems = UnityEngine.Object.FindObjectsByType<PersistentBoolItem>(FindObjectsSortMode.None);
+            var boolItems = UnityEngine.Object.FindObjectsByType<PersistentBoolItem>(
+                FindObjectsInactive.Include,
+                FindObjectsSortMode.None);
             for (int i = 0; i < boolItems.Length; i++)
             {
                 var item = boolItems[i];
@@ -916,7 +958,9 @@ namespace SilksongCoop.Mod.State
                 if (key != 0) bools[key] = item;
             }
 
-            var intItems = UnityEngine.Object.FindObjectsByType<PersistentIntItem>(FindObjectsSortMode.None);
+            var intItems = UnityEngine.Object.FindObjectsByType<PersistentIntItem>(
+                FindObjectsInactive.Include,
+                FindObjectsSortMode.None);
             for (int i = 0; i < intItems.Length; i++)
             {
                 var item = intItems[i];
@@ -928,11 +972,13 @@ namespace SilksongCoop.Mod.State
             _boolItems = bools;
             _intItems = ints;
             _persistentIndexScene = SceneManager.GetActiveScene().name;
+            _persistentIndexDirty = false;
         }
 
         private void EnsurePersistentIndex()
         {
-            if (_boolItems == null || _intItems == null ||
+            if (_persistentIndexDirty ||
+                _boolItems == null || _intItems == null ||
                 !string.Equals(_persistentIndexScene, SceneManager.GetActiveScene().name, StringComparison.Ordinal))
             {
                 RebuildPersistentIndex();
@@ -965,6 +1011,9 @@ namespace SilksongCoop.Mod.State
             {
                 // Keep retrying at a slower cadence; the object may activate later in the
                 // same scene (lazy room loading) and must not be dropped permanently.
+                // Ask for a fresh index on the next attempt: an object instantiated after
+                // the first scan is not in the cached dictionary yet.
+                _persistentIndexDirty = true;
                 _pendingPersistentRetryAt = Time.unscaledTime + 5f;
             }
 
@@ -1165,17 +1214,21 @@ namespace SilksongCoop.Mod.State
         private void PumpPendingDeadEnemies()
         {
             if (_pendingDeadEnemies.Count == 0) return;
-            if (_plugin?.SessionState?.IsHost == true) return;
             if (Time.unscaledTime < _pendingDeadRetryAt) return;
 
             List<ulong>? resolved = null;
             foreach (var pair in _pendingDeadEnemies)
             {
                 var pending = pair.Value;
+                // Pending deaths belong to a specific enemy in a scene that was not loaded
+                // when the packet arrived. Only an exact key match may apply them; the
+                // proximity fallback could otherwise kill an unrelated enemy in the scene
+                // the player has since entered.
                 var target = FindEnemy(
                     pending.Entry.EnemyKey,
                     pending.Entry.PositionX,
-                    pending.Entry.PositionY);
+                    pending.Entry.PositionY,
+                    allowProximity: false);
                 if (target == null) continue;
 
                 if (_service.TryAcceptSnapshot(
@@ -1265,7 +1318,7 @@ namespace SilksongCoop.Mod.State
             return key;
         }
 
-        private HealthManager? FindEnemy(ulong key, float x, float y)
+        private HealthManager? FindEnemy(ulong key, float x, float y, bool allowProximity = true)
         {
             HealthManager? nearest = null;
             float nearestSq = 2.5f * 2.5f;
@@ -1279,6 +1332,7 @@ namespace SilksongCoop.Mod.State
                     if (GetKey(hm) == key)
                         return hm;
 
+                    if (!allowProximity) continue;
                     if (hm.GetIsDead()) continue;
 
                     float dx = hm.transform.position.x - x;

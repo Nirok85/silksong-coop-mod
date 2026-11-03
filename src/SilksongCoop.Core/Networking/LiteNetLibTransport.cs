@@ -110,11 +110,11 @@ namespace SilksongCoop.Core.Networking
         private const int MaxPendingHandshakes = 8;
         private readonly object _lock = new();
         private readonly RateLimiter _rateLimiter = new RateLimiter(maxTokens: 4096, refillRatePerSecond: 256);
-        // Pre-authentication traffic cannot be keyed by a peer id yet. A single global
-        // bucket caps handshake/HMAC work and challenge-reflection amplification without
-        // letting an attacker allocate a bucket per spoofed endpoint.
-        private readonly RateLimiter _preAuthLimiter = new RateLimiter(maxTokens: 64, refillRatePerSecond: 32);
-        private static readonly NetworkPeerId PreAuthBucket = new NetworkPeerId(ulong.MaxValue, "pre-auth");
+        // Pre-authentication traffic cannot be keyed by a peer id yet. Buckets are keyed
+        // by source endpoint so one flooding sender cannot starve a legitimate client's
+        // handshake. The table is cleared if spoofed sources grow it past the cap.
+        private readonly RateLimiter _preAuthLimiter = new RateLimiter(maxTokens: 32, refillRatePerSecond: 16);
+        private const int MaxPreAuthBuckets = 1024;
         private const int MaxDatagramsPerPoll = 256;
         private readonly ConnectionAuthenticator _authenticator = new ConnectionAuthenticator();
         // Derived after the HMAC challenge; authenticates every post-handshake datagram
@@ -903,6 +903,43 @@ namespace SilksongCoop.Core.Networking
 
         #region Incoming Packet Processing
 
+        /// <summary>
+        /// Applies the pre-authentication rate limit per source endpoint. Returns false for
+        /// a malformed sender, or when that endpoint has spent its handshake budget.
+        /// </summary>
+        private bool IsPreAuthAllowed(EndPoint sender)
+        {
+            if (!(sender is IPEndPoint endpoint)) return false;
+
+            if (_preAuthLimiter.BucketCount > MaxPreAuthBuckets)
+                _preAuthLimiter.Clear();
+
+            ulong key = ComputeEndpointBucketKey(endpoint);
+            return _preAuthLimiter.TryConsume(new NetworkPeerId(key, "pre-auth"));
+        }
+
+        /// <summary>
+        /// FNV-1a hash over the address bytes and port, used only as a rate-limit bucket id.
+        /// A hash collision merely makes two endpoints share one handshake budget.
+        /// </summary>
+        private static ulong ComputeEndpointBucketKey(IPEndPoint endpoint)
+        {
+            unchecked
+            {
+                ulong hash = 14695981039346656037UL;
+                byte[] address = endpoint.Address.GetAddressBytes();
+                for (int i = 0; i < address.Length; i++)
+                {
+                    hash ^= address[i];
+                    hash *= 1099511628211UL;
+                }
+
+                hash ^= (uint)endpoint.Port;
+                hash *= 1099511628211UL;
+                return hash == 0 ? 1UL : hash;
+            }
+        }
+
         private void ProcessIncomingDatagram(ReadOnlySpan<byte> datagram, EndPoint sender)
         {
             // Guard against malformed/tiny packets
@@ -927,7 +964,9 @@ namespace SilksongCoop.Core.Networking
 
                 // Nothing is authenticated yet: rate-limit handshakes/challenges so an
                 // attacker cannot brute-force the room-code HMAC or reflect challenges.
-                if (!IsConnected && !_preAuthLimiter.TryConsume(PreAuthBucket))
+                // The bucket is per source endpoint so a single sender cannot exhaust the
+                // budget that a real client needs to complete its handshake.
+                if (!IsConnected && !IsPreAuthAllowed(sender))
                     return;
 
                 // Post-handshake frames must carry a valid MAC. This blocks spoofed
@@ -1138,6 +1177,16 @@ namespace SilksongCoop.Core.Networking
                     case UdpFrameType.HandshakeAck:
                         if (!IsHost && !IsConnected)
                         {
+                            // A room-code session is authenticated only by the HMAC challenge.
+                            // Accepting an ack before the client derived _sessionKey would let
+                            // a spoofed ack pin a false peer id and report "connected" while
+                            // the real host never received a challenge response.
+                            if (_roomCode != null && _sessionKey == null)
+                            {
+                                CoopLog.Warn("[LiteNetLibTransport] Ignored HandshakeAck before the challenge completed");
+                                break;
+                            }
+
                             // Validate sender matches expected remote endpoint
                             if (_remoteEndPoint != null)
                             {
@@ -1256,6 +1305,19 @@ namespace SilksongCoop.Core.Networking
         }
 
         /// <summary>
+        /// Wrap-aware sequence comparison: true when <paramref name="candidate"/> is ahead
+        /// of <paramref name="reference"/> even if the 32-bit counter wrapped.
+        /// </summary>
+        private static bool IsSequenceNewer(uint candidate, uint reference) =>
+            unchecked((int)(candidate - reference)) > 0;
+
+        /// <summary>
+        /// Wrap-aware counterpart of <see cref="IsSequenceNewer"/> for stale packets.
+        /// </summary>
+        private static bool IsSequenceOlder(uint candidate, uint reference) =>
+            unchecked((int)(candidate - reference)) < 0;
+
+        /// <summary>
         /// Buffers or dispatches an incoming data frame.
         /// </summary>
         /// <returns>
@@ -1286,13 +1348,13 @@ namespace SilksongCoop.Core.Networking
                     // dropped from its own retransmit list). Instead, reject NEW future
                     // packets without ACKing them once the buffer is full.
                     const int MaxPendingPerChannel = 256;
-                    if (pending.Count >= MaxPendingPerChannel && sequence > expected)
+                    if (pending.Count >= MaxPendingPerChannel && IsSequenceNewer(sequence, expected))
                     {
                         // Reclaim entries that can no longer be needed (stale duplicates).
                         var staleKeys = new List<uint>();
                         foreach (var key in pending.Keys)
                         {
-                            if (key < expected)
+                            if (IsSequenceOlder(key, expected))
                                 staleKeys.Add(key);
                         }
                         foreach (var key in staleKeys)
@@ -1325,7 +1387,7 @@ namespace SilksongCoop.Core.Networking
                             _expectedReceiveSequences[channel] = expected;
                         }
                     }
-                    else if (sequence > expected)
+                    else if (IsSequenceNewer(sequence, expected))
                     {
                         pending[sequence] = data;
                     }
@@ -1365,7 +1427,7 @@ namespace SilksongCoop.Core.Networking
                         _latestSequencedReceived[channel] = sequence;
                         DispatchData(data);
                     }
-                    else if (sequence > latest)
+                    else if (IsSequenceNewer(sequence, latest))
                     {
                         _latestSequencedReceived[channel] = sequence;
                         DispatchData(data);
@@ -1474,12 +1536,23 @@ namespace SilksongCoop.Core.Networking
 
         /// <summary>
         /// Removes an acknowledged reliable packet. Older peers sent ACKs with the
-        /// Unreliable method byte, so fall back to both reliable sequence spaces.
+        /// Unreliable method byte, so only that legacy form falls back to the reliable
+        /// sequence spaces. A modern reliable ACK must retire exactly its own space;
+        /// otherwise a delayed duplicate could remove an unrelated packet.
         /// </summary>
         private bool TryRemoveAcknowledged(byte channel, DeliveryMethod method, uint sequence)
         {
-            if (!_unacknowledgedIndex.TryGetValue((channel, method, sequence), out var node) &&
-                !_unacknowledgedIndex.TryGetValue((channel, DeliveryMethod.ReliableOrdered, sequence), out node) &&
+            if (_unacknowledgedIndex.TryGetValue((channel, method, sequence), out var node))
+            {
+                ReturnPooledBuffer(node.Value.Envelope);
+                _unacknowledged.Remove(node);
+                _unacknowledgedIndex.Remove((node.Value.Channel, node.Value.Method, node.Value.Sequence));
+                return true;
+            }
+
+            if (method != DeliveryMethod.Unreliable) return false;
+
+            if (!_unacknowledgedIndex.TryGetValue((channel, DeliveryMethod.ReliableOrdered, sequence), out node) &&
                 !_unacknowledgedIndex.TryGetValue((channel, DeliveryMethod.ReliableUnordered, sequence), out node))
             {
                 return false;

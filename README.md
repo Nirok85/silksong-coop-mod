@@ -4,7 +4,7 @@
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
 ![Loader](https://img.shields.io/badge/ModLoader-BepInEx%205.4.x-purple)
 ![Tests](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)
-![Version](https://img.shields.io/badge/Version-3.0.1-success)
+![Version](https://img.shields.io/badge/Version-3.0.2-success)
 
 **[🇷🇺 Русская версия](README.ru.md)**
 
@@ -81,7 +81,7 @@ No other downloads required.
 
 ### Method A — Release Package (Recommended)
 
-The `SilksongCoop_v3.0.1.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21, HarmonyX and the mod DLLs.
+The `SilksongCoop_v3.0.2.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21, HarmonyX and the mod DLLs.
 
 1. Close the game if it is running.
 2. Open the Silksong install folder in Steam (Manage → Browse local files). Typical path:
@@ -99,7 +99,7 @@ The `SilksongCoop_v3.0.1.zip` from the [Releases](https://github.com/Nirok85/sil
 ### Method B — Manual Install (from source build)
 
 If you already have BepInEx 5.4.x installed (any OS, including Linux/macOS), grab
-`SilksongCoop_v3.0.1_plugin-only.zip` from the release page — it contains just the two DLLs,
+`SilksongCoop_v3.0.2_plugin-only.zip` from the release page — it contains just the two DLLs,
 a default config and these instructions.
 
 1. Install [BepInEx 5.4.x (x64)](https://github.com/BepInEx/BepInEx/releases) into the game root (so that `BepInEx\` and `winhttp.dll` appear next to the game exe).
@@ -259,7 +259,7 @@ silksong_coop_mod/
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 757 tests
+    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 764 tests
         ├── TestHarness/              # DualClientTestHarness (2-client simulation, no Unity)
         ├── EndToEnd/                 # Real UDP loopback connect/reconnect tests
         ├── Tier1_FeatureTests/       # Requirement coverage tests (F01–F28)
@@ -282,12 +282,13 @@ dotnet test SilksongCoop.sln -c Release
 Current result:
 
 ```text
-Total tests:   757
-Passed:        757 (100.0%)
+Total tests:   764
+Passed:        764 (100.0%)
 Failed:        0
 Skipped:       0
 Duration:      ~6 s
-Build:         0 errors, 0 warnings (Debug + Release)
+Build:         0 errors, 0 compiler warnings (Debug + Release); NU1900 is a NuGet
+               network warning for the offline BepInEx feed
 ```
 
 ---
@@ -296,7 +297,7 @@ Build:         0 errors, 0 warnings (Debug + Release)
 
 The mod is in active development. The following limitations are by design or are tracked for future releases:
 
-- **Two players only.** Multi-peer (3+) is planned for v3.x/v4. 3.0.1 still contains
+- **Two players only.** Multi-peer (3+) is planned for v3.x/v4. 3.0.2 still contains
   only the groundwork (peer lists, per-recipient transform routing and distinct peer
   ids); the UDP and Steam transports hold a single connection, so a third player
   cannot join.
@@ -317,7 +318,7 @@ The mod is in active development. The following limitations are by design or are
 * **F11** — network diagnostics overlay (ping/loss/bandwidth graphs, top-right corner).
 * Keys are remappable in `BepInEx\config\com.silksong.coop.cfg`, section `[Keybinds]`.
 
-If keys don't respond: check that `BepInEx\LogOutput.log` shows the plugin loading (look for `Initializing Silksong Co-op Multiplayer v3.0.1...`). Ensure no other mod or OS utility (e.g. screen recorders, media players) binds F10/F11 globally.
+If keys don't respond: check that `BepInEx\LogOutput.log` shows the plugin loading (look for `Initializing Silksong Co-op Multiplayer v3.0.2...`). Ensure no other mod or OS utility (e.g. screen recorders, media players) binds F10/F11 globally.
 </details>
 
 <details>
