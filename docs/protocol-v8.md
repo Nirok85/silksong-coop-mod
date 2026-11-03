@@ -37,12 +37,13 @@ Unchanged since v7: 12 bytes, little-endian.
 
 Older builds cannot parse these payloads; that is why the version was bumped.
 
-**3.0.1–3.0.4 do not change the wire format.** They are still v8; the patch
+**3.0.1–3.1.0 do not change the wire format.** They are still v8; the patch
 releases only fix the peer identity used in `OriginPeerId` (menu host = 1, menu
 client = 2), boss-death catch-up, handshake ordering, transport sequence handling,
-validation and the guarded object-matching rules, so a 3.0.0 UDP peer can still
-complete the handshake. Steam lobbies additionally compare the full mod version and
-therefore require both sides on the same 3.0.x patch release.
+validation and the guarded object-matching rules; 3.1.0 is a UI/localization
+release. A 3.0.0 UDP peer can still complete the handshake. Steam lobbies
+additionally compare the full mod version and therefore require both sides on the
+same 3.0.x/3.1.x release.
 
 ## Idempotency semantics
 

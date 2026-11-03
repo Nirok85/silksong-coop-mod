@@ -1,9 +1,24 @@
 using System;
 using System.Collections.Generic;
+using SilksongCoop.Core.Localization;
 using UnityEngine;
 
 namespace SilksongCoop.Mod.UI
 {
+    /// <summary>
+    /// Partner state sampled for the diagnostics overlay. A struct instead of a tuple
+    /// keeps the overlay free of Unity/BepInEx type dependencies and avoids allocating
+    /// on every OnGUI pass.
+    /// </summary>
+    public struct PeerDiagnosticsSnapshot
+    {
+        public bool Connected;
+        public bool SameScene;
+        public bool PartnerAlive;
+        public bool HasInterpolationDelay;
+        public float InterpolationDelayMs;
+    }
+
     /// <summary>
     /// Overlay for rendering live network diagnostics graphs (ping, packet loss, bandwidth).
     /// Toggled with F11. Renders in the top-right corner of the screen.
@@ -17,7 +32,9 @@ namespace SilksongCoop.Mod.UI
         private const float Padding = 10f;
         private const float RowSpacing = 8f;
         private const float TotalWidth = GraphWidth + Padding * 2;
-        private const float TotalHeight = 20f + (GraphHeight + RowSpacing) * 3 + 24f + Padding * 2;
+
+        // Three graphs, a summary line and a partner/scene line.
+        private const float TotalHeight = 20f + (GraphHeight + RowSpacing) * 3 + 44f + Padding * 2;
 
         #endregion
 
@@ -25,6 +42,7 @@ namespace SilksongCoop.Mod.UI
 
         private readonly NetworkDiagnostics _diagnostics;
         private readonly Func<float>? _tickRateProvider;
+        private readonly Func<PeerDiagnosticsSnapshot>? _peerProvider;
         private bool _isVisible;
 
         // Cached 1x1 textures for drawing solid-color backgrounds/lines.
@@ -68,10 +86,15 @@ namespace SilksongCoop.Mod.UI
         /// </summary>
         /// <param name="diagnostics">The network diagnostics data source.</param>
         /// <param name="tickRateProvider">Optional current tick-rate source (Hz).</param>
-        public DiagnosticsOverlay(NetworkDiagnostics diagnostics, Func<float>? tickRateProvider = null)
+        /// <param name="peerProvider">Optional partner scene/interpolation source.</param>
+        public DiagnosticsOverlay(
+            NetworkDiagnostics diagnostics,
+            Func<float>? tickRateProvider = null,
+            Func<PeerDiagnosticsSnapshot>? peerProvider = null)
         {
             _diagnostics = diagnostics;
             _tickRateProvider = tickRateProvider;
+            _peerProvider = peerProvider;
         }
 
         #endregion
@@ -145,19 +168,19 @@ namespace SilksongCoop.Mod.UI
                 // EVERY OnGUI call (2-4 per frame) inside the overlay's draw path.
                 var titleStyle = _titleStyle ??= CreateOverlayStyle(13, FontStyle.Bold, new Color(0.95f, 0.85f, 0.55f));
                 GUI.Label(new Rect(x + Padding, y + 6, TotalWidth - Padding * 2, 18),
-                    "Network Diagnostics [F11]", titleStyle);
+                    Loc.T("Network Diagnostics [F11]"), titleStyle);
 
                 float cursorY = y + 24f;
 
                 // Ping graph (yellow)
-                DrawGraph("Ping", cursorY, x + Padding,
+                DrawGraph(Loc.T("Ping"), cursorY, x + Padding,
                     _diagnostics.GetPingHistory(),
                     _diagnostics.CurrentPing, "ms",
                     0f, 200f, new Color(1f, 0.9f, 0.3f));
                 cursorY += GraphHeight + RowSpacing;
 
                 // Packet loss graph (red)
-                DrawGraph("Loss", cursorY, x + Padding,
+                DrawGraph(Loc.T("Loss"), cursorY, x + Padding,
                     _diagnostics.GetPacketLossHistory(),
                     _diagnostics.PacketLossPercent, "%",
                     0f, 20f, new Color(1f, 0.4f, 0.4f));
@@ -172,11 +195,39 @@ namespace SilksongCoop.Mod.UI
 
                 // Summary line
                 var summaryStyle = _summaryStyle ??= CreateOverlayStyle(11, FontStyle.Normal, Color.white);
-                string rejected = _diagnostics.RejectedPackets > 0 ? $"  |  Rejected: {_diagnostics.RejectedPackets}" : string.Empty;
-                string tick = _tickRateProvider != null ? $"  |  Tick: {_tickRateProvider():F0} Hz" : string.Empty;
+                string rejected = _diagnostics.RejectedPackets > 0
+                    ? Loc.T("  |  Rejected: {0}", _diagnostics.RejectedPackets)
+                    : string.Empty;
+                string tick = _tickRateProvider != null
+                    ? Loc.T("  |  Tick: {0:F0} Hz", _tickRateProvider())
+                    : string.Empty;
                 GUI.Label(new Rect(x + Padding, cursorY, TotalWidth - Padding * 2, 20),
-                    $"Session: {_diagnostics.SessionDuration:F0}s  |  Pkt out: {_diagnostics.PacketsOutPerSecond}/s  in: {_diagnostics.PacketsInPerSecond}/s{rejected}{tick}",
+                    Loc.T("Session: {0:F0}s  |  Pkt out: {1}/s  in: {2}/s{3}{4}",
+                        _diagnostics.SessionDuration,
+                        _diagnostics.PacketsOutPerSecond,
+                        _diagnostics.PacketsInPerSecond,
+                        rejected,
+                        tick),
                     summaryStyle);
+
+                // Partner state line: scene presence is the gate for position-based sync,
+                // so seeing "other room" here explains missing hits without opening F10.
+                cursorY += 18f;
+                if (_peerProvider != null)
+                {
+                    var peer = _peerProvider();
+                    if (peer.Connected)
+                    {
+                        string scene = peer.SameScene ? Loc.T("same room") : Loc.T("other room");
+                        string state = peer.PartnerAlive ? Loc.T("alive") : Loc.T("dead");
+                        string interp = peer.HasInterpolationDelay
+                            ? Loc.T("  |  interp {0:F0} ms", peer.InterpolationDelayMs)
+                            : string.Empty;
+
+                        GUI.Label(new Rect(x + Padding, cursorY, TotalWidth - Padding * 2, 20),
+                            $"{Loc.T("Partner")}: {scene}, {state}{interp}", summaryStyle);
+                    }
+                }
             }
             finally
             {
@@ -209,7 +260,7 @@ namespace SilksongCoop.Mod.UI
             var valueStyle = _valueStyle;
 
             GUI.color = lineColor;
-            GUI.Label(new Rect(x, y - 2, 40, 14), label, labelStyle);
+            GUI.Label(new Rect(x, y - 2, 60, 14), label, labelStyle);
             GUI.color = Color.white;
 
             GUI.Label(new Rect(x + GraphWidth - 60, y - 2, 60, 14),

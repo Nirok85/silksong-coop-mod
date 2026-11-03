@@ -10,11 +10,13 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Threading;
 using BepInEx;
+using BepInEx.Configuration;
 using HarmonyLib;
 using SilksongCoop.Core;
 using SilksongCoop.Core.Clones;
 using SilksongCoop.Core.DI;
 using SilksongCoop.Core.Events;
+using SilksongCoop.Core.Localization;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Revive;
 using SilksongCoop.Core.State;
@@ -44,7 +46,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "3.0.4";
+        public const string PluginVersion = "3.1.0";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -87,6 +89,8 @@ namespace SilksongCoop.Mod
         public BepInEx.Configuration.ConfigEntry<bool>? AutoReconnectConfig;
         public BepInEx.Configuration.ConfigEntry<int>? MaxReconnectAttemptsConfig;
         public BepInEx.Configuration.ConfigEntry<bool>? SaveConnectionHistoryConfig;
+        public BepInEx.Configuration.ConfigEntry<string>? LanguageConfig;
+        public BepInEx.Configuration.ConfigEntry<bool>? OnboardingCompletedConfig;
         #endregion
 
         public INetworkTransport? ActiveTransport { get; private set; }
@@ -196,11 +200,17 @@ namespace SilksongCoop.Mod
                 AutoReconnectConfig = Config.Bind("Network", "AutoReconnect", true, "Automatically attempt to reconnect after an unexpected disconnect");
                 MaxReconnectAttemptsConfig = Config.Bind("Network", "MaxReconnectAttempts", 5, "Maximum number of automatic reconnection attempts (1-10)");
                 SaveConnectionHistoryConfig = Config.Bind("Network", "SaveConnectionHistory", true, "Persist the last five connection targets in PlayerPrefs (Windows registry)");
+                LanguageConfig = Config.Bind("UI", "Language", "Auto",
+                    new ConfigDescription("UI language: Auto (system), English or Russian",
+                        new AcceptableValueList<string>("Auto", "English", "Russian")));
+                OnboardingCompletedConfig = Config.Bind("UI", "OnboardingCompleted", false,
+                    "Set to true after the first-run hint is dismissed (the Settings tab can show it again)");
 
                 // Normalize once at startup instead of silently clamping at each use site:
                 // the value written back to the .cfg matches what the session actually uses,
                 // and an out-of-range edit produces one clear warning.
                 NormalizeConfigValues();
+                ApplyUiLanguage();
 
                 // Apply config values
                 DeathCoordinator.ReviveCooldownDuration = Math.Clamp(ReviveCooldownConfig.Value, 15f, 30f);
@@ -379,6 +389,14 @@ namespace SilksongCoop.Mod
                 Container.Register(MenuUI!);
             }
 
+            // The first-run hint is shown once per install until the player dismisses the
+            // onboarding card. It is a toast rather than a modal so it never blocks play.
+            if (OnboardingCompletedConfig?.Value == false)
+            {
+                MenuUI!.Toasts.ShowInfo(
+                    Loc.T("Press F10 for the co-op menu. F11 shows network diagnostics."), 6f);
+            }
+
             Logger.LogInfo("Silksong Co-op initialization complete. Press F10 in game for Co-op menu.");
         }
 
@@ -435,6 +453,44 @@ namespace SilksongCoop.Mod
             if (oldValue == 0) normalized = fallback;
             entry.Value = normalized;
             Logger.LogWarning($"[Coop] Config {name}={oldValue} is outside {min}..{max}; using {normalized}");
+        }
+
+        /// <summary>
+        /// Resolves the configured UI language (Auto/English/Russian) and applies it to
+        /// <see cref="Loc"/>. Called at startup and when the user changes it in Settings.
+        /// </summary>
+        public void ApplyUiLanguage()
+        {
+            string requested = LanguageConfig?.Value ?? "Auto";
+            if (!Enum.TryParse(requested, ignoreCase: true, out CoopLanguage language))
+            {
+                Logger.LogWarning($"[Coop] Unknown UI language '{requested}'; using Auto");
+                language = CoopLanguage.Auto;
+                requested = "Auto";
+                if (LanguageConfig != null) LanguageConfig.Value = "Auto";
+            }
+
+            Loc.SetLanguage(language, Application.systemLanguage == SystemLanguage.Russian || IsSteamLanguageRussian());
+            Logger.LogInfo($"[Coop] UI language: {Loc.Current} (configured: {requested})");
+        }
+
+        /// <summary>
+        /// Steam's UI language is a better default than the OS language for players who
+        /// run the game in a different language than Windows. The Steam API is not always
+        /// initialized (direct exe launch), so every failure falls back to false.
+        /// </summary>
+        private static bool IsSteamLanguageRussian()
+        {
+            try
+            {
+                string language = Steamworks.SteamApps.GetCurrentGameLanguage();
+                return !string.IsNullOrEmpty(language) &&
+                       language.StartsWith("russian", StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
         }
         #endregion
 
@@ -1040,7 +1096,7 @@ namespace SilksongCoop.Mod
                     ResetDesyncTracking();
                     EventBus?.Publish(new PeerConnectedEvent { PeerId = peer });
                     MenuUI?.Diagnostics?.OnSessionStarted();
-                    MenuUI?.SetStatusMessage($"Connected to {peer.DisplayName}");
+                    MenuUI?.SetStatusMessage(Loc.T("Connected to {0}", peer.DisplayName));
 
                     if (CloneSpawner == null)
                     {
@@ -1154,14 +1210,14 @@ namespace SilksongCoop.Mod
                     {
                         SessionState?.SetHosting(transport.LocalPeerId, hostRoomCode ?? string.Empty);
                         MenuUI?.SetStatusMessage(reason == DisconnectReason.Timeout
-                            ? "Partner timed out — still hosting. Share the same room code to reconnect."
-                            : "Partner left — still hosting. Share the same room code to reconnect.");
+                            ? Loc.T("Partner timed out — still hosting. Share the same room code to reconnect.")
+                            : Loc.T("Partner left — still hosting. Share the same room code to reconnect."));
                     }
                     else if (wasHost && reason == DisconnectReason.VersionMismatch)
                     {
                         // Don't keep hosting on version mismatch; user needs to update
                         SessionState?.SetDisconnected();
-                        MenuUI?.SetStatusMessage("Version mismatch — update both players to the same version.");
+                        MenuUI?.SetStatusMessage(Loc.T("Version mismatch — update both players to the same version."));
                     }
 
                     // Schedule auto-reconnect on unexpected disconnect
@@ -1181,13 +1237,13 @@ namespace SilksongCoop.Mod
                                 _nextReconnectTime = Time.unscaledTime + backoff;
                                 _reconnectPending = true;
                                 Logger.LogInfo($"[Coop] Auto-reconnect scheduled in {backoff}s (attempt {_reconnectAttempts}/{maxAttempts})");
-                                MenuUI?.SetStatusMessage($"Disconnected. Reconnecting in {backoff}s...");
+                                MenuUI?.SetStatusMessage(Loc.T("Disconnected. Reconnecting in {0}s...", backoff));
                             }
                         }
                         else
                         {
                             Logger.LogWarning($"[Coop] Max reconnect attempts ({maxAttempts}) reached. Giving up.");
-                            MenuUI?.SetStatusMessage("Connection lost. Max reconnect attempts reached.");
+                            MenuUI?.SetStatusMessage(Loc.T("Connection lost. Max reconnect attempts reached."));
                         }
                     }
                 }
@@ -1505,8 +1561,8 @@ namespace SilksongCoop.Mod
                 {
                     _spectatorCameraFollow = !_spectatorCameraFollow;
                     MenuUI?.SetStatusMessage(_spectatorCameraFollow
-                        ? "Spectator camera: follow partner"
-                        : "Spectator camera: hold position");
+                        ? Loc.T("Spectator camera: follow partner")
+                        : Loc.T("Spectator camera: hold position"));
                 }
 
                 // Auto-reconnect attempt
@@ -1531,7 +1587,7 @@ namespace SilksongCoop.Mod
                                 SetActiveTransport(transport);
                                 transport.Connect(addr);
                                 SessionState?.SetConnecting(transport.LocalPeerId, addr);
-                                MenuUI?.SetStatusMessage($"Reconnecting (attempt {_reconnectAttempts})...");
+                                MenuUI?.SetStatusMessage(Loc.T("Reconnecting (attempt {0})...", _reconnectAttempts));
                                 Logger.LogInfo($"[Coop] Auto-reconnect attempt {_reconnectAttempts} to {addr}");
                             }
                             else
@@ -1557,7 +1613,7 @@ namespace SilksongCoop.Mod
                             else
                             {
                                 _reconnectPending = false;
-                                MenuUI?.SetStatusMessage("Connection lost. Max reconnect attempts reached.");
+                                MenuUI?.SetStatusMessage(Loc.T("Connection lost. Max reconnect attempts reached."));
                             }
                         }
                     }
@@ -1572,7 +1628,7 @@ namespace SilksongCoop.Mod
                         PrepareForNewSession();
                         SteamTransport.Connect(_pendingSteamLobbyJoin.Value.ToString());
                         SessionState?.SetConnecting(SteamTransport.LocalPeerId, _pendingSteamLobbyJoin.Value.ToString());
-                        MenuUI?.SetStatusMessage($"Joining Steam Lobby {_pendingSteamLobbyJoin.Value}...");
+                        MenuUI?.SetStatusMessage(Loc.T("Joining Steam Lobby {0}...", _pendingSteamLobbyJoin.Value));
                     }
                     catch (Exception ex)
                     {

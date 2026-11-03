@@ -1,12 +1,12 @@
-# Release checklist (3.0.4)
+# Release checklist (3.1.0)
 
 ## Pre-release
 
 - [ ] `pwsh ./scripts/preflight-release.ps1 -AllowDirty` passes (versions, changelog, README, build, tests).
-- [ ] All tests pass (770+).
+- [ ] All tests pass (780+).
 - [ ] Core and Mod build with 0 compiler warnings (TreatWarningsAsErrors=true; NU1900 is a NuGet network warning).
 - [ ] Protocol version is unchanged or bumped and documented (`docs/protocol-v8.md`).
-- [ ] Plugin version and assembly versions bumped to 3.0.4.
+- [ ] Plugin version and assembly versions bumped to 3.1.0.
 - [ ] Migration guide updated.
 - [ ] CHANGELOG.md updated.
 - [ ] README.md / README.ru.md updated - limits section matches what is implemented.
@@ -39,7 +39,7 @@
 
 ## Publish
 
-- [ ] Tag `v3.0.4`.
+- [ ] Tag `v3.1.0`.
 - [ ] GitHub release with notes.
 - [ ] Attach mod DLL + checksums.
 - [ ] Announce breaking changes.

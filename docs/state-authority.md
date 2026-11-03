@@ -5,7 +5,7 @@ receiver resolves conflicts, and which failures are accepted by design. When cod
 and this document disagree, the code is wrong unless the document is updated in
 the same change.
 
-## Current state (3.0.4)
+## Current state (3.1.0)
 
 | State | Writer(s) | Receiver rule | Conflict resolution |
 |---|---|---|---|
