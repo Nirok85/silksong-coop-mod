@@ -4,7 +4,7 @@
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
 ![Loader](https://img.shields.io/badge/ModLoader-BepInEx%205.4.x-purple)
 ![Tests](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)
-![Version](https://img.shields.io/badge/Version-3.0.3-success)
+![Version](https://img.shields.io/badge/Version-3.0.4-success)
 
 **[🇬🇧 English version](README.md)**
 
@@ -81,7 +81,7 @@
 
 ### Способ A — Релизный пакет (Рекомендуется)
 
-Архив `SilksongCoop_v3.0.3.zip` со страницы [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) включает всё: BepInEx 5.4.21, HarmonyX и DLL мода.
+Архив `SilksongCoop_v3.0.4.zip` со страницы [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) включает всё: BepInEx 5.4.21, HarmonyX и DLL мода.
 
 1. Закройте игру, если она запущена.
 2. Откройте папку установки Silksong в Steam (Управление → Просмотреть локальные файлы). Типичный путь:
@@ -99,7 +99,7 @@
 ### Способ B — Ручная установка (сборка из исходников)
 
 Если BepInEx 5.4.x уже установлен (любая ОС, включая Linux/macOS), возьмите со страницы
-релизов `SilksongCoop_v3.0.3_plugin-only.zip` — там только две DLL, дефолтный конфиг и инструкция.
+релизов `SilksongCoop_v3.0.4_plugin-only.zip` — там только две DLL, дефолтный конфиг и инструкция.
 
 1. Установите [BepInEx 5.4.x (x64)](https://github.com/BepInEx/BepInEx/releases) в корень игры (чтобы появились `BepInEx\` и `winhttp.dll` рядом с exe).
 2. Соберите мод из исходников (см. [Разработка и сборка](#-разработка-и-сборка)) или возьмите DLL из релизного архива.
@@ -258,7 +258,7 @@ silksong_coop_mod/
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # Набор тестов xUnit (net8.0) — 764 тестов
+    └── SilksongCoop.Tests/           # Набор тестов xUnit (net8.0) — 770 тестов
         ├── TestHarness/              # DualClientTestHarness (симуляция 2 клиентов без Unity)
         ├── EndToEnd/                 # Тесты реального UDP loopback: connect/reconnect
         ├── Tier1_FeatureTests/       # Покрытие требований (F01–F28)
@@ -281,8 +281,8 @@ dotnet test SilksongCoop.sln -c Release
 Текущий результат:
 
 ```text
-Всего тестов:   764
-Пройдено:       764 (100.0%)
+Всего тестов:   770
+Пройдено:       770 (100.0%)
 Провалено:      0
 Пропущено:      0
 Время:          ~6 с
@@ -296,7 +296,7 @@ dotnet test SilksongCoop.sln -c Release
 
 Мод в активной разработке. Следующие ограничения — проектные или запланированы к устранению в будущих версиях:
 
-- **Только два игрока.** Мульти-пир (3+) запланирован на v3.x/v4. В 3.0.3 есть
+- **Только два игрока.** Мульти-пир (3+) запланирован на v3.x/v4. В 3.0.4 есть
   только подготовка (списки пиров, маршрутизация трансляций и разные peer id), но
   транспорты UDP/Steam по-прежнему держат одно соединение, поэтому подключиться
   втроём нельзя.
@@ -317,7 +317,7 @@ dotnet test SilksongCoop.sln -c Release
 * **F11** — оверлей сетевой диагностики (графики пинга/потерь/трафика, правый верхний угол).
 * Клавиши настраиваются в `BepInEx\config\com.silksong.coop.cfg`, секция `[Keybinds]`.
 
-Если клавиши не отвечают: проверьте, что в `BepInEx\LogOutput.log` загружается плагин (строка `Initializing Silksong Co-op Multiplayer v3.0.3...`). Убедитесь, что ни другой мод, ни системная утилита (рекордеры, медиаплееры) не перехватывают F10/F11 глобально.
+Если клавиши не отвечают: проверьте, что в `BepInEx\LogOutput.log` загружается плагин (строка `Initializing Silksong Co-op Multiplayer v3.0.4...`). Убедитесь, что ни другой мод, ни системная утилита (рекордеры, медиаплееры) не перехватывают F10/F11 глобально.
 </details>
 
 <details>
@@ -384,11 +384,27 @@ dotnet test SilksongCoop.sln -c Release
 Чтобы воспроизвести релизные архивы (самодостаточный Windows-zip + plugin-only zip):
 
 ```bash
+# Linux/macOS
 ManagedDir="/path/to/Hollow Knight Silksong_Data/Managed" bash scripts/package-release.sh
 ```
 
-Скрипт собирает оба проекта в Release с `TreatWarningsAsErrors`, добавляет BepInEx 5.4.21 x64
-и складывает пакеты в `dist/`. Версия берётся из `SilksongCoop.Mod.csproj`.
+```powershell
+# Windows
+pwsh ./scripts/package-release.ps1 -ManagedDir "D:\SteamLibrary\steamapps\common\Hollow Knight Silksong\Hollow Knight Silksong_Data\Managed"
+```
+
+Оба скрипта собирают проекты в Release с `TreatWarningsAsErrors`, добавляют BepInEx 5.4.21 x64
+и складывают пакеты в `dist/` (Windows-скрипт также печатает SHA256). Версия берётся из
+`SilksongCoop.Mod.csproj`.
+
+Перед тегом запустите preflight-проверку:
+
+```powershell
+pwsh ./scripts/preflight-release.ps1 -AllowDirty
+```
+
+Она сверяет версии Mod csproj, Core csproj и `PluginVersion`, наличие версии в
+`CHANGELOG.md`/`README.md`, затем собирает проект и прогоняет тесты.
 
 Полный чек-лист публикации (подъём версии, проверка, `gh release create`) —
 в [docs/RELEASING.md](docs/RELEASING.md).

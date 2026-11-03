@@ -1,20 +1,22 @@
-# Release checklist (3.0.3)
+# Release checklist (3.0.4)
 
 ## Pre-release
 
-- [ ] All tests pass (764+).
+- [ ] `pwsh ./scripts/preflight-release.ps1 -AllowDirty` passes (versions, changelog, README, build, tests).
+- [ ] All tests pass (770+).
 - [ ] Core and Mod build with 0 compiler warnings (TreatWarningsAsErrors=true; NU1900 is a NuGet network warning).
-- [ ] Protocol version bumped and documented (`docs/protocol-v8.md`).
-- [ ] Plugin version and assembly versions bumped to 3.0.3.
+- [ ] Protocol version is unchanged or bumped and documented (`docs/protocol-v8.md`).
+- [ ] Plugin version and assembly versions bumped to 3.0.4.
 - [ ] Migration guide updated.
 - [ ] CHANGELOG.md updated.
-- [ ] README.md / README.ru.md updated вЂ” limits section matches what is implemented.
+- [ ] README.md / README.ru.md updated - limits section matches what is implemented.
 
 ## Build
 
 - [ ] Clean checkout build (`dotnet build` from scratch).
-- [ ] Package artifacts produced with checksums.
+- [ ] `pwsh ./scripts/package-release.ps1 -ManagedDir <path>` (or the bash script) produced both archives and SHA256.
 - [ ] No `bin/`/`obj/` or secrets in package.
+- [ ] Verify the DLL `ProductVersion` inside each archive starts with the release version.
 
 ## CI
 
@@ -33,10 +35,11 @@
 - [ ] Scene transition.
 - [ ] Reconnect after timeout.
 - [ ] Late joiner catch-up.
+- [ ] Diagnostics bundle writes a file and the room code is redacted.
 
 ## Publish
 
-- [ ] Tag `v3.0.3`.
+- [ ] Tag `v3.0.4`.
 - [ ] GitHub release with notes.
 - [ ] Attach mod DLL + checksums.
 - [ ] Announce breaking changes.

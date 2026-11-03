@@ -62,6 +62,13 @@ grep -rn "$OLD" --include='*.cs' --include='*.csproj' --include='*.md' . \
   | grep -v '/bin/\|/obj/'
 ```
 
+Or run the cross-platform preflight, which verifies the three version sources,
+`CHANGELOG.md`, `README.md`, the working tree, the build and the tests:
+
+```powershell
+pwsh ./scripts/preflight-release.ps1 -AllowDirty
+```
+
 `CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/): the
 section is the release body, so write it for players, not only for maintainers.
 
@@ -82,6 +89,12 @@ versions refuse to connect, so both players must update.
 
 ```bash
 bash scripts/package-release.sh dist
+```
+
+On Windows the same archives are produced by:
+
+```powershell
+pwsh ./scripts/package-release.ps1 -ManagedDir "D:\SteamLibrary\steamapps\common\Hollow Knight Silksong\Hollow Knight Silksong_Data\Managed"
 ```
 
 Produces, with the version read from `SilksongCoop.Mod.csproj`:

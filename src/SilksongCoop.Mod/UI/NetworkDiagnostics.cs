@@ -47,6 +47,7 @@ namespace SilksongCoop.Mod.UI
         private readonly Queue<(float timestamp, float value)> _bandwidthHistory = new Queue<(float, float)>();
         private float _lastHistorySampleTime;
         private float _currentPing;
+        private long _rejectedPackets;
 
         #endregion
 
@@ -58,6 +59,7 @@ namespace SilksongCoop.Mod.UI
         public long PacketsInPerSecond => (long)_packetsInPerSecond;
         public float SessionDuration => _sessionActive ? (Time.unscaledTime - _sessionStartTime) : _sessionDuration;
         public float CurrentPing => _currentPing;
+        public long RejectedPackets => _rejectedPackets;
 
         /// <summary>
         /// Estimated packet loss percentage (0–100). Returns the sequence-gap estimate when
@@ -108,6 +110,16 @@ namespace SilksongCoop.Mod.UI
         {
             _bytesOutAccumulator += byteCount;
             _packetsOutAccumulator++;
+        }
+
+        /// <summary>
+        /// Record a packet that was dropped before it reached gameplay code (malformed
+        /// header, failed field validation, wrong peer). Surfaced in the F11 overlay,
+        /// the status tab and the diagnostics bundle.
+        /// </summary>
+        public void RecordRejected()
+        {
+            _rejectedPackets++;
         }
 
         /// <summary>
@@ -167,10 +179,10 @@ namespace SilksongCoop.Mod.UI
         /// </summary>
         public string ExportSnapshot()
         {
-            return $"ping={CurrentPing:F1}ms loss={_externalLossPercent:F1}% " +
+            return $"ping={CurrentPing:F1}ms loss={PacketLossPercent:F1}% " +
                    $"bps_out={BytesOutPerSecond} bps_in={BytesInPerSecond} " +
                    $"pps_out={PacketsOutPerSecond} pps_in={PacketsInPerSecond} " +
-                   $"session={SessionDuration:F1}s";
+                   $"session={SessionDuration:F1}s rejected={_rejectedPackets}";
         }
 
         /// <summary>
@@ -280,6 +292,7 @@ namespace SilksongCoop.Mod.UI
             _packetsOutPerSecond = 0f;
             _packetsInPerSecond = 0f;
             _externalLossPercent = 0f;
+            _rejectedPackets = 0;
         }
 
         #endregion

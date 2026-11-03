@@ -11,6 +11,9 @@ namespace SilksongCoop.Mod.UI
     public class ConnectionHistory
     {
         public const int MaxEntries = 5;
+        /// <summary>Maximum accepted target length. Room codes, IP:port and Steam IDs are
+        /// far below this; anything longer is a corrupt/prefilled registry value.</summary>
+        public const int MaxTargetLength = 128;
         private const string PrefsKey = "SilksongCoop.RecentConnections";
         private const char Separator = '|';
 
@@ -39,6 +42,9 @@ namespace SilksongCoop.Mod.UI
         public void Add(string target)
         {
             if (string.IsNullOrWhiteSpace(target)) return;
+
+            target = target.Trim();
+            if (target.Length > MaxTargetLength) return;
 
             EnsureLoaded();
 
@@ -96,7 +102,9 @@ namespace SilksongCoop.Mod.UI
                 foreach (var p in parts)
                 {
                     var trimmed = p.Trim();
-                    if (!string.IsNullOrEmpty(trimmed) && _entries.Count < MaxEntries)
+                    if (!string.IsNullOrEmpty(trimmed) &&
+                        trimmed.Length <= MaxTargetLength &&
+                        _entries.Count < MaxEntries)
                     {
                         _entries.Add(trimmed);
                     }

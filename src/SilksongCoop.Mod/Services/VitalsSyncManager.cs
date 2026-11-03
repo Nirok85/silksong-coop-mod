@@ -166,7 +166,13 @@ namespace SilksongCoop.Mod.Services
 
         private void OnRemotePickupClaimed(Core.Protocol.Packets.CurrencyType currency, ulong key, float x, float y)
         {
-            _enemySync?.OnRemotePickupClaimed(currency, key, x, y);
+            // The event originates from HandleCurrencyPacket, which only runs for the single
+            // session peer today. Pass it explicitly so the Unity layer can require that the
+            // collector is actually in the local scene before using coordinates.
+            var sender = _sessionService.SessionState?.RemotePeerId;
+            if (!sender.HasValue) return;
+
+            _enemySync?.OnRemotePickupClaimed(currency, key, x, y, sender.Value);
         }
     }
 }

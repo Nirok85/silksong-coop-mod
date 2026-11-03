@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [master]
 
+# A newer commit on the same branch makes the previous run obsolete. This frees both
+# hosted minutes and the single self-hosted Mod runner for the latest revision.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   core:
     name: Core - build + tests
@@ -17,6 +23,14 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', 'nuget.config') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
 
       - name: Restore
         run: dotnet restore tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj
@@ -58,6 +72,15 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-mod-${{ hashFiles('**/*.csproj', 'nuget.config') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-mod-
+            ${{ runner.os }}-nuget-
 
       - name: Validate Managed directory
         env:

@@ -75,6 +75,7 @@ namespace SilksongCoop.Mod.State
         private readonly Dictionary<ulong, PersistentStatePacket> _pendingPersistentStates = new Dictionary<ulong, PersistentStatePacket>();
         private readonly Queue<ulong> _pendingPersistentOrder = new Queue<ulong>();
         private readonly Dictionary<ulong, WorldEventPacket> _pendingWorldEvents = new Dictionary<ulong, WorldEventPacket>();
+        private readonly Dictionary<ulong, NetworkPeerId> _pendingWorldEventSenders = new Dictionary<ulong, NetworkPeerId>();
         private readonly Queue<ulong> _pendingWorldEventOrder = new Queue<ulong>();
         private Dictionary<ulong, PersistentItem<bool>>? _boolItems;
         private Dictionary<ulong, PersistentItem<int>>? _intItems;
@@ -82,6 +83,8 @@ namespace SilksongCoop.Mod.State
         private bool _persistentIndexDirty;
         private float _pendingPersistentRetryAt;
         private float _pendingWorldRetryAt;
+        private float _nextAmbiguousMatchLogAt;
+        private int _suppressedAmbiguousMatchLogs;
 
         private const int MaxPendingPersistentStates = 4096;
         private const int MaxPendingWorldEvents = 1024;
@@ -131,6 +134,7 @@ namespace SilksongCoop.Mod.State
             _pendingPersistentStates.Clear();
             _pendingPersistentOrder.Clear();
             _pendingWorldEvents.Clear();
+            _pendingWorldEventSenders.Clear();
             _pendingWorldEventOrder.Clear();
             _pendingDeadEnemies.Clear();
             _pendingDeadOrder.Clear();
@@ -651,7 +655,12 @@ namespace SilksongCoop.Mod.State
         /// Applies a permanent world change from the peer. If the object lives in a scene that
         /// is not loaded right now, the event is cached and retried after the next transition.
         /// </summary>
-        public void ApplyRemoteWorldEvent(WorldEventPacket packet)
+        /// <param name="packet">World event to apply.</param>
+        /// <param name="sender">
+        /// Peer that sent the event. Position-based matching is only allowed while that peer
+        /// is confirmed to be in the local scene.
+        /// </param>
+        public void ApplyRemoteWorldEvent(WorldEventPacket packet, NetworkPeerId sender)
         {
             if (RemoteApplyScope.IsActive) return;
             if (packet.ObjectKey == 0) return;
@@ -661,9 +670,10 @@ namespace SilksongCoop.Mod.State
             if (IsStaleRevision(_appliedWorldRevisions, packet.ObjectKey, packet.StateRevision, packet.OriginPeerId))
                 return;
 
-            if (!TryApplyWorldEvent(packet))
+            bool allowProximity = IsSenderInLocalScene(sender);
+            if (!TryApplyWorldEvent(packet, allowProximity))
             {
-                CachePendingWorldEvent(packet);
+                CachePendingWorldEvent(packet, sender);
             }
             else
             {
@@ -671,7 +681,7 @@ namespace SilksongCoop.Mod.State
             }
         }
 
-        private bool TryApplyWorldEvent(WorldEventPacket packet)
+        private bool TryApplyWorldEvent(WorldEventPacket packet, bool allowProximity)
         {
             try
             {
@@ -680,13 +690,15 @@ namespace SilksongCoop.Mod.State
                     switch (packet.EventType)
                     {
                         case WorldEventType.BreakableBroken:
-                            var breakable = FindObjectByKey<Breakable>(packet.ObjectKey, packet.PositionX, packet.PositionY);
+                            var breakable = FindObjectByKey<Breakable>(
+                                packet.ObjectKey, packet.PositionX, packet.PositionY, allowProximity);
                             if (breakable == null) return false;
                             breakable.BreakSelf();
                             return true;
 
                         case WorldEventType.GateOpened:
-                            var gate = FindObjectByKey<Gate>(packet.ObjectKey, packet.PositionX, packet.PositionY);
+                            var gate = FindObjectByKey<Gate>(
+                                packet.ObjectKey, packet.PositionX, packet.PositionY, allowProximity);
                             if (gate == null) return false;
                             gate.Open();
                             return true;
@@ -729,7 +741,7 @@ namespace SilksongCoop.Mod.State
                 applied[key] = (revision, origin);
         }
 
-        private void CachePendingWorldEvent(WorldEventPacket packet)
+        private void CachePendingWorldEvent(WorldEventPacket packet, NetworkPeerId sender)
         {
             if (!_pendingWorldEvents.ContainsKey(packet.ObjectKey))
             {
@@ -737,7 +749,11 @@ namespace SilksongCoop.Mod.State
                        _pendingWorldEventOrder.Count > 0)
                 {
                     ulong oldest = _pendingWorldEventOrder.Dequeue();
-                    if (_pendingWorldEvents.Remove(oldest)) break;
+                    if (_pendingWorldEvents.Remove(oldest))
+                    {
+                        _pendingWorldEventSenders.Remove(oldest);
+                        break;
+                    }
                 }
 
                 _pendingWorldEventOrder.Enqueue(packet.ObjectKey);
@@ -752,6 +768,7 @@ namespace SilksongCoop.Mod.State
                 packet.StateRevision > cached.StateRevision)
             {
                 _pendingWorldEvents[packet.ObjectKey] = packet;
+                _pendingWorldEventSenders[packet.ObjectKey] = sender;
             }
             _pendingWorldRetryAt = Time.unscaledTime + 0.25f;
         }
@@ -764,7 +781,12 @@ namespace SilksongCoop.Mod.State
             List<ulong>? applied = null;
             foreach (var pair in _pendingWorldEvents)
             {
-                if (!TryApplyWorldEvent(pair.Value)) continue;
+                // A cached event belongs to a scene that was not loaded when it arrived.
+                // Once the scene is loaded the sender may or may not be there; only allow
+                // the proximity fallback when presence can actually be proven.
+                bool allowProximity = _pendingWorldEventSenders.TryGetValue(pair.Key, out var sender) &&
+                                      IsSenderInLocalScene(sender);
+                if (!TryApplyWorldEvent(pair.Value, allowProximity)) continue;
                 RecordRevision(_appliedWorldRevisions, pair.Key, pair.Value.StateRevision, pair.Value.OriginPeerId);
                 (applied ??= new List<ulong>()).Add(pair.Key);
             }
@@ -772,7 +794,10 @@ namespace SilksongCoop.Mod.State
             if (applied != null)
             {
                 for (int i = 0; i < applied.Count; i++)
+                {
                     _pendingWorldEvents.Remove(applied[i]);
+                    _pendingWorldEventSenders.Remove(applied[i]);
+                }
 
                 _pendingWorldRetryAt = Time.unscaledTime + 0.5f;
             }
@@ -1057,11 +1082,13 @@ namespace SilksongCoop.Mod.State
             }
         }
 
-        private static T? FindObjectByKey<T>(ulong key, float x, float y) where T : Component
+        private T? FindObjectByKey<T>(ulong key, float x, float y, bool allowProximity) where T : Component
         {
             var objects = UnityEngine.Object.FindObjectsByType<T>(FindObjectsSortMode.None);
             T? nearest = null;
-            float nearestSq = 2.5f * 2.5f;
+            const float radiusSq = 2.5f * 2.5f;
+            float nearestSq = radiusSq;
+            int nearby = 0;
 
             for (int i = 0; i < objects.Length; i++)
             {
@@ -1070,21 +1097,32 @@ namespace SilksongCoop.Mod.State
                 if (WorldObjectKey.Compute(component.transform) == key)
                     return component;
 
+                if (!allowProximity) continue;
                 if (float.IsNaN(x) || float.IsNaN(y)) continue;
 
                 float dx = component.transform.position.x - x;
                 float dy = component.transform.position.y - y;
                 float distanceSq = dx * dx + dy * dy;
-                if (distanceSq <= nearestSq)
+                if (distanceSq > radiusSq) continue;
+
+                nearby++;
+                if (distanceSq < nearestSq)
                 {
                     nearestSq = distanceSq;
                     nearest = component;
                 }
             }
 
-            // A sibling-index mismatch can change the hash while the object is still at
-            // the authoritative position; use the same proximity fallback as enemies.
-            return nearest;
+            // A sibling-index mismatch can change the hash while the object is still at the
+            // authoritative position; use the same proximity fallback as enemies, but never
+            // guess between two objects in the same radius.
+            if (nearby > 1)
+            {
+                LogAmbiguousMatch($"{typeof(T).Name}: {nearby} candidates within 2.5 units");
+                return null;
+            }
+
+            return nearby == 1 ? nearest : null;
         }
 
         #endregion
@@ -1093,16 +1131,30 @@ namespace SilksongCoop.Mod.State
 
         /// <summary>
         /// Destroys the local copy of a drop that the peer collected. Uses the stable key first
-        /// and falls back to the nearest drop of the same currency within a small radius.
+        /// and falls back to a single nearby drop of the same currency, but only while the
+        /// sender is confirmed to be in the local scene.
         /// </summary>
-        public void OnRemotePickupClaimed(SilksongCoop.Core.Protocol.Packets.CurrencyType currency, ulong key, float x, float y)
+        /// <param name="currency">Currency type of the collected drop.</param>
+        /// <param name="key">Stable pickup key from the sender, or 0 when unavailable.</param>
+        /// <param name="x">World X reported by the sender.</param>
+        /// <param name="y">World Y reported by the sender.</param>
+        /// <param name="sender">Peer that collected the drop.</param>
+        public void OnRemotePickupClaimed(
+            SilksongCoop.Core.Protocol.Packets.CurrencyType currency,
+            ulong key,
+            float x,
+            float y,
+            NetworkPeerId sender)
         {
             var pickups = UnityEngine.Object.FindObjectsByType<CurrencyObjectBase>(FindObjectsSortMode.None);
             if (pickups == null || pickups.Length == 0) return;
 
+            bool sameScene = IsSenderInLocalScene(sender);
             bool wantShards = currency == SilksongCoop.Core.Protocol.Packets.CurrencyType.ShellShards;
             CurrencyObjectBase? nearest = null;
-            float nearestSq = 2.5f * 2.5f;
+            const float radiusSq = 2.5f * 2.5f;
+            float nearestSq = radiusSq;
+            int nearby = 0;
 
             for (int i = 0; i < pickups.Length; i++)
             {
@@ -1118,19 +1170,31 @@ namespace SilksongCoop.Mod.State
                     return;
                 }
 
+                // A drop claimed in another room must not remove a local drop that happens
+                // to lie at the same coordinates in the scene this peer has loaded.
+                if (!sameScene) continue;
                 if (float.IsNaN(x) || float.IsNaN(y)) continue;
 
                 float dx = pickup.transform.position.x - x;
                 float dy = pickup.transform.position.y - y;
                 float distanceSq = dx * dx + dy * dy;
-                if (distanceSq <= nearestSq)
+                if (distanceSq > radiusSq) continue;
+
+                nearby++;
+                if (distanceSq < nearestSq)
                 {
                     nearestSq = distanceSq;
                     nearest = pickup;
                 }
             }
 
-            if (nearest != null)
+            if (nearby > 1)
+            {
+                LogAmbiguousMatch($"Pickup: {nearby} candidates within 2.5 units");
+                return;
+            }
+
+            if (nearby == 1 && nearest != null)
             {
                 nearest.Disable(0f);
             }
@@ -1351,6 +1415,28 @@ namespace SilksongCoop.Mod.State
             }
         }
 
+        /// <summary>
+        /// Logs a dropped position-based match at most once every five seconds. A busy fight
+        /// can hit this path many times per second, and an unthrottled warning would both
+        /// flood BepInEx's log and hide the first, most useful occurrence.
+        /// </summary>
+        private void LogAmbiguousMatch(string detail)
+        {
+            if (Time.unscaledTime < _nextAmbiguousMatchLogAt)
+            {
+                _suppressedAmbiguousMatchLogs++;
+                return;
+            }
+
+            int suppressed = _suppressedAmbiguousMatchLogs;
+            _suppressedAmbiguousMatchLogs = 0;
+            _nextAmbiguousMatchLogAt = Time.unscaledTime + 5f;
+
+            string suffix = suppressed > 0 ? $" ({suppressed} similar match(es) suppressed)" : string.Empty;
+            SilksongCoopPlugin.LogWarn(
+                $"[EnemySync] Proximity match skipped: {detail}; falling back to the exact key only{suffix}");
+        }
+
         private HealthManager? FindEnemy(ulong key, float x, float y, bool allowProximity = true)
         {
             HealthManager? nearest = null;
@@ -1392,6 +1478,12 @@ namespace SilksongCoop.Mod.State
             // Never guess between two enemies in the same radius: applying a hit to the
             // wrong one is worse than dropping a fallback match, and the host snapshot
             // still corrects real drift later.
+            if (nearby > 1)
+            {
+                LogAmbiguousMatch($"Enemy: {nearby} live candidates within 2.5 units");
+                return null;
+            }
+
             return nearby == 1 ? nearest : null;
         }
 

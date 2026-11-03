@@ -1,0 +1,123 @@
+# Pre-release checks for the Silksong Co-op mod.
+#
+# Usage:
+#   pwsh ./scripts/preflight-release.ps1                 # build + tests + consistency checks
+#   pwsh ./scripts/preflight-release.ps1 -SkipTests
+#   pwsh ./scripts/preflight-release.ps1 -AllowDirty      # while preparing a commit
+#
+# Exits non-zero on the first failed check so it can gate a release.
+[CmdletBinding()]
+param(
+    [switch]$SkipTests,
+    [switch]$AllowDirty,
+    [switch]$NoRestore
+)
+
+$ErrorActionPreference = 'Stop'
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$failures = New-Object System.Collections.Generic.List[string]
+
+function Read-ProjectVersion {
+    param([string]$RelativePath)
+    [xml]$project = Get-Content -Path (Join-Path $root $RelativePath) -Raw -Encoding UTF8
+    $entry = $project.Project.PropertyGroup | Where-Object { $_.Version } | Select-Object -First 1
+    if (-not $entry -or -not $entry.Version) {
+        throw "Could not read <Version> from $RelativePath"
+    }
+    return [string]$entry.Version
+}
+
+function Check {
+    param([bool]$Condition, [string]$Message)
+    if ($Condition) {
+        Write-Host "  [ok]   $Message" -ForegroundColor Green
+    }
+    else {
+        Write-Host "  [FAIL] $Message" -ForegroundColor Red
+        $failures.Add($Message)
+    }
+}
+
+Write-Host '==> Version consistency' -ForegroundColor Cyan
+$modVersion = Read-ProjectVersion 'src\SilksongCoop.Mod\SilksongCoop.Mod.csproj'
+$coreVersion = Read-ProjectVersion 'src\SilksongCoop.Core\SilksongCoop.Core.csproj'
+$pluginSource = Get-Content (Join-Path $root 'src\SilksongCoop.Mod\SilksongCoopPlugin.cs') -Raw -Encoding UTF8
+$pluginMatch = [regex]::Match($pluginSource, 'PluginVersion\s*=\s*"([^"]+)"')
+
+Write-Host "  project version: $modVersion"
+Check ($modVersion -eq $coreVersion) "Core csproj version matches Mod ($modVersion)"
+Check ($pluginMatch.Success -and $pluginMatch.Groups[1].Value -eq $modVersion) "PluginVersion matches csproj ($modVersion)"
+
+Write-Host '==> Changelog and README' -ForegroundColor Cyan
+$changelog = Get-Content (Join-Path $root 'CHANGELOG.md') -Raw -Encoding UTF8
+Check ($changelog -match [regex]::Escape("## [$modVersion]")) "CHANGELOG.md has a [$modVersion] section"
+
+$readme = Get-Content (Join-Path $root 'README.md') -Raw -Encoding UTF8
+Check ($readme -match [regex]::Escape("Version-$modVersion")) "README.md badge mentions $modVersion"
+Check ($readme -match [regex]::Escape("SilksongCoop_v$modVersion.zip")) "README.md install section mentions the release archive"
+
+Write-Host '==> Working tree' -ForegroundColor Cyan
+$status = & git -C $root status --porcelain
+if ($AllowDirty) {
+    Write-Host '  [skip] dirty tree allowed (-AllowDirty)' -ForegroundColor Yellow
+}
+else {
+    Check ([string]::IsNullOrWhiteSpace(($status -join "`n"))) 'git working tree is clean'
+}
+
+Write-Host '==> Build (warnings as errors)' -ForegroundColor Cyan
+$buildArgs = @(
+    (Join-Path $root 'SilksongCoop.sln'),
+    '-c', 'Release',
+    '-p:TreatWarningsAsErrors=true',
+    '-v:minimal'
+)
+if ($NoRestore) { $buildArgs += '--no-restore' }
+
+& dotnet build @buildArgs
+if ($LASTEXITCODE -ne 0) {
+    $failures.Add("dotnet build failed with exit code $LASTEXITCODE")
+    Write-Host '  [FAIL] build failed' -ForegroundColor Red
+}
+else {
+    Write-Host '  [ok]   build succeeded' -ForegroundColor Green
+}
+
+if ($SkipTests) {
+    Write-Host '  [skip] tests (-SkipTests)' -ForegroundColor Yellow
+}
+else {
+    Write-Host '==> Tests' -ForegroundColor Cyan
+    & dotnet test (Join-Path $root 'SilksongCoop.sln') -c Release --no-build --verbosity minimal
+    if ($LASTEXITCODE -ne 0) {
+        $failures.Add("dotnet test failed with exit code $LASTEXITCODE")
+        Write-Host '  [FAIL] tests failed' -ForegroundColor Red
+    }
+    else {
+        Write-Host '  [ok]   tests passed' -ForegroundColor Green
+    }
+}
+
+Write-Host '==> Built DLL version' -ForegroundColor Cyan
+$modDll = Join-Path $root 'src\SilksongCoop.Mod\bin\Release\netstandard2.1\SilksongCoop.Mod.dll'
+$coreDll = Join-Path $root 'src\SilksongCoop.Core\bin\Release\netstandard2.1\SilksongCoop.Core.dll'
+foreach ($dll in @($modDll, $coreDll)) {
+    if (-not (Test-Path $dll)) {
+        $failures.Add("Missing build output: $dll")
+        Write-Host "  [FAIL] missing $dll" -ForegroundColor Red
+        continue
+    }
+    $product = (Get-Item $dll).VersionInfo.ProductVersion
+    Check ($product -like "$modVersion*") "$([System.IO.Path]::GetFileName($dll)) ProductVersion starts with $modVersion ($product)"
+}
+
+if ($failures.Count -gt 0) {
+    Write-Host ''
+    Write-Host "Preflight failed with $($failures.Count) problem(s):" -ForegroundColor Red
+    foreach ($failure in $failures) { Write-Host "  - $failure" -ForegroundColor Red }
+    exit 1
+}
+
+Write-Host ''
+Write-Host "Preflight passed for $modVersion." -ForegroundColor Green
+Write-Host 'Next: commit, tag, push, then upload dist/ archives to the GitHub release.'

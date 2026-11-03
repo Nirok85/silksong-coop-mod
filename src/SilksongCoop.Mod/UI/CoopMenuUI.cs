@@ -2,6 +2,7 @@ using System;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.State;
 using SilksongCoop.Mod;
+using SilksongCoop.Mod.Diagnostics;
 using SilksongCoop.Mod.Networking;
 using SilksongCoop.Mod.Settings;
 using UnityEngine;
@@ -715,6 +716,20 @@ namespace SilksongCoop.Mod.UI
             string peerName = _sessionState.RemotePeerId?.ToString() ?? "Unknown";
             GUILayout.Label($"<b>Partner:</b>  {peerName}");
 
+            // Scene presence is the gate for every position-based sync path; showing it
+            // here makes "partner is invisible / hits do nothing" immediately diagnosable.
+            var peerId = _sessionState.RemotePeerId;
+            bool sameScene = peerId.HasValue &&
+                             SilksongCoopPlugin.Instance?.CloneSpawner?.IsRemoteInSameScene(peerId.Value) == true;
+            GUILayout.Label(sameScene
+                ? "<b>Partner scene:</b>  same room"
+                : "<b>Partner scene:</b>  other room / loading");
+
+            bool partnerAlive = SilksongCoopPlugin.Instance?.DeathCoordinator?.IsPartnerAlive ?? true;
+            GUILayout.Label(partnerAlive
+                ? "<b>Partner state:</b>  alive"
+                : "<b>Partner state:</b>  dead / spectating");
+
             // Session duration
             float sessionTime = _diagnostics.SessionDuration;
             if (sessionTime > 0)
@@ -742,6 +757,10 @@ namespace SilksongCoop.Mod.UI
             long sent = _sessionState.SentPackets;
             long recv = _sessionState.ReceivedPackets;
             GUILayout.Label($"<b>Packets:</b>  ↑ {sent}  ↓ {recv}");
+            if (_diagnostics.RejectedPackets > 0)
+            {
+                GUILayout.Label($"<b>Rejected:</b>  <color=#DD6666>{_diagnostics.RejectedPackets}</color> (malformed or wrong peer)");
+            }
 
             // Bandwidth
             long bwOut = _diagnostics.BytesOutPerSecond;
@@ -924,6 +943,26 @@ namespace SilksongCoop.Mod.UI
 
             GUILayout.Space(16);
             SilksongSkin.DrawDivider(1f, 4f, 4f);
+
+            // Diagnostics bundle: log tail + session/network/config snapshot in one file.
+            GUILayout.Label("<b>Diagnostics</b>");
+            if (GUILayout.Button("Save Diagnostics File", GUILayout.Height(24)))
+            {
+                try
+                {
+                    string path = DiagnosticsBundle.Save(plugin);
+                    _toasts.ShowSuccess($"Diagnostics saved: {path}", 4f);
+                }
+                catch (Exception ex)
+                {
+                    SilksongCoopPlugin.LogWarn($"[Diagnostics] Failed to save bundle: {ex.Message}");
+                    _toasts.ShowError($"Could not save diagnostics: {ex.Message}", 4f);
+                }
+            }
+            GUILayout.Label("Writes BepInEx/SilksongCoop-diagnostics/ with the log tail, session state and config.",
+                _styleSubtitle ?? Skin.label);
+
+            GUILayout.Space(12);
 
             // Info
             GUILayout.Label($"<color=#998877>Silksong Co-op Mod v{SilksongCoopPlugin.PluginVersion}</color>", _styleSubtitle ?? Skin.label);

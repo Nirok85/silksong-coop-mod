@@ -12,10 +12,17 @@ queue):
 ```yaml
   mod:
     name: Mod - compile against game assemblies (self-hosted)
-    if: ${{ vars.ENABLE_MOD_CI == 'true' && github.event_name != 'pull_request' }}
+    if: >-
+      ${{ vars.ENABLE_MOD_CI == 'true' &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: [self-hosted, linux, silksong]
     environment: silksong-mod-build
 ```
+
+Same-repository PRs run the job automatically. Fork PRs are excluded: executing
+untrusted code on a self-hosted runner is not safe, so a maintainer must build
+such a branch manually before merging.
 
 ## Enabling it
 

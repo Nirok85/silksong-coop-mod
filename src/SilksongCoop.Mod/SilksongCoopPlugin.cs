@@ -44,7 +44,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "3.0.3";
+        public const string PluginVersion = "3.0.4";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -194,6 +194,11 @@ namespace SilksongCoop.Mod
                 AutoReconnectConfig = Config.Bind("Network", "AutoReconnect", true, "Automatically attempt to reconnect after an unexpected disconnect");
                 MaxReconnectAttemptsConfig = Config.Bind("Network", "MaxReconnectAttempts", 5, "Maximum number of automatic reconnection attempts (1-10)");
                 SaveConnectionHistoryConfig = Config.Bind("Network", "SaveConnectionHistory", true, "Persist the last five connection targets in PlayerPrefs (Windows registry)");
+
+                // Normalize once at startup instead of silently clamping at each use site:
+                // the value written back to the .cfg matches what the session actually uses,
+                // and an out-of-range edit produces one clear warning.
+                NormalizeConfigValues();
 
                 // Apply config values
                 DeathCoordinator.ReviveCooldownDuration = Math.Clamp(ReviveCooldownConfig.Value, 15f, 30f);
@@ -373,6 +378,61 @@ namespace SilksongCoop.Mod
             }
 
             Logger.LogInfo("Silksong Co-op initialization complete. Press F10 in game for Co-op menu.");
+        }
+
+        /// <summary>
+        /// Clamps every user-editable numeric config to its documented range and writes the
+        /// corrected value back to the .cfg. A silent clamp at each use site made the file
+        /// disagree with the running session; this keeps them in sync and logs one warning.
+        /// </summary>
+        private void NormalizeConfigValues()
+        {
+            NormalizeFloat(ReviveCooldownConfig, 15f, 30f, 20f, "ReviveCooldownSeconds");
+            NormalizeFloat(ReviveHealthPercentConfig, 0.1f, 1f, 0.5f, "ReviveHealthPercent");
+            NormalizeFloat(ReviveInvulnerabilityConfig, 0f, 10f, 2.5f, "ReviveInvulnerabilitySeconds");
+            NormalizeFloat(Player2HueShiftConfig, 0f, 1f, 0.58f, "Player2HueShift");
+            NormalizeInt(DefaultUdpPortConfig, 1024, 65535, 7777, "DefaultUdpPort");
+            NormalizeInt(TickRateHzConfig, 20, 60, 30, "TickRateHz");
+            NormalizeInt(MaxReconnectAttemptsConfig, 1, 10, 5, "MaxReconnectAttempts");
+        }
+
+        private void NormalizeFloat(
+            BepInEx.Configuration.ConfigEntry<float>? entry,
+            float min,
+            float max,
+            float fallback,
+            string name)
+        {
+            if (entry == null) return;
+
+            float oldValue = entry.Value;
+            float normalized = float.IsNaN(oldValue) || float.IsInfinity(oldValue)
+                ? fallback
+                : Math.Clamp(oldValue, min, max);
+            if (Math.Abs(normalized - oldValue) < 0.0001f) return;
+
+            entry.Value = normalized;
+            Logger.LogWarning($"[Coop] Config {name}={oldValue} is outside {min}..{max}; using {normalized}");
+        }
+
+        private void NormalizeInt(
+            BepInEx.Configuration.ConfigEntry<int>? entry,
+            int min,
+            int max,
+            int fallback,
+            string name)
+        {
+            if (entry == null) return;
+
+            int oldValue = entry.Value;
+            int normalized = Math.Clamp(oldValue, min, max);
+            if (normalized == oldValue) return;
+
+            // A corrupted value is still clamped; log the fallback separately to make it
+            // obvious that the file was not simply edited to the boundary by the user.
+            if (oldValue == 0) normalized = fallback;
+            entry.Value = normalized;
+            Logger.LogWarning($"[Coop] Config {name}={oldValue} is outside {min}..{max}; using {normalized}");
         }
         #endregion
 
@@ -1162,6 +1222,15 @@ namespace SilksongCoop.Mod
         {
             try
             {
+                // Every gameplay packet must come from the session peer. Without this,
+                // a queued packet from a previous connection (or a second endpoint in a
+                // future multi-peer transport) could mutate the new session's state.
+                if (SessionState?.RemotePeerId == null || SessionState.RemotePeerId.Value != peer)
+                {
+                    MenuUI?.Diagnostics?.RecordRejected();
+                    return;
+                }
+
                 // Desync checksums use their own magic, so they are recognised before the
                 // regular header parser and never reach it as "garbage".
                 if (DesyncChecksumFrame.TryRead(span, out uint round, out uint checksum))
@@ -1170,20 +1239,30 @@ namespace SilksongCoop.Mod
                     return;
                 }
 
-                if (span.Length < PacketHeader.HeaderSize) return;
+                if (span.Length < PacketHeader.HeaderSize)
+                {
+                    MenuUI?.Diagnostics?.RecordRejected();
+                    return;
+                }
 
                 if (!PacketHeader.TryReadFrom(span, out var header))
+                {
+                    MenuUI?.Diagnostics?.RecordRejected();
                     return;
+                }
 
                 if (!header.IsValidPacketType)
+                {
+                    MenuUI?.Diagnostics?.RecordRejected();
                     return;
+                }
 
                 var reader = new PacketReader(span);
                 switch (header.PacketId)
                 {
                     case PacketType.TransformSync:
                         var trans = TransformSyncPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateTransformSync(trans)) return;
+                        if (!PacketValidator.ValidateTransformSync(trans)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         int localSceneHash = GameManager.instance != null ? GameManager.instance.sceneNameHash : 0;
                         // BUG-B6: strict equality — while a scene is loading the local hash
                         // is 0, and the old "either side 0 counts as same scene" rule made
@@ -1205,13 +1284,13 @@ namespace SilksongCoop.Mod
 
                     case PacketType.BenchCheckpointSync:
                         var bench = BenchCheckpointSyncPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateBenchCheckpoint(bench)) return;
+                        if (!PacketValidator.ValidateBenchCheckpoint(bench)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         ApplyRemoteBenchCheckpoint(bench.SceneName, bench.RespawnMarker, bench.SpawnType, bench.FacingRight);
                         break;
 
                     case PacketType.ActionTrigger:
                         var action = ActionTriggerPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateActionTrigger(action)) return;
+                        if (!PacketValidator.ValidateActionTrigger(action)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         // A hidden clone still sits at its last position in this scene.
                         // Its attack must not damage enemies in a room the partner has
                         // already left (issue #2.4).
@@ -1224,20 +1303,19 @@ namespace SilksongCoop.Mod
 
                     case PacketType.VitalsSync:
                         var vitals = VitalsSyncPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateVitalsSync(vitals)) return;
+                        if (!PacketValidator.ValidateVitalsSync(vitals)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         VitalsSync?.HandleVitalsPacket(peer, vitals);
                         break;
 
                     case PacketType.CurrencySync:
                         var currency = CurrencySyncPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateCurrencySync(currency)) return;
+                        if (!PacketValidator.ValidateCurrencySync(currency)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         VitalsSync?.HandleCurrencyPacket(peer, currency);
                         break;
 
                     case PacketType.PlayerDeath:
-                        if (SessionState?.RemotePeerId == null || SessionState.RemotePeerId.Value != peer) return;
                         var death = DeathLifecyclePacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateDeathLifecycle(death)) return;
+                        if (!PacketValidator.ValidateDeathLifecycle(death)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         if (DeathCoordinator != null)
                         {
                             var before = DeathCoordinator.IsPartnerAlive;
@@ -1267,7 +1345,7 @@ namespace SilksongCoop.Mod
                         // immediately and drop buffered snapshots so it never lingers at
                         // its last position during the remote's scene load.
                         var scene = SceneTransitionPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateSceneTransition(scene)) return;
+                        if (!PacketValidator.ValidateSceneTransition(scene)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         if (scene.TransitionPhase == 0)
                         {
                             CloneSpawner?.SetRemoteScenePresence(peer, false);
@@ -1280,31 +1358,31 @@ namespace SilksongCoop.Mod
 
                     case PacketType.EnemySync:
                         var enemyPacket = EnemySyncPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateEnemySync(enemyPacket)) return;
+                        if (!PacketValidator.ValidateEnemySync(enemyPacket)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         EnemySync?.ApplyRemoteHit(enemyPacket, peer);
                         break;
 
                     case PacketType.EnemySnapshot:
                         var enemySnapshot = EnemySnapshotPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateEnemySnapshot(enemySnapshot)) return;
+                        if (!PacketValidator.ValidateEnemySnapshot(enemySnapshot)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         EnemySync?.ApplyRemoteSnapshot(enemySnapshot, peer);
                         break;
 
                     case PacketType.WorldEvent:
                         var worldEvent = WorldEventPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateWorldEvent(worldEvent)) return;
-                        EnemySync?.ApplyRemoteWorldEvent(worldEvent);
+                        if (!PacketValidator.ValidateWorldEvent(worldEvent)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        EnemySync?.ApplyRemoteWorldEvent(worldEvent, peer);
                         break;
 
                     case PacketType.PersistentState:
                         var persistentState = PersistentStatePacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidatePersistentState(persistentState)) return;
+                        if (!PacketValidator.ValidatePersistentState(persistentState)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         EnemySync?.ApplyRemotePersistentState(persistentState);
                         break;
 
                     case PacketType.ItemUnlockSync:
                         var item = ItemUnlockPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateItemUnlock(item)) return;
+                        if (!PacketValidator.ValidateItemUnlock(item)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         InventorySync?.HandleItemUnlockPacket(peer, item);
                         break;
                 }

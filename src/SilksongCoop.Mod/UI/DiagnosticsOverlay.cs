@@ -168,8 +168,9 @@ namespace SilksongCoop.Mod.UI
 
                 // Summary line
                 var summaryStyle = _summaryStyle ??= CreateOverlayStyle(11, FontStyle.Normal, Color.white);
+                string rejected = _diagnostics.RejectedPackets > 0 ? $"  |  Rejected: {_diagnostics.RejectedPackets}" : string.Empty;
                 GUI.Label(new Rect(x + Padding, cursorY, TotalWidth - Padding * 2, 20),
-                    $"Session: {_diagnostics.SessionDuration:F0}s  |  Pkt out: {_diagnostics.PacketsOutPerSecond}/s  in: {_diagnostics.PacketsInPerSecond}/s",
+                    $"Session: {_diagnostics.SessionDuration:F0}s  |  Pkt out: {_diagnostics.PacketsOutPerSecond}/s  in: {_diagnostics.PacketsInPerSecond}/s{rejected}",
                     summaryStyle);
             }
             finally
