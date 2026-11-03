@@ -44,7 +44,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "3.0.2";
+        public const string PluginVersion = "3.0.3";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -1281,13 +1281,13 @@ namespace SilksongCoop.Mod
                     case PacketType.EnemySync:
                         var enemyPacket = EnemySyncPacket.Deserialize(ref reader);
                         if (!PacketValidator.ValidateEnemySync(enemyPacket)) return;
-                        EnemySync?.ApplyRemoteHit(enemyPacket);
+                        EnemySync?.ApplyRemoteHit(enemyPacket, peer);
                         break;
 
                     case PacketType.EnemySnapshot:
                         var enemySnapshot = EnemySnapshotPacket.Deserialize(ref reader);
                         if (!PacketValidator.ValidateEnemySnapshot(enemySnapshot)) return;
-                        EnemySync?.ApplyRemoteSnapshot(enemySnapshot);
+                        EnemySync?.ApplyRemoteSnapshot(enemySnapshot, peer);
                         break;
 
                     case PacketType.WorldEvent:

@@ -37,7 +37,18 @@ jobs:
 
   mod:
     name: Mod - compile against game assemblies (self-hosted)
-    if: ${{ vars.ENABLE_MOD_CI == 'true' && github.event_name != 'pull_request' }}
+    # Game assemblies (Assembly-CSharp.dll, UnityEngine.*, TeamCherry.*) are proprietary
+    # and cannot be committed or downloaded on a hosted runner, so the Mod project can
+    # only be compiled on the self-hosted runner that has Silksong installed.
+    #
+    # Same-repository PRs run this job automatically (their branches are as trusted as
+    # master). Fork PRs stay excluded: executing untrusted PR code on a self-hosted
+    # runner is not safe. The gap for fork PRs is documented in
+    # docs/release-checklist.md - a maintainer must build the branch before merging.
+    if: >-
+      ${{ vars.ENABLE_MOD_CI == 'true' &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: [self-hosted, linux, silksong]
     environment: silksong-mod-build
     steps:

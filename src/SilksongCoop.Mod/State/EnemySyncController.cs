@@ -241,19 +241,27 @@ namespace SilksongCoop.Mod.State
         /// <summary>
         /// Applies a hit/death packet from the peer.
         /// </summary>
-        public void ApplyRemoteHit(EnemySyncPacket packet)
+        /// <param name="packet">Hit or death event.</param>
+        /// <param name="sender">
+        /// Peer that sent the event. Used to prove the sender is actually in the local
+        /// scene before any position-based fallback is allowed.
+        /// </param>
+        public void ApplyRemoteHit(EnemySyncPacket packet, NetworkPeerId sender)
         {
             bool dead = packet.EventType == EnemySyncEventType.Death;
 
             // A death must match the exact object: the packet may describe an enemy in a
             // scene this peer has not loaded, and the proximity fallback could kill an
             // unrelated enemy standing at similar coordinates in the current scene.
-            // Hits keep the fallback to tolerate a hierarchy-hash drift.
+            // Hits keep the fallback to tolerate a hierarchy-hash drift, but only while
+            // the sender is confirmed to be in this scene; otherwise a hit from another
+            // room could damage a local enemy that happens to share the coordinates.
+            bool sameScene = IsSenderInLocalScene(sender);
             var target = FindEnemy(
                 packet.EnemyKey,
                 packet.PositionX,
                 packet.PositionY,
-                allowProximity: !dead);
+                allowProximity: !dead && sameScene);
             if (target == null)
             {
                 // Cache a death for a not-yet-loaded enemy instead of recording it as
@@ -448,13 +456,19 @@ namespace SilksongCoop.Mod.State
         }
 
         /// <summary>
-        /// Applies the host's authoritative snapshot (client side only).
+        /// Applies an authoritative host snapshot (client side only). Position-based
+        /// matching of live entries is allowed only while the host is in the same scene,
+        /// so an entry describing another room cannot correct the HP of a local enemy at
+        /// the same coordinates.
         /// </summary>
-        public void ApplyRemoteSnapshot(EnemySnapshotPacket packet)
+        /// <param name="packet">Snapshot batch.</param>
+        /// <param name="sender">Host peer that produced the snapshot.</param>
+        public void ApplyRemoteSnapshot(EnemySnapshotPacket packet, NetworkPeerId sender)
         {
             if (_plugin?.SessionState?.IsHost == true) return;
             if (packet.Entries == null) return;
 
+            bool sameScene = IsSenderInLocalScene(sender);
             int count = Math.Min(packet.Count, packet.Entries.Length);
             for (int i = 0; i < count; i++)
             {
@@ -463,7 +477,7 @@ namespace SilksongCoop.Mod.State
                     entry.EnemyKey,
                     entry.PositionX,
                     entry.PositionY,
-                    allowProximity: !entry.IsDead);
+                    allowProximity: !entry.IsDead && sameScene);
 
                 // A dead boss may belong to a scene this peer has not loaded yet. Cache the
                 // death and apply it when that scene finishes loading; the snapshot itself
@@ -1318,10 +1332,31 @@ namespace SilksongCoop.Mod.State
             return key;
         }
 
+        /// <summary>
+        /// True when the remote peer is known to be in the local scene. The clone spawner
+        /// tracks this from transform packets and explicit scene-transition packets; an
+        /// unknown/absent state is treated as "not in this scene" so the safe exact-key
+        /// path is used.
+        /// </summary>
+        private bool IsSenderInLocalScene(NetworkPeerId sender)
+        {
+            try
+            {
+                return _plugin?.CloneSpawner?.IsRemoteInSameScene(sender) == true;
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[EnemySync] Scene presence check failed: {ex.Message}");
+                return false;
+            }
+        }
+
         private HealthManager? FindEnemy(ulong key, float x, float y, bool allowProximity = true)
         {
             HealthManager? nearest = null;
-            float nearestSq = 2.5f * 2.5f;
+            const float radiusSq = 2.5f * 2.5f;
+            float nearestSq = radiusSq;
+            int nearby = 0;
 
             try
             {
@@ -1334,11 +1369,15 @@ namespace SilksongCoop.Mod.State
 
                     if (!allowProximity) continue;
                     if (hm.GetIsDead()) continue;
+                    if (float.IsNaN(x) || float.IsNaN(y)) continue;
 
                     float dx = hm.transform.position.x - x;
                     float dy = hm.transform.position.y - y;
                     float distanceSq = dx * dx + dy * dy;
-                    if (distanceSq <= nearestSq)
+                    if (distanceSq > radiusSq) continue;
+
+                    nearby++;
+                    if (distanceSq < nearestSq)
                     {
                         nearestSq = distanceSq;
                         nearest = hm;
@@ -1350,7 +1389,10 @@ namespace SilksongCoop.Mod.State
                 SilksongCoopPlugin.LogWarn($"[EnemySync] Enemy lookup failed: {ex.Message}");
             }
 
-            return nearest;
+            // Never guess between two enemies in the same radius: applying a hit to the
+            // wrong one is worse than dropping a fallback match, and the host snapshot
+            // still corrects real drift later.
+            return nearby == 1 ? nearest : null;
         }
 
         private static int GetInitHp(HealthManager healthManager)

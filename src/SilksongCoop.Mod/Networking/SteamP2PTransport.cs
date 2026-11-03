@@ -879,7 +879,11 @@ namespace SilksongCoop.Mod.Networking
             {
                 SteamNetworking.AcceptP2PSessionWithUser(callback.m_steamIDRemote);
                 _remoteSteamId = callback.m_steamIDRemote;
-                NotifyPeerConnected(callback.m_steamIDRemote);
+
+                // Do not report the session as connected here. A Steam P2P session only
+                // proves lobby membership, not build compatibility. NotifyPeerConnected
+                // runs after the first datagram is validated against the protocol
+                // revision, so an incompatible client never initializes the game session.
             }
             else
             {

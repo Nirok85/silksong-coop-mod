@@ -1,11 +1,11 @@
-# Release checklist (3.0.2)
+# Release checklist (3.0.3)
 
 ## Pre-release
 
 - [ ] All tests pass (764+).
 - [ ] Core and Mod build with 0 compiler warnings (TreatWarningsAsErrors=true; NU1900 is a NuGet network warning).
 - [ ] Protocol version bumped and documented (`docs/protocol-v8.md`).
-- [ ] Plugin version and assembly versions bumped to 3.0.2.
+- [ ] Plugin version and assembly versions bumped to 3.0.3.
 - [ ] Migration guide updated.
 - [ ] CHANGELOG.md updated.
 - [ ] README.md / README.ru.md updated вЂ” limits section matches what is implemented.
@@ -19,7 +19,9 @@
 ## CI
 
 - [ ] Core job green.
-- [ ] Mod job green (self-hosted, if enabled).
+- [ ] Mod job green (self-hosted, if enabled). Same-repository PRs run it
+      automatically; fork PRs are excluded because untrusted code must not run on
+      the self-hosted runner, so a maintainer has to build such a branch manually.
 - [ ] No workflow scope issues (the workflow file needs a token with the `workflow` scope to push).
 
 ## Smoke tests (manual)
@@ -34,7 +36,7 @@
 
 ## Publish
 
-- [ ] Tag `v3.0.2`.
+- [ ] Tag `v3.0.3`.
 - [ ] GitHub release with notes.
 - [ ] Attach mod DLL + checksums.
 - [ ] Announce breaking changes.
