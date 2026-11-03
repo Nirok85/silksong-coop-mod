@@ -107,7 +107,7 @@ namespace SilksongCoop.Mod.UI
             _udpTransport = udpTransport;
             _keybinds = keybinds;
             _qualityPresets = qualityPresets;
-            _diagnosticsOverlay = new DiagnosticsOverlay(_diagnostics);
+            _diagnosticsOverlay = new DiagnosticsOverlay(_diagnostics, () => SilksongCoopPlugin.Instance?.CurrentTickHz ?? 0f);
 
             // Issue #2.6: connection targets used to be written to the Windows registry
             // (PlayerPrefs) unconditionally, with no way to opt out.
@@ -730,6 +730,13 @@ namespace SilksongCoop.Mod.UI
                 ? "<b>Partner state:</b>  alive"
                 : "<b>Partner state:</b>  dead / spectating");
 
+            if (peerId.HasValue &&
+                SilksongCoopPlugin.Instance?.CloneSpawner != null &&
+                SilksongCoopPlugin.Instance.CloneSpawner.TryGetInterpolationDelayMs(peerId.Value, out float interpDelay))
+            {
+                GUILayout.Label($"<b>Interpolation:</b>  {interpDelay:F0} ms behind");
+            }
+
             // Session duration
             float sessionTime = _diagnostics.SessionDuration;
             if (sessionTime > 0)
@@ -752,6 +759,12 @@ namespace SilksongCoop.Mod.UI
             GUILayout.Label($"<b>Ping:</b>  <color={rttColor}>{rttText}</color>", GUILayout.Width(180));
             DrawPingBars(rtt);
             GUILayout.EndHorizontal();
+
+            float tickHz = SilksongCoopPlugin.Instance?.CurrentTickHz ?? 0f;
+            if (tickHz > 0f)
+            {
+                GUILayout.Label($"<b>Tick rate:</b>  {tickHz:F0} Hz (adaptive)");
+            }
 
             // Packet stats
             long sent = _sessionState.SentPackets;

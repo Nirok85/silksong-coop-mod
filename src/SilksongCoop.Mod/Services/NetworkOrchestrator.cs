@@ -27,6 +27,9 @@ namespace SilksongCoop.Mod.Services
         private readonly AdaptiveTickRate _tickRate;
         private readonly InterestManager _interestManager;
 
+        /// <summary>Current adaptive transform tick rate in Hz (visible in the status tab).</summary>
+        public float CurrentTickHz => _tickRate.CurrentTickHz;
+
         /// <summary>
         /// Optional diagnostics sink, wired up after the Menu UI is created.
         /// </summary>

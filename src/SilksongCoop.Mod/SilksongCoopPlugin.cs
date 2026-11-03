@@ -93,6 +93,8 @@ namespace SilksongCoop.Mod
         public SteamP2PTransport? SteamTransport { get; private set; }
         public LiteNetLibTransport? UdpTransport { get; private set; }
         public CoopMenuUI MenuUI { get; private set; } = null!;
+        /// <summary>Current adaptive transform tick rate, or 0 before initialization.</summary>
+        public float CurrentTickHz => _networkOrchestrator?.CurrentTickHz ?? 0f;
         public RemoteHornetSpawner CloneSpawner { get; private set; } = null!;
         public EnemySyncController? EnemySync { get; private set; }
 

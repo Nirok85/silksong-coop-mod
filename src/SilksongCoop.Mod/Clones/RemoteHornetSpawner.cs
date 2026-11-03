@@ -178,6 +178,28 @@ namespace SilksongCoop.Mod.Clones
         }
 
         /// <summary>
+        /// Returns the current interpolation delay of the peer's clone, or false when the
+        /// clone does not exist yet. Used only by the diagnostics UI.
+        /// </summary>
+        public bool TryGetInterpolationDelayMs(NetworkPeerId peerId, out float delayMs)
+        {
+            delayMs = 0f;
+            try
+            {
+                if (!_activeClones.TryGetValue(peerId, out var controller) || controller == null)
+                    return false;
+
+                delayMs = (float)controller.InterpolationDelayMs;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[RemoteHornetSpawner] TryGetInterpolationDelayMs error: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
         /// BUG-B4: reports whether the remote peer's clone is currently present in the local
         /// scene (same scene and alive). Used by revive logic to refuse cross-scene teleports
         /// and by the AOI/desync gates to skip stale or hidden clones.

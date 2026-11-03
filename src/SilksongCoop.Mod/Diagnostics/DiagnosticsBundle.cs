@@ -92,6 +92,14 @@ namespace SilksongCoop.Mod.Diagnostics
             text.AppendLine($"sent_bytes: {session.SentBytes}");
             text.AppendLine($"received_bytes: {session.ReceivedBytes}");
             text.AppendLine($"tick: {session.CurrentTick}");
+            text.AppendLine($"tick_hz: {plugin.CurrentTickHz:F1}");
+
+            if (session.RemotePeerId.HasValue &&
+                plugin.CloneSpawner != null &&
+                plugin.CloneSpawner.TryGetInterpolationDelayMs(session.RemotePeerId.Value, out float interpDelayMs))
+            {
+                text.AppendLine($"interpolation_delay_ms: {interpDelayMs:F1}");
+            }
 
             var transport = plugin.ActiveTransport;
             if (transport != null)

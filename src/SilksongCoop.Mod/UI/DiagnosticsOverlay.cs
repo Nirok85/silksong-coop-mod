@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -23,6 +24,7 @@ namespace SilksongCoop.Mod.UI
         #region Fields
 
         private readonly NetworkDiagnostics _diagnostics;
+        private readonly Func<float>? _tickRateProvider;
         private bool _isVisible;
 
         // Cached 1x1 textures for drawing solid-color backgrounds/lines.
@@ -65,9 +67,11 @@ namespace SilksongCoop.Mod.UI
         /// Initializes a new instance of the DiagnosticsOverlay class.
         /// </summary>
         /// <param name="diagnostics">The network diagnostics data source.</param>
-        public DiagnosticsOverlay(NetworkDiagnostics diagnostics)
+        /// <param name="tickRateProvider">Optional current tick-rate source (Hz).</param>
+        public DiagnosticsOverlay(NetworkDiagnostics diagnostics, Func<float>? tickRateProvider = null)
         {
             _diagnostics = diagnostics;
+            _tickRateProvider = tickRateProvider;
         }
 
         #endregion
@@ -169,8 +173,9 @@ namespace SilksongCoop.Mod.UI
                 // Summary line
                 var summaryStyle = _summaryStyle ??= CreateOverlayStyle(11, FontStyle.Normal, Color.white);
                 string rejected = _diagnostics.RejectedPackets > 0 ? $"  |  Rejected: {_diagnostics.RejectedPackets}" : string.Empty;
+                string tick = _tickRateProvider != null ? $"  |  Tick: {_tickRateProvider():F0} Hz" : string.Empty;
                 GUI.Label(new Rect(x + Padding, cursorY, TotalWidth - Padding * 2, 20),
-                    $"Session: {_diagnostics.SessionDuration:F0}s  |  Pkt out: {_diagnostics.PacketsOutPerSecond}/s  in: {_diagnostics.PacketsInPerSecond}/s{rejected}",
+                    $"Session: {_diagnostics.SessionDuration:F0}s  |  Pkt out: {_diagnostics.PacketsOutPerSecond}/s  in: {_diagnostics.PacketsInPerSecond}/s{rejected}{tick}",
                     summaryStyle);
             }
             finally

@@ -71,6 +71,8 @@ namespace SilksongCoop.Mod.Clones
         public NetworkPeerId PeerId => _peerId;
         public bool IsPlayer2 => _isPlayer2;
         public SnapshotBuffer Buffer => _buffer;
+        /// <summary>Current adaptive interpolation delay in milliseconds (diagnostics).</summary>
+        public double InterpolationDelayMs => _interpolationDelayMs;
         public bool FacingRight => _facingRight;
         public ushort StateFlags => _stateFlags;
         public uint LastTimestampMs => _clock.LastTimestampMs;
