@@ -32,6 +32,8 @@ namespace SilksongCoop.Mod.Services
 
         private QuestFlagSnapshot? _before;
         private QuestFlagSnapshot? _pendingBefore;
+        private QuestFlagSnapshot? _lastSnapshot;
+        private float _nextPollAt;
         private int _generation;
         private uint _sequence;
 
@@ -61,8 +63,8 @@ namespace SilksongCoop.Mod.Services
         {
             if (!CanSync) return;
 
-            _generation++;
-            _pendingBefore = null;
+            // Do not invalidate a flush queued by the previous dialogue: rapid
+            // dialogue-to-dialogue transitions must still send the earlier changes.
             _before = Capture();
         }
 
@@ -102,6 +104,49 @@ namespace SilksongCoop.Mod.Services
             _generation++;
             _before = null;
             _pendingBefore = null;
+            _lastSnapshot = null;
+            _nextPollAt = 0f;
+        }
+
+        /// <summary>
+        /// Safety net for quest flags changed outside NPC dialogue (quest-item pickups,
+        /// scripts, cutscenes). Runs at 1 Hz while connected and idle; the first snapshot
+        /// after a connection only seeds the baseline, so joining cannot overwrite the
+        /// partner's existing progress.
+        /// </summary>
+        public void Poll()
+        {
+            if (!CanSync)
+            {
+                _lastSnapshot = null;
+                return;
+            }
+
+            // Dialogue hooks send their own diff; do not duplicate it from the poll.
+            if (_before != null || _pendingBefore != null) return;
+            if (Time.unscaledTime < _nextPollAt) return;
+            _nextPollAt = Time.unscaledTime + 1f;
+
+            QuestFlagSnapshot current;
+            try
+            {
+                current = Capture();
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[QuestSync] Poll capture failed: {ex.Message}");
+                return;
+            }
+
+            if (_lastSnapshot == null)
+            {
+                _lastSnapshot = current;
+                return;
+            }
+
+            var changes = QuestFlagDiff.Compute(_lastSnapshot, current);
+            _lastSnapshot = current;
+            SendChanges(changes);
         }
 
         /// <summary>
@@ -130,6 +175,7 @@ namespace SilksongCoop.Mod.Services
                             boolField.SetValue(playerData, entry.BoolValue);
                             _before?.SetBool(entry.Key, entry.BoolValue);
                             _pendingBefore?.SetBool(entry.Key, entry.BoolValue);
+                            _lastSnapshot?.SetBool(entry.Key, entry.BoolValue);
                             applied++;
                         }
                         else if (entry.Kind == QuestFlagKind.Int &&
@@ -138,6 +184,7 @@ namespace SilksongCoop.Mod.Services
                             intField.SetValue(playerData, entry.IntValue);
                             _before?.SetInt(entry.Key, entry.IntValue);
                             _pendingBefore?.SetInt(entry.Key, entry.IntValue);
+                            _lastSnapshot?.SetInt(entry.Key, entry.IntValue);
                             applied++;
                         }
                     }
@@ -184,6 +231,7 @@ namespace SilksongCoop.Mod.Services
                 yield break;
             }
 
+            _lastSnapshot = after;
             SendChanges(changes);
         }
 

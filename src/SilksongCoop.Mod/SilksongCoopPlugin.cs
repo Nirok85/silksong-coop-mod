@@ -1577,6 +1577,7 @@ namespace SilksongCoop.Mod
                 }
 
                 UpdateDesyncDetector();
+                QuestStateSync?.Poll();
 
                 if (Keybinds != null && Keybinds.IsKeyDown(KeybindManager.ToggleSpectatorCamera))
                 {
