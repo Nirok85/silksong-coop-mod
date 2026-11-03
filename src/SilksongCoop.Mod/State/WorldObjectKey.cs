@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using HarmonyLib;
+using SilksongCoop.Core.State;
 using UnityEngine;
 
 namespace SilksongCoop.Mod.State
@@ -8,10 +10,14 @@ namespace SilksongCoop.Mod.State
     /// <summary>
     /// Builds stable 64-bit identifiers for Unity objects that exist in both players'
     /// simulations. The key is derived from the scene name and the object's hierarchy path,
-    /// so it is identical on both machines without exchanging Unity instance IDs.
+    /// so it is identical on both machines without exchanging Unity instance IDs. The pure
+    /// hash/salt rules live in <see cref="StableObjectKey"/>.
     /// </summary>
     public static class WorldObjectKey
     {
+        private static System.Reflection.FieldInfo? _pickupPersistentField;
+        private static bool _pickupPersistentFieldResolved;
+
         /// <summary>
         /// Computes the scene + hierarchy-path hash for an object.
         /// </summary>
@@ -40,12 +46,22 @@ namespace SilksongCoop.Mod.State
         }
 
         /// <summary>
-        /// Computes the stable key of a physical currency drop. Position is rounded to 0.1
-        /// units so small physics differences between the two simulations still match.
+        /// Computes the stable key of a physical currency drop. Prefers the serialized
+        /// <c>PersistentBoolItem</c> id (identical on both peers even when physics moved the
+        /// copies apart) and falls back to scene + type + rounded position for dynamic drops
+        /// without a persistent id.
         /// </summary>
         public static ulong ComputePickup(CurrencyObjectBase pickup)
         {
             if (pickup == null) return 0;
+
+            var persistent = GetPersistentItem(pickup);
+            if (persistent != null)
+            {
+                ulong stable = StableObjectKey.PickupFromPersistent(
+                    persistent.GetSceneName(), persistent.GetId());
+                if (stable != 0) return stable;
+            }
 
             // CurrencyObjectBase.CurrencyType is protected, so distinguish the two concrete
             // drop components instead. Everything that is not a shell shard is rosaries.
@@ -64,35 +80,36 @@ namespace SilksongCoop.Mod.State
         }
 
         /// <summary>
+        /// Reads the serialized <c>CurrencyObjectBase.persistent</c> reference. The field is
+        /// private, so the accessor is resolved once and cached.
+        /// </summary>
+        private static PersistentBoolItem? GetPersistentItem(CurrencyObjectBase pickup)
+        {
+            try
+            {
+                if (!_pickupPersistentFieldResolved)
+                {
+                    _pickupPersistentFieldResolved = true;
+                    _pickupPersistentField = AccessTools.Field(typeof(CurrencyObjectBase), "persistent");
+                }
+
+                return _pickupPersistentField?.GetValue(pickup) as PersistentBoolItem;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Hash of a persistent world item (scene + persistent id + value type).
         /// </summary>
         public static ulong ComputePersistent(string sceneName, string itemId, int valueType)
-        {
-            if (string.IsNullOrEmpty(itemId)) return 0;
-
-            string raw = string.Concat(
-                sceneName ?? string.Empty, "|", itemId, "|",
-                valueType.ToString(System.Globalization.CultureInfo.InvariantCulture));
-
-            return HashString(raw);
-        }
+            => StableObjectKey.Persistent(sceneName, itemId, valueType);
 
         /// <summary>
         /// FNV-1a 64-bit hash. Deterministic across runtimes (unlike string.GetHashCode).
         /// </summary>
-        public static ulong HashString(string value)
-        {
-            const ulong offset = 14695981039346656037UL;
-            const ulong prime = 1099511628211UL;
-
-            ulong hash = offset;
-            for (int i = 0; i < value.Length; i++)
-            {
-                hash ^= value[i];
-                hash *= prime;
-            }
-
-            return hash == 0 ? 1UL : hash;
-        }
+        public static ulong HashString(string value) => StableObjectKey.HashString(value);
     }
 }

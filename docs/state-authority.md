@@ -52,9 +52,11 @@ by `PacketValidator` and then applied under the rules in the table above.
 - the Unity scene name,
 - the full transform hierarchy (`name#siblingIndex` at every level).
 
-Physical pickups add the currency type and position rounded to 0.1 units.
-Persistent world items use scene + persistent id + value type instead of a
-hierarchy path.
+Physical pickups use the drop's serialized `PersistentBoolItem` id (scene + persistent
+id + pickup salt) when available, so two copies that physics moved apart still share
+one identity. Dynamic drops without a persistent id fall back to scene + currency
+type + position rounded to 0.1 units. Persistent world items use scene + persistent
+id + value type instead of a hierarchy path.
 
 The same object therefore hashes identically on both machines without exchanging
 Unity instance IDs. A key is only comparable when both peers run the same game
@@ -103,6 +105,8 @@ comparison, revision `0` opt-out, cache behaviour, reset on new session).
 - Scripted doors whose state lives only in a PlayMaker FSM or a `PlayerData` flag
   are not replicated. Doors, chests and lifts backed by `PersistentBoolItem` /
   `PersistentIntItem` are covered by the event hook and the 1 Hz poll.
-- A physical drop can still be credited twice if its position diverges beyond the
-  0.5-unit dedup window; wallet reconciliation converges to the higher value.
+- A physical drop without a serialized persistent id can still be credited twice if
+  its position diverges beyond the 0.5-unit dedup window; wallet reconciliation
+  converges to the higher value. Drops with a `PersistentBoolItem` use its stable id
+  and are not affected.
 - Maximum stats never decrease by design.

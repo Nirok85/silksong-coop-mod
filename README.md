@@ -167,7 +167,7 @@ The diagnostics overlay (**F11**) shows ping (RTT), packet loss and bandwidth gr
 | Unlocked items (auto-unlock for partner) | Death / revival state |
 | Benches & checkpoints | |
 
-> **Enemy/world sync:** hero damage is applied to the attacker's simulation and then replicated as authoritative HP, so both players fight the same boss HP pool. `Breakable` walls and `Gate.Open()` are mirrored, and physical drops are deduplicated by a stable scene/type/position key plus a 0.5-unit drift window. Scripted doors driven only by `PlayerData` flags and boss phases that listen exclusively to `TookDamage` (rather than polling HP) may still differ. Progression packets are range-validated, but co-op still assumes invited friends — a modified client can raise its own progression within those limits.
+> **Enemy/world sync:** hero damage is applied to the attacker's simulation and then replicated as authoritative HP, so both players fight the same boss HP pool. A replicated hit also re-emits the boss's `TookDamage`/`TOOK DAMAGE` signals so PlayMaker phases stay in step. `Breakable` walls and `Gate.Open()` are mirrored; `PersistentBoolItem`/`PersistentIntItem` doors, chests and lifts use the `SaveState` hook plus a 1 Hz poll. Physical drops are deduplicated by their persistent id (or scene/type/position for dynamic drops) plus a 0.5-unit drift window. Scripted doors driven only by `PlayerData` flags and boss phases that listen to neither damage signal may still differ. Progression packets are range-validated, but co-op still assumes invited friends — a modified client can raise its own progression within those limits.
 
 ---
 
@@ -266,7 +266,7 @@ silksong_coop_mod/
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 780 tests
+    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 787 tests
         ├── TestHarness/              # DualClientTestHarness (2-client simulation, no Unity)
         ├── EndToEnd/                 # Real UDP loopback connect/reconnect tests
         ├── Tier1_FeatureTests/       # Requirement coverage tests (F01–F28)
@@ -289,8 +289,8 @@ dotnet test SilksongCoop.sln -c Release
 Current result:
 
 ```text
-Total tests:   780
-Passed:        780 (100.0%)
+Total tests:   787
+Passed:        787 (100.0%)
 Failed:        0
 Skipped:       0
 Duration:      ~6 s
