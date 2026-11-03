@@ -97,10 +97,30 @@ namespace SilksongCoop.Core.DI
             return registration.Type switch
             {
                 RegistrationType.Instance => registration.Instance!,
-                RegistrationType.SingletonFactory => registration.Instance ?? (registration.Instance = registration.Factory!(this)!),
+                RegistrationType.SingletonFactory => GetOrCreateSingleton(registration, serviceType),
                 RegistrationType.Transient => CreateInstance(registration.ImplementationType!),
                 _ => throw new InvalidOperationException($"Unknown registration type for {serviceType.Name}")
             };
+        }
+
+        /// <summary>
+        /// Creates a singleton once, serialising concurrent resolutions. Network callbacks
+        /// can resolve services off the main thread; the previous null-check race created
+        /// two instances and let one of them silently replace the other.
+        /// </summary>
+        private object GetOrCreateSingleton(Registration registration, Type serviceType)
+        {
+            lock (_lock)
+            {
+                if (registration.Instance == null)
+                {
+                    registration.Instance = registration.Factory!(this)
+                        ?? throw new InvalidOperationException(
+                            $"Singleton factory for {serviceType.Name} returned null");
+                }
+
+                return registration.Instance;
+            }
         }
 
         public bool TryResolve<TService>(out TService? service) where TService : class

@@ -44,7 +44,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "3.0.0";
+        public const string PluginVersion = "3.0.1";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -1442,6 +1442,12 @@ namespace SilksongCoop.Mod
                             INetworkTransport? transport = isSteam ? (INetworkTransport?)SteamTransport : UdpTransport;
                             if (transport != null)
                             {
+                                // A reconnect is always a client join. Keep its peer id
+                                // distinct from the host's without requiring a game restart
+                                // after a previous hosting session used id 1.
+                                if (transport is LiteNetLibTransport udpTransport)
+                                    udpTransport.SetLocalPeerId(2, "Client");
+
                                 SetActiveTransport(transport);
                                 transport.Connect(addr);
                                 SessionState?.SetConnecting(transport.LocalPeerId, addr);

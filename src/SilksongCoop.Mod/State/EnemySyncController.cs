@@ -27,10 +27,10 @@ namespace SilksongCoop.Mod.State
 
         private const byte WorldChannel = NetworkChannels.World;
 
-        private struct DeadEnemy
+        private struct PendingDeadEnemy
         {
-            public float X;
-            public float Y;
+            public EnemySnapshotEntry Entry;
+            public uint Timestamp;
         }
 
         /// <summary>
@@ -45,7 +45,8 @@ namespace SilksongCoop.Mod.State
             public PersistentStatePacket Persistent;
         }
 
-        private const int MaxDeadRegistry = 256;
+        private const int MaxDeadRegistry = DeadEnemyRegistry.DefaultCapacity;
+        private const int MaxPendingDeadEnemies = 256;
         private const int ReplayBatchSize = 16;
         private const int ReplayBacklogThreshold = 192;
 
@@ -54,8 +55,13 @@ namespace SilksongCoop.Mod.State
         private ConditionalWeakTable<HealthManager, KeyHolder> _keyCache = new ConditionalWeakTable<HealthManager, KeyHolder>();
         private readonly Dictionary<ulong, int> _lastSnapshotHp = new Dictionary<ulong, int>();
         private readonly Dictionary<ulong, bool> _lastSnapshotDead = new Dictionary<ulong, bool>();
-        private readonly Dictionary<ulong, DeadEnemy> _deadEnemies = new Dictionary<ulong, DeadEnemy>();
-        private readonly Queue<ulong> _deadEnemyOrder = new Queue<ulong>();
+        private readonly DeadEnemyRegistry _deadRegistry = new DeadEnemyRegistry(MaxDeadRegistry);
+        // Dead snapshot entries whose scene is not loaded yet. Applying them immediately
+        // dropped bosses killed before a late joiner entered the room; retry after a load.
+        private readonly Dictionary<ulong, PendingDeadEnemy> _pendingDeadEnemies =
+            new Dictionary<ulong, PendingDeadEnemy>();
+        private readonly Queue<ulong> _pendingDeadOrder = new Queue<ulong>();
+        private float _pendingDeadRetryAt;
         private readonly Dictionary<ulong, WorldEventPacket> _worldEvents = new Dictionary<ulong, WorldEventPacket>();
         private readonly Queue<ulong> _worldEventOrder = new Queue<ulong>();
         private readonly Dictionary<ulong, PersistentStatePacket> _persistentStates = new Dictionary<ulong, PersistentStatePacket>();
@@ -89,6 +95,7 @@ namespace SilksongCoop.Mod.State
 
         private static AccessTools.FieldRef<HealthManager, int>? _initHpRef;
         private static bool _initHpResolved;
+        private static bool _bossProbeWarningLogged;
 
         /// <summary>
         /// Binds the controller to the plugin.
@@ -124,6 +131,9 @@ namespace SilksongCoop.Mod.State
             _pendingPersistentOrder.Clear();
             _pendingWorldEvents.Clear();
             _pendingWorldEventOrder.Clear();
+            _pendingDeadEnemies.Clear();
+            _pendingDeadOrder.Clear();
+            _pendingDeadRetryAt = 0f;
             // A new session may come from a different host whose revisions restart from a
             // lower value, so applied revisions must not carry over.
             _appliedWorldRevisions.Clear();
@@ -141,6 +151,7 @@ namespace SilksongCoop.Mod.State
 
             PumpPendingPersistentStates();
             PumpPendingWorldEvents();
+            PumpPendingDeadEnemies();
 
             // Only the host is authoritative for periodic snapshots and world catch-up.
             if (_plugin.SessionState.IsHost != true) return;
@@ -200,22 +211,14 @@ namespace SilksongCoop.Mod.State
             ulong key = GetKey(target);
             if (key == 0) return;
 
-            // Register even before a peer connects so a later client is caught up.
-            if (!_deadEnemies.ContainsKey(key))
-            {
-                while (_deadEnemies.Count >= MaxDeadRegistry && _deadEnemyOrder.Count > 0)
-                {
-                    ulong oldest = _deadEnemyOrder.Dequeue();
-                    if (_deadEnemies.Remove(oldest)) break;
-                }
-                _deadEnemyOrder.Enqueue(key);
-            }
-
-            _deadEnemies[key] = new DeadEnemy
-            {
-                X = target.transform.position.x,
-                Y = target.transform.position.y
-            };
+            // Register even before a peer connects so a later client is caught up. Bosses
+            // are flagged here, while the scene is still loaded, because the registry uses
+            // that flag to survive the scene change that follows a boss kill.
+            _deadRegistry.Register(
+                key,
+                target.transform.position.x,
+                target.transform.position.y,
+                IsBoss(target) || IsBoss(healthManager));
 
             if (_plugin?.SessionState?.IsConnected != true) return;
 
@@ -356,8 +359,10 @@ namespace SilksongCoop.Mod.State
             }
 
             // Enemies killed before the current client connected may already be gone from
-            // EnumerateActiveEnemies(). Replay them from the local death registry.
-            foreach (var dead in _deadEnemies)
+            // EnumerateActiveEnemies(). Replay them from the local death registry. Boss
+            // records survive scene changes, so this also covers a late joiner who enters
+            // the boss room after the host has already left it.
+            foreach (var dead in _deadRegistry.Records)
             {
                 if (_lastSnapshotDead.TryGetValue(dead.Key, out bool alreadySent) && alreadySent)
                     continue;
@@ -423,14 +428,32 @@ namespace SilksongCoop.Mod.State
             for (int i = 0; i < count; i++)
             {
                 var entry = packet.Entries[i];
+                var target = FindEnemy(entry.EnemyKey, entry.PositionX, entry.PositionY);
+
+                // A dead boss may belong to a scene this peer has not loaded yet. Cache the
+                // death and apply it when that scene finishes loading; the snapshot itself
+                // is only sent once per session, so dropping it here loses the kill forever.
+                if (target == null)
+                {
+                    if (entry.IsDead)
+                        CachePendingDeadEnemy(entry, packet.Header.Timestamp);
+                    else
+                        _pendingDeadEnemies.Remove(entry.EnemyKey);
+                    continue;
+                }
+
+                // A fresh snapshot for the loaded object supersedes a cached death (for
+                // example a boss-rush encounter that respawned the same boss).
+                _pendingDeadEnemies.Remove(entry.EnemyKey);
+
                 if (!_service.TryAcceptSnapshot(entry.EnemyKey, entry.Hp, entry.IsDead, packet.Header.Timestamp))
                     continue;
 
-                var target = FindEnemy(entry.EnemyKey, entry.PositionX, entry.PositionY);
-                if (target == null) continue;
-
                 ApplyEnemyState(target, entry.Hp, entry.IsDead, authoritative: true);
             }
+
+            if (_pendingDeadEnemies.Count > 0)
+                _pendingDeadRetryAt = Time.unscaledTime + 0.25f;
         }
 
         #endregion
@@ -1073,14 +1096,18 @@ namespace SilksongCoop.Mod.State
             _keyCache = new ConditionalWeakTable<HealthManager, KeyHolder>();
             _lastSnapshotHp.Clear();
             _lastSnapshotDead.Clear();
-            _deadEnemies.Clear();
-            _deadEnemyOrder.Clear();
             _service.Reset();
 
             // WorldEvent records are permanent (breakables/gates survive scene loads), so
             // they intentionally survive a scene change and remain available for late-join
-            // catch-up. Dead-enemy records are cleared because ordinary enemies respawn when
-            // their scene is reloaded.
+            // catch-up. The same is true for bosses: they do not respawn when their room is
+            // reloaded, so only ordinary-enemy deaths are dropped here.
+            int dropped = _deadRegistry.DropRespawnable();
+            if (dropped > 0)
+            {
+                SilksongCoopPlugin.LogInfo(
+                    $"[EnemySync] Scene changed; dropped {dropped} respawnable death record(s), kept {_deadRegistry.Count} boss record(s)");
+            }
 
             // The scene lookup indexes are stale; the pending persistent-state cache is
             // retried once the new scene has finished loading.
@@ -1095,6 +1122,133 @@ namespace SilksongCoop.Mod.State
             {
                 _pendingWorldRetryAt = Time.unscaledTime + 0.25f;
             }
+            if (_pendingDeadEnemies.Count > 0)
+            {
+                _pendingDeadRetryAt = Time.unscaledTime + 0.25f;
+            }
+        }
+
+        /// <summary>
+        /// Caches a dead snapshot entry until its scene is loaded. The snapshot is sent once
+        /// per session, so an entry dropped while the boss room is unloaded would otherwise
+        /// leave the boss alive on the late joiner's screen forever.
+        /// </summary>
+        private void CachePendingDeadEnemy(EnemySnapshotEntry entry, uint timestamp)
+        {
+            if (entry.EnemyKey == 0) return;
+
+            if (!_pendingDeadEnemies.ContainsKey(entry.EnemyKey))
+            {
+                while (_pendingDeadEnemies.Count >= MaxPendingDeadEnemies &&
+                       _pendingDeadOrder.Count > 0)
+                {
+                    ulong oldest = _pendingDeadOrder.Dequeue();
+                    if (_pendingDeadEnemies.Remove(oldest)) break;
+                }
+
+                _pendingDeadOrder.Enqueue(entry.EnemyKey);
+            }
+
+            if (!_pendingDeadEnemies.TryGetValue(entry.EnemyKey, out var existing) ||
+                unchecked((int)(timestamp - existing.Timestamp)) > 0)
+            {
+                _pendingDeadEnemies[entry.EnemyKey] = new PendingDeadEnemy
+                {
+                    Entry = entry,
+                    Timestamp = timestamp
+                };
+            }
+
+            _pendingDeadRetryAt = Time.unscaledTime + 0.25f;
+        }
+
+        private void PumpPendingDeadEnemies()
+        {
+            if (_pendingDeadEnemies.Count == 0) return;
+            if (_plugin?.SessionState?.IsHost == true) return;
+            if (Time.unscaledTime < _pendingDeadRetryAt) return;
+
+            List<ulong>? resolved = null;
+            foreach (var pair in _pendingDeadEnemies)
+            {
+                var pending = pair.Value;
+                var target = FindEnemy(
+                    pending.Entry.EnemyKey,
+                    pending.Entry.PositionX,
+                    pending.Entry.PositionY);
+                if (target == null) continue;
+
+                if (_service.TryAcceptSnapshot(
+                        pending.Entry.EnemyKey,
+                        pending.Entry.Hp,
+                        pending.Entry.IsDead,
+                        pending.Timestamp))
+                {
+                    ApplyEnemyState(target, pending.Entry.Hp, pending.Entry.IsDead, authoritative: true);
+                }
+
+                (resolved ??= new List<ulong>()).Add(pair.Key);
+            }
+
+            if (resolved != null)
+            {
+                for (int i = 0; i < resolved.Count; i++)
+                    _pendingDeadEnemies.Remove(resolved[i]);
+            }
+
+            while (_pendingDeadOrder.Count > 0 &&
+                   !_pendingDeadEnemies.ContainsKey(_pendingDeadOrder.Peek()))
+            {
+                _pendingDeadOrder.Dequeue();
+            }
+
+            _pendingDeadRetryAt = Time.unscaledTime +
+                (_pendingDeadEnemies.Count == 0 ? 5f : 0.25f);
+        }
+
+        /// <summary>
+        /// Whether this enemy is a boss that does not respawn with its scene. BossSceneController
+        /// covers scripted boss rooms; a boss sequence covers Godhome-style fights where every
+        /// active enemy belongs to the run.
+        /// </summary>
+        private static bool IsBoss(HealthManager healthManager)
+        {
+            if (healthManager == null) return false;
+
+            try
+            {
+                var controller = BossSceneController.Instance;
+                if (controller != null)
+                {
+                    var bosses = controller.bosses;
+                    if (bosses != null)
+                    {
+                        for (int i = 0; i < bosses.Length; i++)
+                        {
+                            if (bosses[i] == healthManager)
+                                return true;
+                        }
+                    }
+
+                    var lookup = controller.BossHealthLookup;
+                    if (lookup != null && lookup.ContainsKey(healthManager))
+                        return true;
+                }
+
+                if (BossSequenceController.IsInSequence)
+                    return true;
+            }
+            catch (Exception ex)
+            {
+                if (!_bossProbeWarningLogged)
+                {
+                    _bossProbeWarningLogged = true;
+                    SilksongCoopPlugin.LogWarn(
+                        $"[EnemySync] Boss detection failed ({ex.Message}); the death will be treated as a regular enemy");
+                }
+            }
+
+            return false;
         }
 
         private ulong GetKey(HealthManager healthManager)

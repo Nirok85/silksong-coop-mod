@@ -258,6 +258,20 @@ namespace SilksongCoop.Core.Networking
         }
 
         /// <summary>
+        /// Assigns the local peer identity used in handshakes and in the
+        /// <c>OriginPeerId</c> field of world-state packets. The menu calls this before
+        /// hosting (id 1) and before joining (id 2): without it both sides used id 1 and
+        /// revision tracking could not distinguish the origin.
+        /// </summary>
+        public void SetLocalPeerId(ulong peerId, string displayName = "Player")
+        {
+            if (peerId == 0)
+                throw new ArgumentOutOfRangeException(nameof(peerId), "Peer id 0 is reserved");
+
+            _localPeerId = new NetworkPeerId(peerId, displayName);
+        }
+
+        /// <summary>
         /// Sets the room code for connection authentication.
         /// Must be called before StartHost or Connect.
         /// </summary>

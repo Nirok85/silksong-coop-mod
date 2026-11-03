@@ -12,6 +12,10 @@
   the original `StateRevision`/`OriginPeerId`.
 - **Deferred application.** Events whose objects are not in the loaded scene are
   cached and retried; the applied revision is recorded when the retry succeeds.
+- **Boss-death catch-up.** The host keeps boss death records across scene changes
+  (`DeadEnemyRegistry`), and a client that receives a dead-boss snapshot while the
+  boss room is unloaded caches it until the scene loads. Ordinary-enemy deaths are
+  still dropped on a scene change because those enemies respawn.
 
 ## What does not exist
 
@@ -20,7 +24,7 @@
 - There is no "reconnect rejected because a different session" check beyond the
   protocol/mod version agreement.
 - Disconnect during a scene change does not preserve per-scene state in a formal
-  way; only the pending caches described above survive.
+  way; only the pending caches and the boss-death registry described above survive.
 
 ## Related limits
 

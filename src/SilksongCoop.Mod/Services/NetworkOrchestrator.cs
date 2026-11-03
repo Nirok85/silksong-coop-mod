@@ -186,12 +186,16 @@ namespace SilksongCoop.Mod.Services
                 // Area-of-interest gate. The manager must know where the remote peers are:
                 // registering only the local player made every lookup for the remote id fail,
                 // which throttled the stream to one packet in eight. The gate only applies
-                // when a peer shares the scene: while players are apart the clone keeps its
-                // last position from a different room, so a distance check would throttle a
-                // reunion to the heartbeat rate and make the first seconds visibly steppy.
-                // The gate is evaluated for the first same-scene peer only; the recipient
-                // list decides actual delivery, so one distant peer can never hide the
-                // stream from another one standing next to us.
+                // when at least one peer shares the scene: while players are apart the clone
+                // keeps its last position from a different room, so a distance check would
+                // throttle a reunion to the heartbeat rate and make the first seconds
+                // visibly steppy.
+                //
+                // Evaluate every same-scene peer instead of breaking on the first one: with
+                // three or more players, one distant peer must not suppress the stream to a
+                // partner standing next to us.
+                bool hasSameScenePeer = false;
+                bool anyPeerInRange = false;
                 for (int i = 0; i < recipients.Count; i++)
                 {
                     var peer = recipients[i];
@@ -199,18 +203,25 @@ namespace SilksongCoop.Mod.Services
                         !_cloneManager.TryGetRemotePosition(peer, out float remoteX, out float remoteY))
                         continue;
 
+                    hasSameScenePeer = true;
                     _interestManager.UpdateEntity(peer.Value, new System.Numerics.Vector2(remoteX, remoteY));
 
-                    bool inRange = _interestManager.IsInInterest(
-                        transport.LocalPeerId.Value,
-                        new System.Numerics.Vector2(position.x, position.y),
-                        peer.Value);
+                    if (_interestManager.IsInInterest(
+                            transport.LocalPeerId.Value,
+                            new System.Numerics.Vector2(position.x, position.y),
+                            peer.Value))
+                    {
+                        anyPeerInRange = true;
+                    }
+                }
 
-                    // Out of range: keep a slow heartbeat so the partner still sees us when
-                    // they come back, but bound it by time instead of tick parity.
-                    if (!inRange && Time.unscaledTime - _lastFarTransformSend < 0.5f)
-                        return;
-                    break;
+                // All same-scene peers are far: keep a slow heartbeat so they still see us
+                // when they come back, but bound it by time instead of tick parity.
+                if (hasSameScenePeer &&
+                    !anyPeerInRange &&
+                    Time.unscaledTime - _lastFarTransformSend < 0.5f)
+                {
+                    return;
                 }
                 _lastFarTransformSend = Time.unscaledTime;
 

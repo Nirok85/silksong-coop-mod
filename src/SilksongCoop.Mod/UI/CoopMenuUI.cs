@@ -1100,6 +1100,10 @@ namespace SilksongCoop.Mod.UI
                 // IP joins that do not know it are rejected instead of silently accepted.
                 _udpTransport.SetRoomCode(code);
                 _udpTransport.RequireRoomCode = true;
+                // Host and client must not share the same peer id: OriginPeerId in world
+                // packets is compared per origin, and two sides using id 1 made every
+                // revision look like it came from the same source.
+                _udpTransport.SetLocalPeerId(1, "Host");
                 plugin.SetActiveTransport(_udpTransport);
                 plugin.PrepareForNewSession();
                 _udpTransport.StartHost(udpPort);
@@ -1326,6 +1330,7 @@ namespace SilksongCoop.Mod.UI
                     }
                 }
 
+                _udpTransport.SetLocalPeerId(2, "Client");
                 plugin.SetActiveTransport(_udpTransport);
                 plugin.PrepareForNewSession();
                 _udpTransport.Connect(connectAddress);

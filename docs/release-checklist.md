@@ -1,14 +1,14 @@
-# Release checklist (3.0.0)
+# Release checklist (3.0.1)
 
 ## Pre-release
 
-- [ ] All tests pass (750+).
+- [ ] All tests pass (757+).
 - [ ] Core and Mod build with 0 warnings (TreatWarningsAsErrors=true).
 - [ ] Protocol version bumped and documented (`docs/protocol-v8.md`).
-- [ ] Plugin version and assembly versions bumped to 3.0.0.
+- [ ] Plugin version and assembly versions bumped to 3.0.1.
 - [ ] Migration guide updated.
 - [ ] CHANGELOG.md updated.
-- [ ] README.md / README.ru.md updated — limits section matches what is implemented.
+- [ ] README.md / README.ru.md updated вЂ” limits section matches what is implemented.
 
 ## Build
 
@@ -34,7 +34,7 @@
 
 ## Publish
 
-- [ ] Tag `v3.0.0`.
+- [ ] Tag `v3.0.1`.
 - [ ] GitHub release with notes.
 - [ ] Attach mod DLL + checksums.
 - [ ] Announce breaking changes.

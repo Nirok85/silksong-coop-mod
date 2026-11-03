@@ -1,5 +1,9 @@
 # Migration guide: 2.x → 3.0.0
 
+> **Patch 3.0.1:** no protocol change and no extra migration step. Install 3.0.1
+> instead of 3.0.0; Steam lobbies compare the full mod version, so both players
+> should use 3.0.1.
+
 ## Breaking changes
 
 - **Protocol version 8.** 2.2.x uses v7. The handshake (UDP and Steam) rejects a

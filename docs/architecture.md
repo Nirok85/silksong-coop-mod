@@ -28,7 +28,7 @@ Composition happens in `SilksongCoopPlugin.Awake()`:
 
 All managers depend on interfaces, not on `SilksongCoopPlugin`. Gameplay actions are exposed via `IGameplayActions`.
 
-## Authority model (implemented in 3.0.0)
+## Authority model (implemented in 3.0.x)
 
 - Player position: each player owns and replicates their own; remote values are validated.
 - Death/revive: `DeathLifecycleCoordinator`; a dead partner is never revived by transform traffic.

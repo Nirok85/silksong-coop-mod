@@ -157,20 +157,22 @@ namespace SilksongCoop.Core.State
             for (int i = 0; i < _pruneScratch.Count; i++)
                 samples.Remove(_pruneScratch[i]);
 
-            // If a clock jump produced a burst of future samples, keep the ones closest to
-            // the local round: those are the first that will be compared.
+            // Keep the samples closest to the local round: those are the first that will be
+            // compared. Distance is absolute so a burst of old samples is pruned from the
+            // oldest end, while a clock jump into the future is pruned from the farthest end.
             while (samples.Count > MaxRetainedRounds)
             {
                 uint farthestRound = 0;
-                int farthestDelta = int.MinValue;
+                long farthestDistance = -1;
                 bool found = false;
 
                 foreach (uint round in samples.Keys)
                 {
                     int delta = unchecked((int)(round - _newestLocalRound));
-                    if (delta > farthestDelta)
+                    long distance = delta < 0 ? -(long)delta : delta;
+                    if (distance > farthestDistance)
                     {
-                        farthestDelta = delta;
+                        farthestDistance = distance;
                         farthestRound = round;
                         found = true;
                     }
