@@ -3,7 +3,7 @@
 ## Pre-release
 
 - [ ] `pwsh ./scripts/preflight-release.ps1 -AllowDirty` passes (versions, changelog, README, build, tests).
-- [ ] All tests pass (787+).
+- [ ] All tests pass (814+).
 - [ ] Core and Mod build with 0 compiler warnings (TreatWarningsAsErrors=true; NU1900 is a NuGet network warning).
 - [ ] Protocol version is unchanged or bumped and documented (`docs/protocol-v8.md`).
 - [ ] Plugin version and assembly versions bumped to 3.2.0.
@@ -35,6 +35,7 @@
 - [ ] Scene transition.
 - [ ] Reconnect after timeout.
 - [ ] Late joiner catch-up.
+- [ ] Quest interaction: offer/progress a quest and verify the partner sees the same quest state.
 - [ ] Diagnostics bundle writes a file and the room code is redacted.
 
 ## Publish

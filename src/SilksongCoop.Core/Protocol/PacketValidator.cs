@@ -1,4 +1,5 @@
 using System;
+using SilksongCoop.Core.Progression;
 using SilksongCoop.Core.Protocol.Packets;
 
 namespace SilksongCoop.Core.Protocol
@@ -347,6 +348,42 @@ namespace SilksongCoop.Core.Protocol
             // SpawnType is intentionally an opaque enum value here.
             if (packet.SpawnType < 0)
                 return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Validates a quest-state packet. Only the conservative quest allowlist may be
+        /// applied, so a modified client cannot use this packet to write arbitrary
+        /// PlayerData fields.
+        /// </summary>
+        public static bool ValidateQuestState(QuestStatePacket packet)
+        {
+            if (packet.Count < 0 || packet.Count > QuestStatePacket.MaxEntries) return false;
+            if (packet.Entries == null || packet.Entries.Length < packet.Count) return false;
+
+            var seen = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
+            for (int i = 0; i < packet.Count; i++)
+            {
+                var entry = packet.Entries[i];
+                if (entry.Key == null || entry.Key.Length == 0 ||
+                    entry.Key.Length > QuestFlagFilter.MaxKeyLength ||
+                    !QuestFlagFilter.IsQuestRelated(entry.Key))
+                {
+                    return false;
+                }
+
+                if (entry.Kind != QuestFlagKind.Bool && entry.Kind != QuestFlagKind.Int)
+                    return false;
+
+                if (entry.Kind == QuestFlagKind.Int &&
+                    (entry.IntValue < -1_000_000 || entry.IntValue > 1_000_000))
+                {
+                    return false;
+                }
+
+                if (!seen.Add(entry.Key)) return false;
+            }
 
             return true;
         }

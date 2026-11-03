@@ -124,6 +124,7 @@ namespace SilksongCoop.Mod.Diagnostics
             text.AppendLine($"ReviveCooldownSeconds: {plugin.ReviveCooldownConfig?.Value}");
             text.AppendLine($"ReviveHealthPercent: {plugin.ReviveHealthPercentConfig?.Value}");
             text.AppendLine($"ReviveInvulnerabilitySeconds: {plugin.ReviveInvulnerabilityConfig?.Value}");
+            text.AppendLine($"SyncQuestFlags: {plugin.SyncQuestFlagsConfig?.Value}");
             text.AppendLine($"EnablePlayer2DashTrail: {plugin.EnablePlayer2DashTrailConfig?.Value}");
             text.AppendLine($"Player2HueShift: {plugin.Player2HueShiftConfig?.Value}");
             text.AppendLine($"DefaultUdpPort: {plugin.DefaultUdpPortConfig?.Value}");

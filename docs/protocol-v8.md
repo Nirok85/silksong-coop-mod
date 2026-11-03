@@ -37,11 +37,29 @@ Unchanged since v7: 12 bytes, little-endian.
 
 Older builds cannot parse these payloads; that is why the version was bumped.
 
-**3.0.1–3.2.0 do not change the wire format.** They are still v8; the patch
+## Optional packet added in 3.2.0
+
+`QuestStatePacket` (`PacketId = 0x56`) carries the bool/int `PlayerData` flags that
+changed during an NPC dialogue:
+
+| Size | Field | Meaning |
+|---|---|---|
+| 1 | `Count` | Number of entries (max 64) |
+| 1 | `Kind` | `0` = bool, `1` = int |
+| 2+N | `Key` | Length-prefixed UTF-8 `PlayerData` field name (max 64 chars) |
+| 1 or 4 | `Value` | Bool byte or Int32 |
+
+This packet is **optional and backward compatible**: a build that does not know
+`0x56` rejects the packet type and ignores the datagram. No existing v8 payload
+changed, so the handshake and session label stay at v8. Quest sync only works when
+both peers run 3.2.0 or newer; the receiver applies only names accepted by the
+quest allowlist, never arbitrary `PlayerData` fields.
+
+**3.0.1-3.2.0 do not change the existing wire format.** They are still v8; the patch
 releases only fix the peer identity used in `OriginPeerId` (menu host = 1, menu
 client = 2), boss-death catch-up, handshake ordering, transport sequence handling,
 validation and the guarded object-matching rules. 3.1.0 is a UI/localization
-release; 3.2.0 adds boss-phase signals and persistent-object polling. A 3.0.0 UDP
+release; 3.2.0 adds boss-phase signals, persistent-object polling and quest-state sync. A 3.0.0 UDP
 peer can still complete the handshake. Steam lobbies additionally compare the full
 mod version and therefore require both sides on the same release.
 

@@ -89,6 +89,7 @@ namespace SilksongCoop.Mod
         public BepInEx.Configuration.ConfigEntry<bool>? AutoReconnectConfig;
         public BepInEx.Configuration.ConfigEntry<int>? MaxReconnectAttemptsConfig;
         public BepInEx.Configuration.ConfigEntry<bool>? SaveConnectionHistoryConfig;
+        public BepInEx.Configuration.ConfigEntry<bool>? SyncQuestFlagsConfig;
         public BepInEx.Configuration.ConfigEntry<string>? LanguageConfig;
         public BepInEx.Configuration.ConfigEntry<bool>? OnboardingCompletedConfig;
         #endregion
@@ -101,6 +102,7 @@ namespace SilksongCoop.Mod
         public float CurrentTickHz => _networkOrchestrator?.CurrentTickHz ?? 0f;
         public RemoteHornetSpawner CloneSpawner { get; private set; } = null!;
         public EnemySyncController? EnemySync { get; private set; }
+        public QuestStateSyncManager? QuestStateSync { get; private set; }
 
         // Orchestrator services that decouple network hot-path from the plugin.
         private readonly System.Collections.Generic.List<ISyncOrchestrator> _orchestrators = new System.Collections.Generic.List<ISyncOrchestrator>();
@@ -200,6 +202,8 @@ namespace SilksongCoop.Mod
                 AutoReconnectConfig = Config.Bind("Network", "AutoReconnect", true, "Automatically attempt to reconnect after an unexpected disconnect");
                 MaxReconnectAttemptsConfig = Config.Bind("Network", "MaxReconnectAttempts", 5, "Maximum number of automatic reconnection attempts (1-10)");
                 SaveConnectionHistoryConfig = Config.Bind("Network", "SaveConnectionHistory", true, "Persist the last five connection targets in PlayerPrefs (Windows registry)");
+                SyncQuestFlagsConfig = Config.Bind("Gameplay", "SyncQuestFlags", true,
+                    "Replicate quest-related PlayerData bool/int flags changed during NPC dialogue (best-effort; disable if a quest misbehaves)");
                 LanguageConfig = Config.Bind("UI", "Language", "Auto",
                     new ConfigDescription("UI language: Auto (system), English or Russian",
                         new AcceptableValueList<string>("Auto", "English", "Russian")));
@@ -333,6 +337,7 @@ namespace SilksongCoop.Mod
             DontDestroyOnLoad(enemySyncGo);
             EnemySync = enemySyncGo.AddComponent<EnemySyncController>();
             EnemySync.Initialize(this);
+            QuestStateSync = new QuestStateSyncManager(this);
 
             // Create orchestrator services that own the network hot-path and sync callbacks.
             // They subscribe to EventBus events raised by SessionService/TransportService.
@@ -564,6 +569,7 @@ namespace SilksongCoop.Mod
             CloneSpawner?.ResetAllClones();
             InventorySync?.ResetSessionState();
             EnemySync?.ResetSession();
+            QuestStateSync?.ResetSession();
             SessionState?.SetDisconnected(DisconnectReason.GracefulDisconnect);
         }
 
@@ -1090,6 +1096,7 @@ namespace SilksongCoop.Mod
                     _lastSilkPartsBroadcast = -1;
                     EnemySync?.ResetSession();
                     InventorySync?.ResetSessionState();
+                    QuestStateSync?.ResetSession();
 
                     Logger.LogInfo($"[Coop] Peer connected: {peer}");
                     SessionState?.SetConnected(peer, transport.IsHost ? SessionRole.Host : SessionRole.Client);
@@ -1192,6 +1199,7 @@ namespace SilksongCoop.Mod
                     // next BroadcastInitialInventory is not swallowed.
                     InventorySync?.ResetSessionState();
                     EnemySync?.ResetSession();
+                    QuestStateSync?.ResetSession();
 
                     if (recoveringFromSpectator)
                     {
@@ -1443,6 +1451,12 @@ namespace SilksongCoop.Mod
                         var persistentState = PersistentStatePacket.Deserialize(ref reader);
                         if (!PacketValidator.ValidatePersistentState(persistentState)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         EnemySync?.ApplyRemotePersistentState(persistentState);
+                        break;
+
+                    case PacketType.QuestState:
+                        var questState = QuestStatePacket.Deserialize(ref reader);
+                        if (!PacketValidator.ValidateQuestState(questState)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        QuestStateSync?.ApplyRemote(questState);
                         break;
 
                     case PacketType.ItemUnlockSync:

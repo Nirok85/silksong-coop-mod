@@ -17,6 +17,7 @@ the same change.
 | Enemy/boss HP, deaths and phases | The attacker's local hit is replicated to the partner | `EnemySyncController` + `EnemySyncService`; a replicated hit re-emits `TookDamage`/`TOOK DAMAGE` without reapplying damage | Exact `scene + hierarchy` key; host snapshot corrects drift |
 | World events (breakables, gates) | Either peer | `WorldEventPacket` with `StateRevision`/`OriginPeerId` | Per-key revision/ origin comparison; replay of stored events on join |
 | Persistent world values | Either peer | `PersistentStatePacket` keyed by scene + persistent id + type; `SaveState` hook plus a 1 Hz poll of `PersistentBoolItem`/`PersistentIntItem` | Per-key revision/origin comparison; polling seeds initial scene state without broadcasting it |
+| Quest flags from NPC dialogue | Either peer | `QuestStatePacket` (0x56) after `NPCControlBase` dialogue; only allowlisted `PlayerData` bool/int names | Diff of before/after snapshots; only changed values are sent and applied under `RemoteApplyScope` |
 | Physical pickups | Either peer | Stable pickup key + one-time claim tracking | Exact key first; coordinates only as a guarded fallback |
 
 ## What "authoritative" means here
@@ -105,9 +106,9 @@ comparison, revision `0` opt-out, cache behaviour, reset on new session).
 - Scripted doors whose state lives only in a PlayMaker FSM or a `PlayerData` flag
   are not replicated. Doors, chests and lifts backed by `PersistentBoolItem` /
   `PersistentIntItem` are covered by the event hook and the 1 Hz poll.
-- Dialogue and quest-progress interactions are not replicated in 3.2.0. Syncing
-  them safely requires understanding Yarn/PlayMaker quest state; a naive mirror can
-  skip or double-apply story flags.
+- Quest sync is best-effort and limited to bool/int `PlayerData` names matching the
+  allowlist. Strings, lists, enum fields and off-list story flags are not replicated;
+  pure visual dialogue text is not mirrored. A live quest playthrough is still needed.
 - A physical drop without a serialized persistent id can still be credited twice if
   its position diverges beyond the 0.5-unit dedup window; wallet reconciliation
   converges to the higher value. Drops with a `PersistentBoolItem` use its stable id

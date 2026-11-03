@@ -26,6 +26,7 @@ namespace SilksongCoop.Core.Protocol
         EnemySync           = 0x52,
         EnemySnapshot       = 0x53,
         WorldEvent          = 0x54,
-        PersistentState     = 0x55
+        PersistentState     = 0x55,
+        QuestState          = 0x56
     }
 }
