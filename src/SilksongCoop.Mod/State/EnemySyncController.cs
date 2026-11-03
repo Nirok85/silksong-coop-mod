@@ -86,6 +86,16 @@ namespace SilksongCoop.Mod.State
         private float _nextAmbiguousMatchLogAt;
         private int _suppressedAmbiguousMatchLogs;
 
+        // Persistent bool/int items are polled once per second. The SaveState hook covers
+        // the common path; polling catches doors/chests/lifts that mutate their value
+        // without calling SaveState immediately, plus items whose script drives them.
+        private float _persistentPollAt;
+        private const float PersistentPollInterval = 1f;
+
+        private static System.Reflection.FieldInfo? _tookDamageField;
+        private static bool _tookDamageFieldResolved;
+        private static bool _phaseNotifyFailureLogged;
+
         private const int MaxPendingPersistentStates = 4096;
         private const int MaxPendingWorldEvents = 1024;
 
@@ -151,6 +161,10 @@ namespace SilksongCoop.Mod.State
             // looked like a scene change (empty _sceneName) and cleared dead enemies that
             // were recorded while playing solo, just before their catch-up replay.
             DetectSceneChange();
+
+            // Poll even while solo: a change made before connecting is stored in the
+            // persistent replay cache and sent to the partner on join.
+            PollPersistentStateChanges();
 
             if (_plugin?.SessionState?.IsConnected != true) return;
 
@@ -310,11 +324,58 @@ namespace SilksongCoop.Mod.State
                     }
 
                     int next = authoritative ? hp : Math.Min(target.hp, hp);
+                    int before = target.hp;
                     target.hp = Math.Max(1, next);
+
+                    // A replicated hit (or a downward snapshot correction) must also drive
+                    // the boss's phase FSM. Setting hp alone leaves PlayMaker bosses one
+                    // phase behind: their transitions listen for the "TOOK DAMAGE" event
+                    // that the local TakeDamage path emits. Re-emit the same signals
+                    // without applying damage twice. Snapshots that merely confirm the
+                    // current HP do not lower it, so they cannot re-trigger a phase.
+                    if (target.hp < before)
+                    {
+                        NotifyBossTookDamage(target);
+                    }
                 }
                 catch (Exception ex)
                 {
                     SilksongCoopPlugin.LogWarn($"[EnemySync] Failed applying enemy state: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Re-emits the damage signals that <c>HealthManager.TakeDamage</c> would have
+        /// produced locally: the C# <c>TookDamage</c> event and the PlayMaker
+        /// <c>TOOK DAMAGE</c> event. Only called for replicated hits on bosses, where the
+        /// phase state machine otherwise lags one hit behind the shared HP bar.
+        /// </summary>
+        private static void NotifyBossTookDamage(HealthManager target)
+        {
+            if (target == null || !IsBoss(target)) return;
+
+            try
+            {
+                if (!_tookDamageFieldResolved)
+                {
+                    _tookDamageFieldResolved = true;
+                    _tookDamageField = AccessTools.Field(typeof(HealthManager), "TookDamage");
+                }
+
+                if (_tookDamageField?.GetValue(target) is Action handlers)
+                {
+                    handlers.Invoke();
+                }
+
+                FSMUtility.SendEventToGameObject(target.gameObject, "TOOK DAMAGE");
+            }
+            catch (Exception ex)
+            {
+                if (!_phaseNotifyFailureLogged)
+                {
+                    _phaseNotifyFailureLogged = true;
+                    SilksongCoopPlugin.LogWarn($"[EnemySync] Boss phase notification failed: {ex.Message}");
                 }
             }
         }
@@ -915,13 +976,21 @@ namespace SilksongCoop.Mod.State
                         return false;
 
                     bool value = packet.Value != 0;
-                    if (item.GetCurrentValue() == value) return true;
+                    if (item.GetCurrentValue() == value)
+                    {
+                        RememberPersistentValue(packet.ItemKey, packet.ValueType, packet.Value);
+                        return true;
+                    }
 
                     using (RemoteApplyScope.Begin())
                     {
                         item.SetValueOverride(value);
                         item.SaveState();
                     }
+                    // The SaveState postfix is suppressed under RemoteApplyScope, so update
+                    // the local heartbeat cache explicitly; otherwise the 1 Hz poll would
+                    // re-broadcast the peer's own value back to it.
+                    RememberPersistentValue(packet.ItemKey, packet.ValueType, packet.Value);
                     return true;
                 }
 
@@ -930,13 +999,18 @@ namespace SilksongCoop.Mod.State
                     if (_intItems == null || !_intItems.TryGetValue(packet.ItemKey, out var item) || item == null)
                         return false;
 
-                    if (item.GetCurrentValue() == packet.Value) return true;
+                    if (item.GetCurrentValue() == packet.Value)
+                    {
+                        RememberPersistentValue(packet.ItemKey, packet.ValueType, packet.Value);
+                        return true;
+                    }
 
                     using (RemoteApplyScope.Begin())
                     {
                         item.SetValueOverride(packet.Value);
                         item.SaveState();
                     }
+                    RememberPersistentValue(packet.ItemKey, packet.ValueType, packet.Value);
                     return true;
                 }
 
@@ -1061,6 +1135,78 @@ namespace SilksongCoop.Mod.State
             {
                 _pendingPersistentOrder.Dequeue();
             }
+        }
+
+        /// <summary>
+        /// Compares the current scene's persistent bool/int items against the last value
+        /// this controller remembers and broadcasts any change. This covers doors, chests
+        /// and lifts whose script changes the value without routing through the
+        /// <c>SaveState</c> postfix (the common path is already event-driven).
+        /// </summary>
+        private void PollPersistentStateChanges()
+        {
+            if (Time.unscaledTime < _persistentPollAt) return;
+            _persistentPollAt = Time.unscaledTime + PersistentPollInterval;
+
+            EnsurePersistentIndex();
+
+            if (_boolItems != null)
+            {
+                foreach (var pair in _boolItems)
+                {
+                    var item = pair.Value;
+                    if (item == null || !item.HasLoadedValue) continue;
+
+                    int value = item.GetCurrentValue() ? 1 : 0;
+                    if (_persistentLastValue.TryGetValue(pair.Key, out var last) &&
+                        last.ValueType == PersistentValueType.Bool)
+                    {
+                        if (last.Value == value) continue;
+                        OnLocalPersistentState(item.GetSceneName(), item.GetId(), PersistentValueType.Bool, value);
+                    }
+                    else
+                    {
+                        // Seed the cache with the scene's initial state. Broadcasting every
+                        // unchanged item on load would flood the reliable channel.
+                        RememberPersistentValue(pair.Key, PersistentValueType.Bool, value);
+                    }
+                }
+            }
+
+            if (_intItems != null)
+            {
+                foreach (var pair in _intItems)
+                {
+                    var item = pair.Value;
+                    if (item == null || !item.HasLoadedValue) continue;
+
+                    int value = item.GetCurrentValue();
+                    if (_persistentLastValue.TryGetValue(pair.Key, out var last) &&
+                        last.ValueType == PersistentValueType.Int)
+                    {
+                        if (last.Value == value) continue;
+                        OnLocalPersistentState(item.GetSceneName(), item.GetId(), PersistentValueType.Int, value);
+                    }
+                    else
+                    {
+                        RememberPersistentValue(pair.Key, PersistentValueType.Int, value);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Seeds the local "last value" cache so the poll does not re-broadcast a value
+        /// that already matches what the peer is expected to have.
+        /// </summary>
+        private void RememberPersistentValue(ulong key, PersistentValueType valueType, int value)
+        {
+            _persistentLastValue[key] = new PersistentStatePacket
+            {
+                ItemKey = key,
+                ValueType = valueType,
+                Value = value
+            };
         }
 
         private void SendPersistentPacket(PersistentStatePacket packet)

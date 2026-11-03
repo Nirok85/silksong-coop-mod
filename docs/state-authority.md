@@ -5,18 +5,18 @@ receiver resolves conflicts, and which failures are accepted by design. When cod
 and this document disagree, the code is wrong unless the document is updated in
 the same change.
 
-## Current state (3.1.0)
+## Current state (3.2-dev)
 
 | State | Writer(s) | Receiver rule | Conflict resolution |
 |---|---|---|---|
 | Player transform | Each player writes their own | Field-validated (NaN/Infinity, world bounds, velocity cap) | Newer tick wins; interpolation smooths the rest |
-| Player death/revive | Each player writes their own lifecycle | `DeathLifecycleCoordinator` with epoch + event type | Higher epoch is adopted; stale epochs are ignored |
+| Player death/revive | Each player writes their own lifecycle | `DeathLifecycleCoordinator` with epoch + event type | Higher epoch is adopted; stale epochs are ignored; a cross-scene revive falls back to the local bench with an explicit banner/toast |
 | Shared vitals (max HP, silk spools, needle) | Either peer | Monotonic upgrades only, applied under `RemoteApplyScope` | A higher value wins; a lower value never downgrades |
 | Currency | Either peer | Transaction GUID dedup + per-sender sequence, applied under `RemoteApplyScope` | Duplicate transaction IDs are dropped; wallet is clamped to a sane ceiling |
 | Inventory unlocks | Either peer | Idempotent per item key | First unlock wins; repeats are no-ops |
-| Enemy/boss HP and deaths | The attacker's local hit is replicated to the partner | `EnemySyncController` + `EnemySyncService` | Exact `scene + hierarchy` key; host snapshot corrects drift |
+| Enemy/boss HP, deaths and phases | The attacker's local hit is replicated to the partner | `EnemySyncController` + `EnemySyncService`; a replicated hit re-emits `TookDamage`/`TOOK DAMAGE` without reapplying damage | Exact `scene + hierarchy` key; host snapshot corrects drift |
 | World events (breakables, gates) | Either peer | `WorldEventPacket` with `StateRevision`/`OriginPeerId` | Per-key revision/ origin comparison; replay of stored events on join |
-| Persistent world values | Either peer | `PersistentStatePacket` keyed by scene + persistent id + type | Per-key revision/origin comparison |
+| Persistent world values | Either peer | `PersistentStatePacket` keyed by scene + persistent id + type; `SaveState` hook plus a 1 Hz poll of `PersistentBoolItem`/`PersistentIntItem` | Per-key revision/origin comparison; polling seeds initial scene state without broadcasting it |
 | Physical pickups | Either peer | Stable pickup key + one-time claim tracking | Exact key first; coordinates only as a guarded fallback |
 
 ## What "authoritative" means here
@@ -97,10 +97,12 @@ comparison, revision `0` opt-out, cache behaviour, reset on new session).
 
 ## Known accepted gaps
 
-- Boss phases driven only by a `TookDamage` event (rather than polling HP) can
-  lag by one hit on the partner's machine.
+- Boss phases driven by custom code that listens neither to `HealthManager.TookDamage`
+  nor to the PlayMaker `TOOK DAMAGE` event can still diverge. Phases driven by the
+  standard damage signals are kept in sync by `NotifyBossTookDamage`.
 - Scripted doors whose state lives only in a PlayMaker FSM or a `PlayerData` flag
-  are not replicated.
-- A physical drop can still be credited twice if its position diverges by more
-  than the dedup window; wallet reconciliation converges to the higher value.
+  are not replicated. Doors, chests and lifts backed by `PersistentBoolItem` /
+  `PersistentIntItem` are covered by the event hook and the 1 Hz poll.
+- A physical drop can still be credited twice if its position diverges beyond the
+  0.5-unit dedup window; wallet reconciliation converges to the higher value.
 - Maximum stats never decrease by design.

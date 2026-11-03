@@ -437,7 +437,17 @@ namespace SilksongCoop.Mod.UI
 
                 int secondsLeft = Mathf.CeilToInt(coordinator.RemainingSpectatorTime);
                 GUI.color = SilksongSkin.TextCream;
-                GUI.Label(new Rect(x, y + 32, bannerWidth, 22), Loc.T("Reviving beside partner in <color=#D4A843><b>{0}s</b></color>", secondsLeft), _spectSubStyle ?? Skin.label);
+
+                // The revive timer still expires when the partner walked into another
+                // room; spell out that the fallback is a local bench respawn instead of
+                // silently teleporting (which is impossible across scenes).
+                var spectatorPeer = _sessionState?.RemotePeerId;
+                bool partnerInScene = spectatorPeer.HasValue &&
+                                      SilksongCoopPlugin.Instance?.CloneSpawner?.IsRemoteInSameScene(spectatorPeer.Value) == true;
+                string reviveText = partnerInScene
+                    ? Loc.T("Reviving beside partner in <color=#D4A843><b>{0}s</b></color>", secondsLeft)
+                    : Loc.T("Partner is in another room — reviving at the last bench in <color=#D4A843><b>{0}s</b></color>", secondsLeft);
+                GUI.Label(new Rect(x, y + 32, bannerWidth, 22), reviveText, _spectSubStyle ?? Skin.label);
 
                 // Progress bar
                 float total = Math.Max(15f, coordinator.ReviveCooldownDuration);

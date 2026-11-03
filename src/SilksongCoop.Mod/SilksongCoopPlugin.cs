@@ -1378,6 +1378,13 @@ namespace SilksongCoop.Mod
                         {
                             var before = DeathCoordinator.IsPartnerAlive;
                             DeathCoordinator.HandleDeathPacket(peer, death);
+                            if (death.EventType == DeathEventType.SoloBenchRespawn)
+                            {
+                                // The partner fell in another room and used the local
+                                // bench fallback; tell the survivor instead of leaving
+                                // them with a silent "dead" HUD.
+                                MenuUI?.SetStatusMessage(Loc.T("Partner revived at the last bench."));
+                            }
                             // Only apply visibility if the coordinator state actually changed
                             if (DeathCoordinator.IsPartnerAlive != before)
                             {

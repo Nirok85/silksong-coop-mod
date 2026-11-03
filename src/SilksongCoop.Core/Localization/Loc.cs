@@ -100,6 +100,11 @@ namespace SilksongCoop.Core.Localization
             ["Connecting..."] = "Подключение...",
             ["SPECTATING {0}"] = "НАБЛЮДЕНИЕ: {0}",
             ["Reviving beside partner in <color=#D4A843><b>{0}s</b></color>"] = "Возрождение рядом с напарником через <color=#D4A843><b>{0} с</b></color>",
+            ["Partner is in another room — reviving at the last bench in <color=#D4A843><b>{0}s</b></color>"] =
+                "Напарник в другой комнате — возрождение у последней скамейки через <color=#D4A843><b>{0} с</b></color>",
+            ["Partner revived at the last bench."] = "Напарник возродился у последней скамейки.",
+            ["Partner is in another room — reviving at the last bench."] =
+                "Напарник в другой комнате — возрождение у последней скамейки.",
             ["TEAM WIPE"] = "КОМАНДНЫЙ ВАЙП",
             ["Both heroes have fallen — Reloading at last bench..."] =
                 "Оба героя пали — загрузка у последней скамейки...",

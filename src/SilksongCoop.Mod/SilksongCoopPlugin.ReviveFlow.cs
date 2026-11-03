@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Threading;
+using SilksongCoop.Core.Localization;
 using SilksongCoop.Core.Revive;
 using SilksongCoop.Core.State;
 using UnityEngine;
@@ -142,6 +143,7 @@ namespace SilksongCoop.Mod
                     !CloneSpawner.IsRemoteInSameScene(SessionState.RemotePeerId.Value))
                 {
                     Logger.LogInfo("[Coop] Partner is in a different scene — falling back to bench respawn");
+                    MenuUI?.SetStatusMessage(Loc.T("Partner is in another room — reviving at the last bench."));
                     ExitSpectatorMode();
                     // Solo fallback: the partner is alive in another room. Broadcasting a
                     // team wipe here killed them (issue #2.1) and reloaded their bench.
