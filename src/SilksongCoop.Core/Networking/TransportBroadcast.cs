@@ -1,0 +1,44 @@
+namespace SilksongCoop.Core.Networking
+{
+    /// <summary>
+    /// Optional transport capability for sending one payload to every connected peer.
+    /// Single-peer transports can keep implementing only <see cref="INetworkTransport"/>;
+    /// callers use <see cref="TransportBroadcast.SendToAll"/> to fall back to the
+    /// <see cref="INetworkTransport.ConnectedPeers"/> loop.
+    /// </summary>
+    public interface IMultiPeerTransport : INetworkTransport
+    {
+        void Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel);
+    }
+
+    /// <summary>
+    /// Transport-agnostic broadcast helper used by sync services. Multi-peer transports
+    /// get a single optimized call; legacy single-peer transports are handled by iterating
+    /// the connected peer list.
+    /// </summary>
+    public static class TransportBroadcast
+    {
+        public static void SendToAll(
+            this INetworkTransport transport,
+            byte[] data,
+            int offset,
+            int length,
+            DeliveryMethod method,
+            byte channel)
+        {
+            if (transport == null || data == null || length <= 0) return;
+
+            if (transport is IMultiPeerTransport multiPeer)
+            {
+                multiPeer.Broadcast(data, offset, length, method, channel);
+                return;
+            }
+
+            var peers = transport.ConnectedPeers;
+            for (int i = 0; i < peers.Count; i++)
+            {
+                transport.Send(peers[i], data, offset, length, method, channel);
+            }
+        }
+    }
+}

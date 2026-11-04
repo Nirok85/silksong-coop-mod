@@ -53,13 +53,13 @@
 | Синхронизация диалогов/квестовых интерактивов, влияющих на прогресс | P2 | Готово в 3.2.0: bool/int-флаги PlayerData с `Quest` в имени вокруг NPC-диалога + 1 Гц polling, `QuestStatePacket` 0x56; живой прогон квестов нужен |
 | Меньше «мигания» клона при переходах | P2 | Уже смягчено: `SetScenePresence` скрывает клон и очищает буфер при уходе из сцены; стресс-тест 100 переходов не проводился |
 
-## Фаза 3 — Фундамент 3+ игроков (v4.0-prep)
+## Фаза 3 — Фундамент 3+ игроков (v4.0-prep) — в работе
 
 | Задача | Приоритет | Критерий приёмки |
 |---|---|---|
-| `PeerRegistry` со статусами Connecting/Authenticated/Ready | P1 | 3 клиента видят корректные статусы |
-| Транспортный интерфейс `SendTo`/`Broadcast` | P1 | UDP и Steam работают без изменения протокола v8 |
-| AOI для 3+ игроков | P1 | Трафик на 3-го игрока не растёт линейно от числа сущностей |
+| `PeerRegistry` со статусами Connecting/Authenticated/Ready | P1 | Готово в 3.3-dev: Core-реестр, потокобезопасные события, интеграция с `CoopSessionState`; транспорты пока помечают пира Ready после handshake |
+| Транспортный интерфейс `SendTo`/`Broadcast` | P1 | Готово в 3.3-dev: `IMultiPeerTransport` + `TransportBroadcast.SendToAll`; sync-сервисы уже используют broadcast |
+| AOI для 3+ игроков | P1 | Частично: `InterestManager` и `NetworkOrchestrator` уже перебирают всех получателей; нужен реальный multi-peer транспорт |
 | Host-relay для UDP | P2 | 3 игрока за NAT без port forwarding |
 | Feature-set в handshake | P2 | Минорные фичи включаются без «несовместимой версии» |
 

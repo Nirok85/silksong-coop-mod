@@ -13,7 +13,7 @@ namespace SilksongCoop.Core.Networking
     /// reliable ordered and reliable unordered delivery with room-code and direct IP:port
     /// connection.
     /// </summary>
-    public class LiteNetLibTransport : INetworkTransport
+    public class LiteNetLibTransport : INetworkTransport, IMultiPeerTransport
     {
         /// <summary>
         /// Wire protocol revision. Bumped when packet layouts change incompatibly; both
@@ -605,6 +605,18 @@ namespace SilksongCoop.Core.Networking
         #endregion
 
         #region Sending and Event Polling
+
+        /// <summary>
+        /// Sends data to all connected peers. Single-peer transports iterate their one peer.
+        /// </summary>
+        public void Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel)
+        {
+            var peers = ConnectedPeers;
+            for (int i = 0; i < peers.Count; i++)
+            {
+                Send(peers[i], data, offset, length, method, channel);
+            }
+        }
 
         /// <summary>
         /// Sends data to the specified target peer.

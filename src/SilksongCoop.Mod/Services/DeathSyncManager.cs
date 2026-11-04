@@ -50,7 +50,7 @@ namespace SilksongCoop.Mod.Services
         {
             var transport = _transportService.ActiveTransport;
             var session = _sessionService.SessionState;
-            if (transport == null || session?.IsConnected != true || !session.RemotePeerId.HasValue) return;
+            if (transport == null || session?.IsConnected != true) return;
 
             try
             {
@@ -59,7 +59,7 @@ namespace SilksongCoop.Mod.Services
                 {
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
-                    transport.Send(session.RemotePeerId.Value, buffer, 0, writer.Position, method, channel);
+                    transport.SendToAll(buffer, 0, writer.Position, method, channel);
                     Diagnostics?.RecordSent(writer.Position);
                 }
                 finally

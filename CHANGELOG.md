@@ -5,6 +5,29 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/),
 и этот проект придерживается [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] — Фаза 3 (фундамент 3+ игроков)
+
+### Добавлено
+- **`PeerRegistry`.** Потокобезопасный реестр пиров с состояниями
+  `Connecting`/`Authenticated`/`Ready`, временем подключения и событиями
+  добавления/обновления/удаления. `CoopSessionState.Peers` синхронизируется с
+  текущими `SetConnected`/`AddRemotePeer`/`RemoveRemotePeer`/`SetDisconnected`;
+  старый `RemotePeerId` продолжает работать для 2-игрокового кода.
+- **Единый broadcast.** `IMultiPeerTransport` + `TransportBroadcast.SendToAll`:
+  multi-peer транспорт делает один вызов, legacy-транспорт получает fallback
+  через `ConnectedPeers`. `LiteNetLibTransport` и `SteamP2PTransport` реализуют
+  новый интерфейс.
+- **Broadcast в sync-сервисах.** World/enemy, vitals, inventory, death и quest
+  пакеты теперь уходят всем подключённым пирам через `SendToAll`, а не только
+  `RemotePeerId`. Для текущей 2-игроковой сессии поведение не меняется.
+
+### Проверка
+- 830/830 тестов (реестр пиров, конкурентные upsert, broadcast fallback и
+  multi-peer путь, синхронизация реестра с сессией).
+- Release и Debug: 0 ошибок компилятора (только `NU1900`).
+- Протокол не менялся; фактические multi-peer транспорты, host-relay и
+  feature-set handshake остаются следующими шагами Фазы 3.
+
 ## [3.2.0] - 2026-11-03
 
 Фаза 2: синхронизация мира и бой. **Существующие payload'ы протокола не

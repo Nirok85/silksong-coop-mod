@@ -96,6 +96,12 @@ namespace SilksongCoop.Core.State
             get { lock (_lock) { return _remotePeerIds.ToArray(); } }
         }
 
+        /// <summary>
+        /// Peer lifecycle registry (Connecting/Authenticated/Ready). Single-peer code can
+        /// keep using <see cref="RemotePeerId"/>; new multi-peer code should use this.
+        /// </summary>
+        public PeerRegistry Peers { get; } = new PeerRegistry();
+
         public void AddRemotePeer(NetworkPeerId peer)
         {
             lock (_lock)
@@ -103,6 +109,7 @@ namespace SilksongCoop.Core.State
                 if (!_remotePeerIds.Contains(peer)) _remotePeerIds.Add(peer);
                 if (!_remotePeerId.HasValue) _remotePeerId = peer;
             }
+            Peers.Upsert(peer, PeerState.Ready);
         }
 
         public void RemoveRemotePeer(NetworkPeerId peer)
@@ -113,6 +120,7 @@ namespace SilksongCoop.Core.State
                 if (_remotePeerId.HasValue && _remotePeerId.Value == peer)
                     _remotePeerId = _remotePeerIds.Count > 0 ? _remotePeerIds[0] : (NetworkPeerId?)null;
             }
+            Peers.Remove(peer);
         }
 
         public string? CurrentRoomCode
@@ -205,6 +213,7 @@ namespace SilksongCoop.Core.State
                 CurrentRoomCode = roomCode;
                 Status = SessionStatus.Hosting;
             }
+            Peers.Clear();
             OnStatusChanged?.Invoke(old, Status);
         }
 
@@ -224,6 +233,7 @@ namespace SilksongCoop.Core.State
                 CurrentRoomCode = targetCode;
                 Status = SessionStatus.Connecting;
             }
+            Peers.Clear();
             OnStatusChanged?.Invoke(old, Status);
         }
 
@@ -249,6 +259,7 @@ namespace SilksongCoop.Core.State
                 RemotePeerId = remoteId;
                 Status = SessionStatus.Connected;
             }
+            Peers.Upsert(remoteId, PeerState.Ready);
             OnStatusChanged?.Invoke(old, Status);
             OnPeerJoined?.Invoke(remoteId);
         }
@@ -324,6 +335,7 @@ namespace SilksongCoop.Core.State
                 SteamLobbyId = null;
             }
 
+            Peers.Clear();
             OnStatusChanged?.Invoke(old, Status);
             if (remote.HasValue)
             {

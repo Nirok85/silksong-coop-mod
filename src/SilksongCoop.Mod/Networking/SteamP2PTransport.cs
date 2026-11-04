@@ -11,7 +11,7 @@ namespace SilksongCoop.Mod.Networking
     /// Steamworks.NET P2P network transport utilizing SteamMatchmaking lobbies,
     /// Steam Friends overlay invites, and SteamNetworking P2P packet streaming.
     /// </summary>
-    public class SteamP2PTransport : INetworkTransport
+    public class SteamP2PTransport : INetworkTransport, IMultiPeerTransport
     {
         #region Fields and State
 
@@ -400,6 +400,18 @@ namespace SilksongCoop.Mod.Networking
         #endregion // Connection Notification Helpers
 
         #region Data Transmission
+
+        /// <summary>
+        /// Sends data to all connected peers. Steam currently holds one remote peer.
+        /// </summary>
+        public void Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel)
+        {
+            var peers = ConnectedPeers;
+            for (int i = 0; i < peers.Count; i++)
+            {
+                Send(peers[i], data, offset, length, method, channel);
+            }
+        }
 
         /// <summary>
         /// Sends data to a remote peer via Steam P2P.

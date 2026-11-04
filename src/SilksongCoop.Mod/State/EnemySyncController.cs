@@ -1353,10 +1353,9 @@ namespace SilksongCoop.Mod.State
         private void SendBuffer(byte[] buffer, int length)
         {
             var transport = _plugin?.ActiveTransport;
-            var peer = _plugin?.SessionState?.RemotePeerId;
-            if (transport == null || !peer.HasValue) return;
+            if (transport == null || _plugin?.SessionState?.IsConnected != true) return;
 
-            transport.Send(peer.Value, buffer, 0, length, DeliveryMethod.ReliableOrdered, WorldChannel);
+            transport.SendToAll(buffer, 0, length, DeliveryMethod.ReliableOrdered, WorldChannel);
         }
 
         private void DetectSceneChange()

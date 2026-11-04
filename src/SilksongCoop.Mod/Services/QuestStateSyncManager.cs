@@ -265,7 +265,6 @@ namespace SilksongCoop.Mod.Services
             if (changes.Count == 0 || !CanSync) return;
 
             var transport = _plugin.ActiveTransport!;
-            var peer = _plugin.SessionState!.RemotePeerId!.Value;
 
             for (int offset = 0; offset < changes.Count; offset += QuestStatePacket.MaxEntries)
             {
@@ -301,7 +300,7 @@ namespace SilksongCoop.Mod.Services
                 {
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
-                    transport.Send(peer, buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, NetworkChannels.World);
+                    transport.SendToAll(buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, NetworkChannels.World);
                 }
                 catch (Exception ex)
                 {
