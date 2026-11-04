@@ -57,6 +57,31 @@ namespace SilksongCoop.Core.State
             private set { lock (_stateLock) { _remoteHealth = value; } }
         }
 
+        // Per-peer snapshots; legacy Remote* fields above mirror the primary peer.
+        private readonly Dictionary<NetworkPeerId, RemotePeerVitals> _remoteVitals =
+            new Dictionary<NetworkPeerId, RemotePeerVitals>();
+        private NetworkPeerId? _primaryRemotePeer;
+
+        /// <summary>Snapshot of every peer that has sent vitals this session.</summary>
+        public IReadOnlyList<RemotePeerVitals> RemotePeers
+        {
+            get
+            {
+                lock (_stateLock)
+                {
+                    return new List<RemotePeerVitals>(_remoteVitals.Values);
+                }
+            }
+        }
+
+        public bool TryGetRemoteVitals(NetworkPeerId peer, out RemotePeerVitals vitals)
+        {
+            lock (_stateLock)
+            {
+                return _remoteVitals.TryGetValue(peer, out vitals);
+            }
+        }
+
         private int _remoteSilk;
         public int RemoteSilk
         {
@@ -104,6 +129,7 @@ namespace SilksongCoop.Core.State
         #region Events
 
         public event Action<int, int>? OnRemoteVitalsObserved;
+        public event Action<NetworkPeerId, int, int>? OnRemotePeerVitalsObserved;
         public event Action<int>? OnSharedMaxHealthChanged;
         public event Action<int>? OnSharedMaxSilkChanged;
         public event Action<int>? OnSharedNeedleUpgradeChanged;
@@ -145,6 +171,8 @@ namespace SilksongCoop.Core.State
                 _remoteMaxSilk = 0;
                 _remoteNeedleUpgradeLevel = 0;
                 _hasRemoteData = false;
+                _remoteVitals.Clear();
+                _primaryRemotePeer = null;
             }
             lock (_transactionLock)
             {
@@ -457,19 +485,42 @@ namespace SilksongCoop.Core.State
         {
             try
             {
-                // Store remote vitals for HUD display
+                // Store per-peer vitals; the legacy fields mirror the primary peer.
+                bool isPrimary;
                 lock (_stateLock)
                 {
-                    RemoteHealth = packet.CurrentHealth;
-                    RemoteSilk = packet.CurrentSilk;
-                    RemoteMaxHealth = packet.MaxHealth;
-                    RemoteMaxSilk = packet.MaxSilkSpools;
-                    RemoteNeedleUpgradeLevel = packet.NeedleUpgradeLevel;
-                    HasRemoteData = true;
+                    var snapshot = new RemotePeerVitals(
+                        sender,
+                        packet.CurrentHealth,
+                        packet.CurrentSilk,
+                        packet.MaxHealth,
+                        packet.MaxSilkSpools,
+                        packet.NeedleUpgradeLevel);
+                    _remoteVitals[sender] = snapshot;
+
+                    if (!_primaryRemotePeer.HasValue)
+                    {
+                        _primaryRemotePeer = sender;
+                    }
+
+                    isPrimary = _primaryRemotePeer.Value == sender;
+                    if (isPrimary)
+                    {
+                        _remoteHealth = snapshot.Health;
+                        _remoteSilk = snapshot.Silk;
+                        _remoteMaxHealth = snapshot.MaxHealth;
+                        _remoteMaxSilk = snapshot.MaxSilkSpools;
+                        _remoteNeedleUpgradeLevel = snapshot.NeedleUpgradeLevel;
+                    }
+                    _hasRemoteData = true;
                 }
 
                 // Update remote player observation (for HUD display)
-                OnRemoteVitalsObserved?.Invoke(packet.CurrentHealth, packet.CurrentSilk);
+                OnRemotePeerVitalsObserved?.Invoke(sender, packet.CurrentHealth, packet.CurrentSilk);
+                if (isPrimary)
+                {
+                    OnRemoteVitalsObserved?.Invoke(packet.CurrentHealth, packet.CurrentSilk);
+                }
 
                 // Synchronize progression upgrades if remote has acquired a higher tier
                 bool hpChanged, silkChanged, needleChanged;
@@ -493,6 +544,64 @@ namespace SilksongCoop.Core.State
             catch (Exception ex)
             {
                 Log($"[VitalsSyncService] HandleVitalsPacket error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Removes one peer's vitals (disconnect). Promotes the next peer to primary if
+        /// the departing peer was the one mirrored by the legacy Remote* properties.
+        /// </summary>
+        public void RemoveRemotePeer(NetworkPeerId peer)
+        {
+            lock (_stateLock)
+            {
+                if (!_remoteVitals.Remove(peer)) return;
+
+                if (_primaryRemotePeer.HasValue && _primaryRemotePeer.Value == peer)
+                {
+                    _primaryRemotePeer = null;
+                    foreach (var candidate in _remoteVitals.Keys)
+                    {
+                        _primaryRemotePeer = candidate;
+                        break;
+                    }
+
+                    if (_primaryRemotePeer.HasValue &&
+                        _remoteVitals.TryGetValue(_primaryRemotePeer.Value, out var promoted))
+                    {
+                        _remoteHealth = promoted.Health;
+                        _remoteSilk = promoted.Silk;
+                        _remoteMaxHealth = promoted.MaxHealth;
+                        _remoteMaxSilk = promoted.MaxSilkSpools;
+                        _remoteNeedleUpgradeLevel = promoted.NeedleUpgradeLevel;
+                    }
+                    else
+                    {
+                        _remoteHealth = 0;
+                        _remoteSilk = 0;
+                        _remoteMaxHealth = 0;
+                        _remoteMaxSilk = 0;
+                        _remoteNeedleUpgradeLevel = 0;
+                    }
+                }
+
+                _hasRemoteData = _remoteVitals.Count > 0;
+            }
+        }
+
+        /// <summary>Clears every per-peer vitals snapshot (session end / reconnect).</summary>
+        public void ClearRemotePeers()
+        {
+            lock (_stateLock)
+            {
+                _remoteVitals.Clear();
+                _primaryRemotePeer = null;
+                _remoteHealth = 0;
+                _remoteSilk = 0;
+                _remoteMaxHealth = 0;
+                _remoteMaxSilk = 0;
+                _remoteNeedleUpgradeLevel = 0;
+                _hasRemoteData = false;
             }
         }
 

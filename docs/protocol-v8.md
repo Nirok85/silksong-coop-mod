@@ -90,4 +90,6 @@ The following are **not** part of this protocol revision and must not be relied 
 - `SessionId` / `ConnectionEpoch` negotiation.
 - Delta resync after reconnect.
 - Host authority over enemy/vitals/currency packets.
-- More than two players at the transport level.
+- More than two players at the transport level. The experimental Steam full mesh
+  (`[Network] SteamMaxPlayers`) reuses the same v8 framing, but UDP remains
+  single-peer and 3+ sessions are not verified in live play.

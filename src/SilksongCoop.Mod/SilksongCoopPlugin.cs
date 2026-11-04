@@ -575,6 +575,7 @@ namespace SilksongCoop.Mod
             InventorySync?.ResetSessionState();
             EnemySync?.ResetSession();
             QuestStateSync?.ResetSession();
+            VitalsSync?.ClearRemotePeers();
             SessionState?.SetDisconnected(DisconnectReason.GracefulDisconnect);
         }
 
@@ -1140,6 +1141,7 @@ namespace SilksongCoop.Mod
                         DeathCoordinator?.SynchronizeEpochForNewSession();
                     }
                     CloneSpawner.SpawnRemotePlayer(peer, remoteIsPlayer2);
+                    DeathCoordinator?.RegisterRemotePeer(peer);
 
                     if (VitalsSync != null)
                     {
@@ -1196,6 +1198,8 @@ namespace SilksongCoop.Mod
 
                     SessionState.RemoveRemotePeer(peer);
                     CloneSpawner?.DespawnRemotePlayer(peer);
+                    VitalsSync?.RemoveRemotePeer(peer);
+                    DeathCoordinator?.RemoveRemotePeer(peer);
                     EventBus?.Publish(new PeerDisconnectedEvent { PeerId = peer, Reason = reason });
 
                     if (!endSession)
@@ -1233,6 +1237,7 @@ namespace SilksongCoop.Mod
                     // teardown; drop every clone, not just the first event's peer.
                     CloneSpawner?.ResetAllClones();
                     RefreshLocalVisuals(false);
+                    DeathCoordinator?.ClearRemotePeers();
 
                     // New peer = new inventory session. Clear the once-per-item dedup on
                     // disconnect (before any packet of the next session can arrive) so the
@@ -1446,8 +1451,10 @@ namespace SilksongCoop.Mod
                         if (!PacketValidator.ValidateDeathLifecycle(death)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         if (DeathCoordinator != null)
                         {
-                            var before = DeathCoordinator.IsPartnerAlive;
+                            bool wasAlive = DeathCoordinator.IsRemotePeerAlive(peer);
                             DeathCoordinator.HandleDeathPacket(peer, death);
+                            bool isAlive = DeathCoordinator.IsRemotePeerAlive(peer);
+
                             if (death.EventType == DeathEventType.SoloBenchRespawn)
                             {
                                 // The partner fell in another room and used the local
@@ -1455,16 +1462,18 @@ namespace SilksongCoop.Mod
                                 // them with a silent "dead" HUD.
                                 MenuUI?.SetStatusMessage(Loc.T("Partner revived at the last bench."));
                             }
-                            // Only apply visibility if the coordinator state actually changed
-                            if (DeathCoordinator.IsPartnerAlive != before)
+                            // Apply visibility per sender: with 3+ peers the aggregate
+                            // "some partner is alive" flag cannot decide whether THIS
+                            // clone should be hidden.
+                            if (wasAlive != isAlive)
                             {
                                 ApplyRemoteDeathVisibility(peer, death.EventType);
                             }
-                            else if (death.EventType == DeathEventType.PartnerReviveTrigger && DeathCoordinator.IsPartnerAlive)
+                            else if (death.EventType == DeathEventType.PartnerReviveTrigger && isAlive)
                             {
                                 ApplyRemoteDeathVisibility(peer, death.EventType);
                             }
-                            else if ((death.EventType == DeathEventType.SoloDeathOccurred || death.EventType == DeathEventType.TeamWipeOccurred) && !DeathCoordinator.IsPartnerAlive)
+                            else if ((death.EventType == DeathEventType.SoloDeathOccurred || death.EventType == DeathEventType.TeamWipeOccurred) && !isAlive)
                             {
                                 ApplyRemoteDeathVisibility(peer, death.EventType);
                             }
@@ -1726,24 +1735,34 @@ namespace SilksongCoop.Mod
 
                 SessionState?.AdvanceTick();
 
-                if (SessionState?.IsConnected == true && SessionState.RemotePeerId.HasValue)
+                if (SessionState?.IsConnected == true)
                 {
-                    if (CloneSpawner != null && CloneSpawner.TryGetRemotePosition(SessionState.RemotePeerId.Value, out float posX, out float posY))
+                    var remotePeers = SessionState.RemotePeerIds;
+                    if (CloneSpawner != null)
                     {
-                        if (DeathCoordinator != null)
+                        for (int i = 0; i < remotePeers.Count; i++)
                         {
-                            DeathCoordinator.LastPartnerPosition = (posX, posY);
-
-                            // If spectating, tether camera target to remote partner position
-                            if (DeathCoordinator.CurrentState == DeathState.Spectating && _spectatorCameraFollow)
+                            var remotePeer = remotePeers[i];
+                            if (CloneSpawner.TryGetRemotePosition(remotePeer, out float posX, out float posY))
                             {
-                                var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
-                                if (camTarget != null)
-                                {
-                                    var curPos = camTarget.transform.position;
-                                    camTarget.transform.position = new Vector3(posX, posY, curPos.z);
-                                }
+                                DeathCoordinator?.UpdatePartnerPosition(remotePeer, posX, posY);
                             }
+                        }
+                    }
+
+                    // If spectating, tether the camera to a living partner. The
+                    // coordinator prefers a living peer's position when several exist.
+                    if (DeathCoordinator != null &&
+                        DeathCoordinator.CurrentState == DeathState.Spectating &&
+                        _spectatorCameraFollow &&
+                        remotePeers.Count > 0)
+                    {
+                        var (targetX, targetY) = DeathCoordinator.LastPartnerPosition;
+                        var camTarget = GameManager.instance?.cameraCtrl?.camTarget;
+                        if (camTarget != null)
+                        {
+                            var curPos = camTarget.transform.position;
+                            camTarget.transform.position = new Vector3(targetX, targetY, curPos.z);
                         }
                     }
                 }

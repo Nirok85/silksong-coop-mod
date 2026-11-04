@@ -317,20 +317,31 @@ namespace SilksongCoop.Mod.UI
             var vitals = SilksongCoopPlugin.Instance?.VitalsSync;
             if (vitals == null) return;
 
-            int remoteHp = vitals.RemoteHealth;
-            int remoteMaxHp = vitals.RemoteMaxHealth;
-            int remoteSilk = vitals.RemoteSilk;
-            int remoteMaxSilk = vitals.RemoteMaxSilk;
+            var peers = vitals.RemotePeers;
+            if (peers.Count == 0) return;
 
-            // Don't show if we have no data yet
-            if (remoteMaxHp <= 0 && remoteMaxSilk <= 0) return;
-
-            string peerName = _sessionState?.RemotePeerId?.DisplayName ?? Loc.T("Partner");
-
-            float hudW = 180f;
-            float hudH = 68f;
+            const float hudW = 180f;
+            const float hudH = 68f;
+            const float gap = 6f;
             float x = Screen.width - hudW - 16f;
             float y = 40f;
+
+            int shown = 0;
+            for (int i = 0; i < peers.Count; i++)
+            {
+                var peer = peers[i];
+                if (peer.MaxHealth <= 0 && peer.MaxSilkSpools <= 0) continue;
+
+                DrawPeerVitalsBlock(peer, x, y + shown * (hudH + gap), hudW, hudH);
+                shown++;
+            }
+        }
+
+        private void DrawPeerVitalsBlock(SilksongCoop.Core.State.RemotePeerVitals peer, float x, float y, float hudW, float hudH)
+        {
+            string peerName = string.IsNullOrEmpty(peer.Peer.DisplayName)
+                ? Loc.T("Partner")
+                : peer.Peer.DisplayName;
 
             // Background
             GUI.color = new Color(SilksongSkin.BgPanel.r, SilksongSkin.BgPanel.g, SilksongSkin.BgPanel.b, 0.88f);
@@ -350,13 +361,13 @@ namespace SilksongCoop.Mod.UI
             float barH = 8f;
             float barY = y + 22f;
 
-            float hpFrac = remoteMaxHp > 0 ? (float)remoteHp / remoteMaxHp : 0f;
-            DrawStatusBar(barX, barY, barW, barH, hpFrac, new Color(0.85f, 0.25f, 0.25f), $"HP {remoteHp}/{remoteMaxHp}");
+            float hpFrac = peer.MaxHealth > 0 ? (float)peer.Health / peer.MaxHealth : 0f;
+            DrawStatusBar(barX, barY, barW, barH, hpFrac, new Color(0.85f, 0.25f, 0.25f), $"HP {peer.Health}/{peer.MaxHealth}");
 
             // Silk bar
             float silkY = y + 42f;
-            float silkFrac = remoteMaxSilk > 0 ? (float)remoteSilk / (remoteMaxSilk * 9f) : 0f;
-            DrawStatusBar(barX, silkY, barW, barH, silkFrac, new Color(0.30f, 0.55f, 0.90f), $"Silk {remoteSilk}/{remoteMaxSilk * 9}");
+            float silkFrac = peer.MaxSilkSpools > 0 ? (float)peer.Silk / (peer.MaxSilkSpools * 9f) : 0f;
+            DrawStatusBar(barX, silkY, barW, barH, silkFrac, new Color(0.30f, 0.55f, 0.90f), $"Silk {peer.Silk}/{peer.MaxSilkSpools * 9}");
 
             GUI.color = Color.white;
         }

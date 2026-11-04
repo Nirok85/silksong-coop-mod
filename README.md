@@ -168,7 +168,7 @@ The diagnostics overlay (**F11**) shows ping (RTT), packet loss and bandwidth gr
 | Unlocked items (auto-unlock for partner) | Death / revival state |
 | Benches & checkpoints | |
 
-> **Enemy/world sync:** hero damage is applied to the attacker's simulation and then replicated as authoritative HP, so both players fight the same boss HP pool. A replicated hit also re-emits the boss's `TookDamage`/`TOOK DAMAGE` signals so PlayMaker phases stay in step. `Breakable` walls and `Gate.Open()` are mirrored; `PersistentBoolItem`/`PersistentIntItem` doors, chests and lifts use the `SaveState` hook plus a 1 Hz poll. Physical drops are deduplicated by their persistent id (or scene/type/position for dynamic drops) plus a 0.5-unit drift window. Quest-related `PlayerData` bool/int flags whose names contain `Quest` are replicated after NPC dialogues and by a 1 Hz poll (`[Gameplay] SyncQuestFlags`); purely visual dialogue text is not mirrored. Steam full-mesh 3+ (`[Network] SteamMaxPlayers`) is experimental: additional peers get clones/transform/world sync, but death/revive and the partner HUD still assume two players. Scripted doors driven only by `PlayerData` flags and boss phases that listen to neither damage signal may still differ. Progression packets are range-validated, but co-op still assumes invited friends — a modified client can raise its own progression within those limits.
+> **Enemy/world sync:** hero damage is applied to the attacker's simulation and then replicated as authoritative HP, so both players fight the same boss HP pool. A replicated hit also re-emits the boss's `TookDamage`/`TOOK DAMAGE` signals so PlayMaker phases stay in step. `Breakable` walls and `Gate.Open()` are mirrored; `PersistentBoolItem`/`PersistentIntItem` doors, chests and lifts use the `SaveState` hook plus a 1 Hz poll. Physical drops are deduplicated by their persistent id (or scene/type/position for dynamic drops) plus a 0.5-unit drift window. Quest-related `PlayerData` bool/int flags whose names contain `Quest` are replicated after NPC dialogues and by a 1 Hz poll (`[Gameplay] SyncQuestFlags`); purely visual dialogue text is not mirrored. Steam full-mesh 3+ (`[Network] SteamMaxPlayers`) is experimental: additional peers get clones/transform/world sync plus per-peer vitals, death/revive and HUD, but a live 3+ session has not been verified yet. Scripted doors driven only by `PlayerData` flags and boss phases that listen to neither damage signal may still differ. Progression packets are range-validated, but co-op still assumes invited friends — a modified client can raise its own progression within those limits.
 
 ---
 
@@ -273,7 +273,7 @@ silksong_coop_mod/
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 831 tests
+    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 849 tests
         ├── TestHarness/              # DualClientTestHarness (2-client simulation, no Unity)
         ├── EndToEnd/                 # Real UDP loopback connect/reconnect tests
         ├── Tier1_FeatureTests/       # Requirement coverage tests (F01–F28)
@@ -296,8 +296,8 @@ dotnet test SilksongCoop.sln -c Release
 Current result:
 
 ```text
-Total tests:   831
-Passed:        831 (100.0%)
+Total tests:   849
+Passed:        849 (100.0%)
 Failed:        0
 Skipped:       0
 Duration:      ~6 s
@@ -313,8 +313,9 @@ The mod is in active development. The following limitations are by design or are
 
 - **Two players for full gameplay.** Multi-peer (3+) is still experimental: Steam
   lobbies can be enlarged with `[Network] SteamMaxPlayers` (2-8), and additional
-  peers get clones/transform/world sync, but death/revive and the partner HUD are
-  still designed for two players. UDP remains single-peer.
+  peers get clones/transform/world sync plus per-peer vitals, death/revive and HUD.
+  A live session with 3+ clients has not been verified yet, and UDP remains
+  single-peer.
 - **Same game and mod version on both sides** is required; Steam lobbies verify the full mod version and protocol revision, every Steam datagram carries the revision, and the UDP handshake carries its own, so mismatched builds are refused.
 - **Boss phase edge cases.** Enemy/boss HP is now shared and host snapshots correct drift, but a phase that is driven exclusively by a `TookDamage` event (rather than polling HP) may lag by one hit on the partner's machine.
 - **Scripted doors.** `Breakable` walls, `Gate.Open()` and `PersistentBoolItem`/`PersistentIntItem` state (levers, chests, caches and most scripted doors) are mirrored while both players are in the same scene. A door whose state exists only in a PlayMaker FSM or `PlayerData` flag without a persistent component, or one changed while the partner is in another scene, is still local.

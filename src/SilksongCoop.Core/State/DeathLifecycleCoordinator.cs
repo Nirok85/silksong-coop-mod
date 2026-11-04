@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol;
 using SilksongCoop.Core.Protocol.Packets;
@@ -24,6 +25,16 @@ namespace SilksongCoop.Core.State
         private bool _isPostBenchRespawn = false;
         private float _postBenchRespawnTimer = 0f;
 
+        private sealed class PartnerState
+        {
+            public bool Alive;
+            public float X;
+            public float Y;
+        }
+
+        private readonly Dictionary<NetworkPeerId, PartnerState> _partners =
+            new Dictionary<NetworkPeerId, PartnerState>();
+
         #endregion
 
         #region Properties
@@ -36,8 +47,34 @@ namespace SilksongCoop.Core.State
 
         public bool IsPartnerAlive
         {
-            get { lock (_lock) { return _isPartnerAlive; } }
-            set { lock (_lock) { _isPartnerAlive = value; } }
+            get
+            {
+                lock (_lock)
+                {
+                    if (_partners.Count > 0)
+                    {
+                        foreach (var partner in _partners.Values)
+                        {
+                            if (partner.Alive) return true;
+                        }
+                        return false;
+                    }
+                    return _isPartnerAlive;
+                }
+            }
+            set
+            {
+                lock (_lock)
+                {
+                    _isPartnerAlive = value;
+                    // Legacy callers/tests set the aggregate directly. Keep per-peer
+                    // entries consistent with that explicit override.
+                    foreach (var partner in _partners.Values)
+                    {
+                        partner.Alive = value;
+                    }
+                }
+            }
         }
 
         public float RemainingSpectatorTime
@@ -53,8 +90,40 @@ namespace SilksongCoop.Core.State
         /// </summary>
         public (float X, float Y) LastPartnerPosition
         {
-            get { lock (_lock) { return _lastPartnerPosition; } }
-            set { lock (_lock) { _lastPartnerPosition = value; } }
+            get
+            {
+                lock (_lock)
+                {
+                    if (_partners.Count > 0)
+                    {
+                        // Prefer a living partner; if everyone is dead, the last known
+                        // position is still a better fallback than (0,0).
+                        PartnerState? fallback = null;
+                        foreach (var partner in _partners.Values)
+                        {
+                            if (partner.Alive) return (partner.X, partner.Y);
+                            fallback ??= partner;
+                        }
+                        if (fallback != null) return (fallback.X, fallback.Y);
+                    }
+                    return _lastPartnerPosition;
+                }
+            }
+            set
+            {
+                lock (_lock)
+                {
+                    _lastPartnerPosition = value;
+                    if (_partners.Count == 1)
+                    {
+                        foreach (var partner in _partners.Values)
+                        {
+                            partner.X = value.X;
+                            partner.Y = value.Y;
+                        }
+                    }
+                }
+            }
         }
 
         public uint CurrentEpoch
@@ -149,6 +218,9 @@ namespace SilksongCoop.Core.State
 
         /// <summary>
         /// Handles remote partner death, potentially triggering team wipe if both players are dead.
+        /// This legacy aggregate overload marks every registered peer dead and is kept for
+        /// the single-partner callers/tests. Multi-peer packet handling uses the
+        /// <see cref="NetworkPeerId"/> overload below.
         /// </summary>
         /// <param name="partnerDeathX">X coordinate where the partner died.</param>
         /// <param name="partnerDeathY">Y coordinate where the partner died.</param>
@@ -156,24 +228,25 @@ namespace SilksongCoop.Core.State
         {
             try
             {
-                IsPartnerAlive = false;
-
-                if (CurrentState == DeathState.Spectating || CurrentState == DeathState.RespawningAtPartner)
+                bool enterWipe;
+                lock (_lock)
                 {
-                    // Both are dead: partner died while local player was waiting to revive or reviving -> Team Wipe!
-                    CurrentState = DeathState.TeamWipe;
-                    OnTeamWipeTriggered?.Invoke();
-
-                    var packet = new DeathLifecyclePacket
+                    _isPartnerAlive = false;
+                    _lastPartnerPosition = (partnerDeathX, partnerDeathY);
+                    foreach (var partner in _partners.Values)
                     {
-                        Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, NetworkClock.NowMs),
-                        EventType = DeathEventType.TeamWipeOccurred,
-                        CoordinateX = partnerDeathX,
-                        CoordinateY = partnerDeathY,
-                        RemainingSeconds = 0f,
-                        Epoch = CurrentEpoch
-                    };
-                    OnOutgoingDeathPacket?.Invoke(packet);
+                        partner.Alive = false;
+                        partner.X = partnerDeathX;
+                        partner.Y = partnerDeathY;
+                    }
+
+                    enterWipe = _currentState == DeathState.Spectating ||
+                                _currentState == DeathState.RespawningAtPartner;
+                }
+
+                if (enterWipe)
+                {
+                    EnterTeamWipe(partnerDeathX, partnerDeathY);
                 }
             }
             catch (Exception ex)
@@ -183,19 +256,223 @@ namespace SilksongCoop.Core.State
         }
 
         /// <summary>
+        /// Handles an incoming death for one specific peer. Other peers keep their own
+        /// alive/dead state, so a third player dying does not kill the session when a
+        /// different partner is still available for the revive.
+        /// </summary>
+        public void OnRemotePartnerDied(NetworkPeerId peer, float partnerDeathX, float partnerDeathY)
+        {
+            try
+            {
+                bool enterWipe;
+                lock (_lock)
+                {
+                    var partner = GetOrCreatePartnerLocked(peer);
+                    partner.Alive = false;
+                    partner.X = partnerDeathX;
+                    partner.Y = partnerDeathY;
+
+                    bool anyAlive = AnyPartnerAliveLocked();
+                    _isPartnerAlive = anyAlive;
+                    enterWipe = !anyAlive &&
+                                (_currentState == DeathState.Spectating ||
+                                 _currentState == DeathState.RespawningAtPartner);
+                }
+
+                if (enterWipe)
+                {
+                    EnterTeamWipe(partnerDeathX, partnerDeathY);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"[DeathLifecycleCoordinator] OnRemotePartnerDied(peer) error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Handles remote partner revival, marking them as alive and updating their position.
+        /// Legacy aggregate overload: every registered peer becomes alive.
         /// </summary>
         /// <param name="partnerX">X coordinate of the revived partner.</param>
         /// <param name="partnerY">Y coordinate of the revived partner.</param>
         public void OnRemotePartnerRevived(float partnerX, float partnerY)
         {
-            if (CurrentState == DeathState.TeamWipe)
+            lock (_lock)
             {
-                return;
+                if (_currentState == DeathState.TeamWipe)
+                {
+                    return;
+                }
+
+                _isPartnerAlive = true;
+                _lastPartnerPosition = (partnerX, partnerY);
+                foreach (var partner in _partners.Values)
+                {
+                    partner.Alive = true;
+                    partner.X = partnerX;
+                    partner.Y = partnerY;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Handles a revive for one specific peer without touching the others.
+        /// </summary>
+        public void OnRemotePartnerRevived(NetworkPeerId peer, float partnerX, float partnerY)
+        {
+            lock (_lock)
+            {
+                if (_currentState == DeathState.TeamWipe)
+                {
+                    return;
+                }
+
+                var partner = GetOrCreatePartnerLocked(peer);
+                partner.Alive = true;
+                partner.X = partnerX;
+                partner.Y = partnerY;
+                _isPartnerAlive = true;
+                if (_partners.Count == 1)
+                {
+                    _lastPartnerPosition = (partnerX, partnerY);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Registers a peer for per-peer death/revive tracking. New peers start alive.
+        /// </summary>
+        public void RegisterRemotePeer(NetworkPeerId peer)
+        {
+            lock (_lock)
+            {
+                if (_partners.ContainsKey(peer)) return;
+                _partners[peer] = new PartnerState
+                {
+                    Alive = true,
+                    X = _lastPartnerPosition.X,
+                    Y = _lastPartnerPosition.Y
+                };
+            }
+        }
+
+        /// <summary>
+        /// Removes a disconnected peer. The legacy aggregate falls back to "alive" once no
+        /// peers remain so a future session does not inherit a dead-partner latch.
+        /// </summary>
+        public void RemoveRemotePeer(NetworkPeerId peer)
+        {
+            lock (_lock)
+            {
+                _partners.Remove(peer);
+                if (_partners.Count == 0)
+                {
+                    _isPartnerAlive = true;
+                }
+                else
+                {
+                    _isPartnerAlive = AnyPartnerAliveLocked();
+                }
+            }
+        }
+
+        /// <summary>Clears every per-peer entry (session teardown / new session).</summary>
+        public void ClearRemotePeers()
+        {
+            lock (_lock)
+            {
+                _partners.Clear();
+                _isPartnerAlive = true;
+            }
+        }
+
+        /// <summary>True when the given registered peer is alive.</summary>
+        public bool IsRemotePeerAlive(NetworkPeerId peer)
+        {
+            lock (_lock)
+            {
+                if (_partners.TryGetValue(peer, out var partner)) return partner.Alive;
+                // Unknown peer on the legacy single-partner path: fall back to the
+                // aggregate flag so existing callers keep their behaviour.
+                return _isPartnerAlive;
+            }
+        }
+
+        /// <summary>Last known position of one registered peer.</summary>
+        public bool TryGetRemotePeerPosition(NetworkPeerId peer, out float x, out float y)
+        {
+            lock (_lock)
+            {
+                if (_partners.TryGetValue(peer, out var partner))
+                {
+                    x = partner.X;
+                    y = partner.Y;
+                    return true;
+                }
             }
 
-            IsPartnerAlive = true;
-            LastPartnerPosition = (partnerX, partnerY);
+            x = 0f;
+            y = 0f;
+            return false;
+        }
+
+        /// <summary>Updates the cached position used as a revive target for one peer.</summary>
+        public void UpdatePartnerPosition(NetworkPeerId peer, float x, float y)
+        {
+            lock (_lock)
+            {
+                if (_partners.TryGetValue(peer, out var partner))
+                {
+                    partner.X = x;
+                    partner.Y = y;
+                }
+                else if (_partners.Count == 0)
+                {
+                    // Legacy single-partner path without explicit registration.
+                    _lastPartnerPosition = (x, y);
+                }
+            }
+        }
+
+        private PartnerState GetOrCreatePartnerLocked(NetworkPeerId peer)
+        {
+            if (_partners.TryGetValue(peer, out var partner)) return partner;
+
+            partner = new PartnerState
+            {
+                Alive = true,
+                X = _lastPartnerPosition.X,
+                Y = _lastPartnerPosition.Y
+            };
+            _partners[peer] = partner;
+            return partner;
+        }
+
+        private bool AnyPartnerAliveLocked()
+        {
+            foreach (var partner in _partners.Values)
+            {
+                if (partner.Alive) return true;
+            }
+            return false;
+        }
+
+        private void EnterTeamWipe(float x, float y)
+        {
+            CurrentState = DeathState.TeamWipe;
+            OnTeamWipeTriggered?.Invoke();
+
+            var packet = new DeathLifecyclePacket
+            {
+                Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, NetworkClock.NowMs),
+                EventType = DeathEventType.TeamWipeOccurred,
+                CoordinateX = x,
+                CoordinateY = y,
+                RemainingSeconds = 0f,
+                Epoch = CurrentEpoch
+            };
+            OnOutgoingDeathPacket?.Invoke(packet);
         }
 
         /// <summary>
@@ -279,6 +556,8 @@ namespace SilksongCoop.Core.State
                 _currentEpoch = 1;
                 _isPostBenchRespawn = false;
                 _postBenchRespawnTimer = 0f;
+                _lastPartnerPosition = (0f, 0f);
+                _partners.Clear();
             }
         }
 
@@ -296,11 +575,14 @@ namespace SilksongCoop.Core.State
                 // epochs independently when only one of them reloads at a bench).
                 if (packet.EventType == DeathEventType.SoloBenchRespawn)
                 {
-                    IsPartnerAlive = true;
-                    // Do NOT overwrite LastPartnerPosition: this packet carries no
-                    // coordinates (the sender is mid-reload), so the old code reset the
-                    // partner's revive target to (0,0). The next transform packet supplies
-                    // the real position.
+                    // Mark only the sender alive: in a 3+ session the other peers keep
+                    // their own state. Do NOT overwrite the position: this packet carries
+                    // no coordinates (the sender is mid-reload).
+                    lock (_lock)
+                    {
+                        GetOrCreatePartnerLocked(sender).Alive = true;
+                        _isPartnerAlive = true;
+                    }
                     return;
                 }
 
@@ -328,7 +610,7 @@ namespace SilksongCoop.Core.State
                         }
                         _isPostBenchRespawn = false;
                         _postBenchRespawnTimer = 0f;
-                        OnRemotePartnerDied(packet.CoordinateX, packet.CoordinateY);
+                        OnRemotePartnerDied(sender, packet.CoordinateX, packet.CoordinateY);
                         break;
 
                     case DeathEventType.PartnerReviveTrigger:
@@ -337,8 +619,7 @@ namespace SilksongCoop.Core.State
                             // Stale revive packet during team wipe: do not mark partner alive
                             break;
                         }
-                        IsPartnerAlive = true;
-                        LastPartnerPosition = (packet.CoordinateX, packet.CoordinateY);
+                        OnRemotePartnerRevived(sender, packet.CoordinateX, packet.CoordinateY);
                         break;
 
                     case DeathEventType.TeamWipeOccurred:
@@ -352,7 +633,11 @@ namespace SilksongCoop.Core.State
                             // Stale wipe packet arriving while alive post-reset: discard
                             break;
                         }
-                        IsPartnerAlive = false;
+                        lock (_lock)
+                        {
+                            GetOrCreatePartnerLocked(sender).Alive = false;
+                            _isPartnerAlive = false;
+                        }
                         CurrentState = DeathState.TeamWipe;
                         OnTeamWipeTriggered?.Invoke();
                         break;

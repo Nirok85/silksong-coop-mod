@@ -60,7 +60,7 @@
 | `PeerRegistry` со статусами Connecting/Authenticated/Ready | P1 | Готово в 3.3-dev: Core-реестр, потокобезопасные события, интеграция с `CoopSessionState` и diagnostics bundle; транспорты пока помечают пира Ready после handshake |
 | Транспортный интерфейс `SendTo`/`Broadcast` | P1 | Готово в 3.3-dev: `IMultiPeerTransport` + `TransportBroadcast.SendToAll`; sync-сервисы уже используют broadcast |
 | AOI для 3+ игроков | P1 | Частично: `InterestManager` и `NetworkOrchestrator` уже перебирают всех получателей; нужен реальный multi-peer транспорт |
-| Steam full-mesh 3+ | P1 | Готово в 3.3-dev: primary + дополнительные пиры, размер лобби из `SteamMaxPlayers`; death/revive и HUD пока 2-player, режим экспериментальный |
+| Steam full-mesh 3+ | P1 | Готово в 3.3-dev: primary + дополнительные пиры, размер лобби из `SteamMaxPlayers`; death/revive, vitals и HUD уже per-peer (координатор хранит alive/position каждого пира и выбирает живого для revive), живой тест 3+ ещё не проводился |
 | Host-relay для UDP | P2 | 3 игрока за NAT без port forwarding |
 | Feature-set в handshake | P2 | Минорные фичи включаются без «несовместимой версии» |
 

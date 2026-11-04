@@ -35,6 +35,18 @@ namespace SilksongCoop.Core.State
         bool OnLocalPlayerDied(float deathX, float deathY);
         void OnRemotePartnerDied(float partnerDeathX, float partnerDeathY);
         void OnRemotePartnerRevived(float partnerX, float partnerY);
+
+        // Per-peer death state for 3+ sessions. Single-partner callers can keep using
+        // the aggregate overloads above.
+        void RegisterRemotePeer(NetworkPeerId peer);
+        void RemoveRemotePeer(NetworkPeerId peer);
+        void ClearRemotePeers();
+        bool IsRemotePeerAlive(NetworkPeerId peer);
+        bool TryGetRemotePeerPosition(NetworkPeerId peer, out float x, out float y);
+        void UpdatePartnerPosition(NetworkPeerId peer, float x, float y);
+        void OnRemotePartnerDied(NetworkPeerId peer, float partnerDeathX, float partnerDeathY);
+        void OnRemotePartnerRevived(NetworkPeerId peer, float partnerX, float partnerY);
+
         void UpdateTick(float deltaTime);
         void CompleteRevival();
         void HandleDeathPacket(NetworkPeerId sender, DeathLifecyclePacket packet);

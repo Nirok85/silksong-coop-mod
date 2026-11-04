@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol.Packets;
 
@@ -18,6 +19,13 @@ namespace SilksongCoop.Core.State
         int SharedRosaries { get; }
         int SharedShellShards { get; }
 
+        // Per-peer vitals (3+ foundation). The legacy Remote* properties mirror the
+        // first/primary peer for existing single-partner UI.
+        IReadOnlyList<RemotePeerVitals> RemotePeers { get; }
+        bool TryGetRemoteVitals(NetworkPeerId peer, out RemotePeerVitals vitals);
+        void RemoveRemotePeer(NetworkPeerId peer);
+        void ClearRemotePeers();
+
         // Local State Change Handlers
         void OnLocalDamageTaken(int damageAmount, int newHealth);
         void OnLocalSilkUsed(int silkUsed, int newSilk);
@@ -35,6 +43,7 @@ namespace SilksongCoop.Core.State
 
         // Events for UI and Game Reflection
         event Action<int, int>? OnRemoteVitalsObserved; // (remoteHealth, remoteSilk)
+        event Action<NetworkPeerId, int, int>? OnRemotePeerVitalsObserved; // (peer, health, silk)
         event Action<int>? OnSharedMaxHealthChanged;
         event Action<int>? OnSharedMaxSilkChanged;
         event Action<int>? OnSharedNeedleUpgradeChanged;
