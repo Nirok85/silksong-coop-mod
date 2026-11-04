@@ -217,7 +217,7 @@ AutoReconnect = true
 ## Max auto-reconnect attempts (1-10)
 MaxReconnectAttempts = 5
 
-## Max Steam lobby size including yourself (2; >2 = experimental full mesh)
+## Max Steam lobby size including yourself (2; >2 = experimental full mesh; set the same on every player)
 SteamMaxPlayers = 2
 
 ## Persist the last five connection targets in PlayerPrefs (Windows registry)

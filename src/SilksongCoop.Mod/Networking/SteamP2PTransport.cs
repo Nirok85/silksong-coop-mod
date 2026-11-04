@@ -71,6 +71,7 @@ namespace SilksongCoop.Mod.Networking
         private byte[] _sendBuffer = new byte[4096];
         private const int ProtocolPrefixSize = 2;
         private const string LobbyProtocolKey = "protocol_version";
+        private const string LobbyMaxPlayersKey = "max_players";
         
         // Channels actually used by the protocol. The RTT probes live on the dedicated
         // control channel; channel 1 carries ActionTrigger/SceneTransition game data and
@@ -1078,6 +1079,7 @@ namespace SilksongCoop.Mod.Networking
                 SteamMatchmaking.SetLobbyData(_lobbyId, "mod_name", "SilksongCoop");
                 SteamMatchmaking.SetLobbyData(_lobbyId, "mod_version", SilksongCoopPlugin.PluginVersion);
                 SteamMatchmaking.SetLobbyData(_lobbyId, LobbyProtocolKey, NetworkProtocol.Version.ToString());
+                SteamMatchmaking.SetLobbyData(_lobbyId, LobbyMaxPlayersKey, _maxPlayers.ToString());
                 return;
             }
 
@@ -1100,6 +1102,7 @@ namespace SilksongCoop.Mod.Networking
                 // compares it and refuses to mix incompatible protocol layouts.
                 SteamMatchmaking.SetLobbyData(_lobbyId, "mod_version", SilksongCoopPlugin.PluginVersion);
                 SteamMatchmaking.SetLobbyData(_lobbyId, LobbyProtocolKey, NetworkProtocol.Version.ToString());
+                SteamMatchmaking.SetLobbyData(_lobbyId, LobbyMaxPlayersKey, _maxPlayers.ToString());
             }
             else
             {
@@ -1148,8 +1151,17 @@ namespace SilksongCoop.Mod.Networking
                 string modName = SteamMatchmaking.GetLobbyData(_lobbyId, "mod_name");
                 string modVersion = SteamMatchmaking.GetLobbyData(_lobbyId, "mod_version");
                 string protocolText = SteamMatchmaking.GetLobbyData(_lobbyId, LobbyProtocolKey);
+                string maxPlayersText = SteamMatchmaking.GetLobbyData(_lobbyId, LobbyMaxPlayersKey);
                 bool protocolMatches = ushort.TryParse(protocolText, out ushort hostProtocol) &&
                                        hostProtocol == NetworkProtocol.Version;
+
+                if (int.TryParse(maxPlayersText, out int hostMaxPlayers) &&
+                    hostMaxPlayers > _maxPlayers)
+                {
+                    Logger?.LogWarning(
+                        $"[Steam] Host lobby allows {hostMaxPlayers} players, local SteamMaxPlayers is {_maxPlayers}; " +
+                        "additional peers may only see the host until every player uses the same limit.");
+                }
 
                 if (!string.Equals(modName, "SilksongCoop", StringComparison.Ordinal) ||
                     !string.Equals(modVersion, SilksongCoopPlugin.PluginVersion, StringComparison.Ordinal) ||
