@@ -271,7 +271,7 @@ silksong_coop_mod/
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # Набор тестов xUnit (net8.0) — 849 тестов
+    └── SilksongCoop.Tests/           # Набор тестов xUnit (net8.0) — 850 тестов
         ├── TestHarness/              # DualClientTestHarness (симуляция 2 клиентов без Unity)
         ├── EndToEnd/                 # Тесты реального UDP loopback: connect/reconnect
         ├── Tier1_FeatureTests/       # Покрытие требований (F01–F28)
@@ -294,8 +294,8 @@ dotnet test SilksongCoop.sln -c Release
 Текущий результат:
 
 ```text
-Всего тестов:   849
-Пройдено:       849 (100.0%)
+Всего тестов:   850
+Пройдено:       850 (100.0%)
 Провалено:      0
 Пропущено:      0
 Время:          ~6 с

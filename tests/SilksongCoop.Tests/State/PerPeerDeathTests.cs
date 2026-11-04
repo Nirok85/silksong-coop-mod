@@ -151,6 +151,31 @@ namespace SilksongCoop.Tests.State
         }
 
         [Fact]
+        public void SpectatorTimer_RevivesAtALivingPeer()
+        {
+            var coordinator = new DeathLifecycleCoordinator();
+            var first = Peer(2);
+            var second = Peer(3);
+            coordinator.RegisterRemotePeer(first);
+            coordinator.RegisterRemotePeer(second);
+            coordinator.ReviveCooldownDuration = 15f;
+            coordinator.OnRemotePartnerRevived(first, 10f, 10f);
+            coordinator.OnRemotePartnerRevived(second, 20f, 20f);
+
+            (float X, float Y)? target = null;
+            coordinator.OnReviveAtPartnerRequested += (x, y) => target = (x, y);
+
+            Assert.True(coordinator.OnLocalPlayerDied(0f, 0f));
+            coordinator.OnRemotePartnerDied(first, 11f, 11f);
+
+            coordinator.UpdateTick(15.1f);
+
+            Assert.Equal(DeathState.RespawningAtPartner, coordinator.CurrentState);
+            Assert.NotNull(target);
+            Assert.Equal((20f, 20f), target.Value);
+        }
+
+        [Fact]
         public void LastPartnerPosition_PrefersLivingPeer()
         {
             var coordinator = new DeathLifecycleCoordinator();

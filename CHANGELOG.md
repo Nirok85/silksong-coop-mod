@@ -49,7 +49,7 @@
   Steam — `SteamMaxPlayers - 1`, а diagnostics bundle выводит эти значения.
 
 ### Проверка
-- 849/849 тестов (реестр пиров, конкурентные upsert, broadcast fallback и
+- 850/850 тестов (реестр пиров, конкурентные upsert, broadcast fallback и
   multi-peer путь, синхронизация реестра с сессией, per-peer vitals и death).
 - Release и Debug: 0 ошибок компилятора (только `NU1900`).
 - Протокол не менялся; UDP host-relay и feature-set handshake остаются

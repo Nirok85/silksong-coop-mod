@@ -576,6 +576,7 @@ namespace SilksongCoop.Mod
             EnemySync?.ResetSession();
             QuestStateSync?.ResetSession();
             VitalsSync?.ClearRemotePeers();
+            DeathCoordinator?.ClearRemotePeers();
             SessionState?.SetDisconnected(DisconnectReason.GracefulDisconnect);
         }
 
