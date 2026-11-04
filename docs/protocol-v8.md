@@ -63,6 +63,13 @@ release; 3.2.0 adds boss-phase signals, persistent-object polling and quest-stat
 peer can still complete the handshake. Steam lobbies additionally compare the full
 mod version and therefore require both sides on the same release.
 
+**3.3.0 does not change the wire format either.** It adds per-peer runtime state
+(peer registry, broadcast, per-peer vitals/HUD and death/revive) but no new packet
+types or payload fields, so the protocol label stays v8. Steam lobbies still
+compare the full mod version, so 3.2.0 and 3.3.0 cannot mix over Steam; UDP
+remains wire-compatible. The experimental Steam 3+ mode only works when every
+player sets the same `[Network] SteamMaxPlayers` value.
+
 **Pickup-key semantics in 3.2.0.** `CurrencySyncPacket.PickupKey` now prefers the
 drop's serialized persistent id instead of its rounded position. The field layout
 is unchanged, but two peers on different releases derive different keys for the

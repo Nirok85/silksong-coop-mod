@@ -1,4 +1,4 @@
-# Release checklist (3.2.0)
+# Release checklist (3.3.0)
 
 ## Pre-release
 
@@ -6,7 +6,7 @@
 - [ ] All tests pass (850+).
 - [ ] Core and Mod build with 0 compiler warnings (TreatWarningsAsErrors=true; NU1900 is a NuGet network warning).
 - [ ] Protocol version is unchanged or bumped and documented (`docs/protocol-v8.md`).
-- [ ] Plugin version and assembly versions bumped to 3.2.0.
+- [ ] Plugin version and assembly versions bumped to 3.3.0.
 - [ ] Migration guide updated.
 - [ ] CHANGELOG.md updated.
 - [ ] README.md / README.ru.md updated - limits section matches what is implemented.
@@ -35,12 +35,13 @@
 - [ ] Scene transition.
 - [ ] Reconnect after timeout.
 - [ ] Late joiner catch-up.
+- [ ] Steam 3+ lobby (`SteamMaxPlayers=3`): all peers see each other, per-peer vitals/HUD work, and death/revive affects only the correct player.
 - [ ] Quest interaction: offer/progress a quest and verify the partner sees the same quest state.
 - [ ] Diagnostics bundle writes a file and the room code is redacted.
 
 ## Publish
 
-- [ ] Tag `v3.2.0`.
+- [ ] Tag `v3.3.0`.
 - [ ] GitHub release with notes.
 - [ ] Attach mod DLL + checksums.
 - [ ] Announce breaking changes.

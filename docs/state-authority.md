@@ -5,12 +5,12 @@ receiver resolves conflicts, and which failures are accepted by design. When cod
 and this document disagree, the code is wrong unless the document is updated in
 the same change.
 
-## Current state (3.2.0)
+## Current state (3.3.0)
 
 | State | Writer(s) | Receiver rule | Conflict resolution |
 |---|---|---|---|
 | Player transform | Each player writes their own | Field-validated (NaN/Infinity, world bounds, velocity cap) | Newer tick wins; interpolation smooths the rest |
-| Player death/revive | Each player writes their own lifecycle | `DeathLifecycleCoordinator` with epoch + event type | Higher epoch is adopted; stale epochs are ignored; a cross-scene revive falls back to the local bench with an explicit banner/toast |
+| Player death/revive | Each player writes their own lifecycle | `DeathLifecycleCoordinator` with epoch + event type; per-peer alive/position state when several peers are registered | Higher epoch is adopted; stale epochs are ignored; a cross-scene revive falls back to the local bench with an explicit banner/toast; a revive targets a living peer |
 | Shared vitals (max HP, silk spools, needle) | Either peer | Monotonic upgrades only, applied under `RemoteApplyScope` | A higher value wins; a lower value never downgrades |
 | Currency | Either peer | Transaction GUID dedup + per-sender sequence, applied under `RemoteApplyScope` | Duplicate transaction IDs are dropped; wallet is clamped to a sane ceiling |
 | Inventory unlocks | Either peer | Idempotent per item key | First unlock wins; repeats are no-ops |
