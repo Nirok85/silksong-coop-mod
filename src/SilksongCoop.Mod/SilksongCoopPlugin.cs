@@ -1462,6 +1462,15 @@ namespace SilksongCoop.Mod
                                 // them with a silent "dead" HUD.
                                 MenuUI?.SetStatusMessage(Loc.T("Partner revived at the last bench."));
                             }
+                            else if (wasAlive && !isAlive)
+                            {
+                                MenuUI?.SetStatusMessage(Loc.T("{0} died", peer.DisplayName));
+                            }
+                            else if (!wasAlive && isAlive &&
+                                     death.EventType == DeathEventType.PartnerReviveTrigger)
+                            {
+                                MenuUI?.SetStatusMessage(Loc.T("{0} revived", peer.DisplayName));
+                            }
                             // Apply visibility per sender: with 3+ peers the aggregate
                             // "some partner is alive" flag cannot decide whether THIS
                             // clone should be hidden.

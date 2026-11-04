@@ -343,17 +343,29 @@ namespace SilksongCoop.Mod.UI
                 ? Loc.T("Partner")
                 : peer.Peer.DisplayName;
 
-            // Background
-            GUI.color = new Color(SilksongSkin.BgPanel.r, SilksongSkin.BgPanel.g, SilksongSkin.BgPanel.b, 0.88f);
+            bool alive = SilksongCoopPlugin.Instance?.DeathCoordinator?.IsRemotePeerAlive(peer.Peer) ?? true;
+
+            // Background (dimmed while the partner is dead)
+            GUI.color = alive
+                ? new Color(SilksongSkin.BgPanel.r, SilksongSkin.BgPanel.g, SilksongSkin.BgPanel.b, 0.88f)
+                : new Color(SilksongSkin.BgPanel.r, SilksongSkin.BgPanel.g, SilksongSkin.BgPanel.b, 0.55f);
             GUI.DrawTexture(new Rect(x, y, hudW, hudH), SilksongSkin.WhitePixel);
 
-            // Left accent bar (gold)
-            GUI.color = SilksongSkin.Gold;
+            // Left accent bar (gold when alive, red when dead)
+            GUI.color = alive
+                ? SilksongSkin.Gold
+                : new Color(0.90f, 0.30f, 0.30f);
             GUI.DrawTexture(new Rect(x, y, 3f, hudH), SilksongSkin.WhitePixel);
 
             // Partner name
             GUI.color = SilksongSkin.TextTitle;
-            GUI.Label(new Rect(x + 8f, y + 2f, hudW - 12f, 16f), peerName, _hudNameStyle ?? Skin.label);
+            GUI.Label(new Rect(x + 8f, y + 2f, hudW - 64f, 16f), peerName, _hudNameStyle ?? Skin.label);
+
+            if (!alive)
+            {
+                GUI.color = new Color(0.95f, 0.35f, 0.35f);
+                GUI.Label(new Rect(x + hudW - 56f, y + 2f, 50f, 16f), Loc.T("DEAD"), _hudNameStyle ?? Skin.label);
+            }
 
             // HP bar
             float barX = x + 8f;
@@ -362,12 +374,14 @@ namespace SilksongCoop.Mod.UI
             float barY = y + 22f;
 
             float hpFrac = peer.MaxHealth > 0 ? (float)peer.Health / peer.MaxHealth : 0f;
-            DrawStatusBar(barX, barY, barW, barH, hpFrac, new Color(0.85f, 0.25f, 0.25f), $"HP {peer.Health}/{peer.MaxHealth}");
+            Color hpColor = alive ? new Color(0.85f, 0.25f, 0.25f) : new Color(0.45f, 0.30f, 0.30f);
+            DrawStatusBar(barX, barY, barW, barH, hpFrac, hpColor, $"HP {peer.Health}/{peer.MaxHealth}");
 
             // Silk bar
             float silkY = y + 42f;
             float silkFrac = peer.MaxSilkSpools > 0 ? (float)peer.Silk / (peer.MaxSilkSpools * 9f) : 0f;
-            DrawStatusBar(barX, silkY, barW, barH, silkFrac, new Color(0.30f, 0.55f, 0.90f), $"Silk {peer.Silk}/{peer.MaxSilkSpools * 9}");
+            Color silkColor = alive ? new Color(0.30f, 0.55f, 0.90f) : new Color(0.30f, 0.36f, 0.50f);
+            DrawStatusBar(barX, silkY, barW, barH, silkFrac, silkColor, $"Silk {peer.Silk}/{peer.MaxSilkSpools * 9}");
 
             GUI.color = Color.white;
         }
@@ -892,7 +906,10 @@ namespace SilksongCoop.Mod.UI
                         PeerState.Authenticated => Loc.T("Authenticated"),
                         _ => Loc.T("Ready")
                     };
-                    GUILayout.Label($"  {peerRecord.Peer.DisplayName} — {state}");
+                    bool peerAlive =
+                        SilksongCoopPlugin.Instance?.DeathCoordinator?.IsRemotePeerAlive(peerRecord.Peer) ?? true;
+                    string suffix = peerAlive ? string.Empty : $" — {Loc.T("DEAD")}";
+                    GUILayout.Label($"  {peerRecord.Peer.DisplayName} — {state}{suffix}");
                 }
             }
 

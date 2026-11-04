@@ -174,6 +174,7 @@ namespace SilksongCoop.Core.Localization
             ["Connecting"] = "Подключение",
             ["Authenticated"] = "Аутентифицирован",
             ["Ready"] = "Готов",
+            ["DEAD"] = "МЁРТВ",
             ["<b>Interpolation:</b>  {0:F0} ms behind"] = "<b>Интерполяция:</b>  отставание {0:F0} мс",
             ["<b>Session:</b>  {0}"] = "<b>Сессия:</b>  {0}",
             ["NETWORK"] = "СЕТЬ",
@@ -255,6 +256,8 @@ namespace SilksongCoop.Core.Localization
             // ── Connection status messages ────────────────────────────────────
             ["Connected to {0}"] = "Подключено к {0}",
             ["Player left: {0}"] = "Игрок вышел: {0}",
+            ["{0} died"] = "{0} погиб",
+            ["{0} revived"] = "{0} возрождён",
             ["Partner timed out — still hosting. Share the same room code to reconnect."] =
                 "Напарник не отвечает — хостинг продолжается. Передайте тот же код комнаты для переподключения.",
             ["Partner left — still hosting. Share the same room code to reconnect."] =
