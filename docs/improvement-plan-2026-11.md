@@ -57,7 +57,7 @@
 
 | Задача | Приоритет | Критерий приёмки |
 |---|---|---|
-| `PeerRegistry` со статусами Connecting/Authenticated/Ready | P1 | Готово в 3.3-dev: Core-реестр, потокобезопасные события, интеграция с `CoopSessionState`; транспорты пока помечают пира Ready после handshake |
+| `PeerRegistry` со статусами Connecting/Authenticated/Ready | P1 | Готово в 3.3-dev: Core-реестр, потокобезопасные события, интеграция с `CoopSessionState` и diagnostics bundle; транспорты пока помечают пира Ready после handshake |
 | Транспортный интерфейс `SendTo`/`Broadcast` | P1 | Готово в 3.3-dev: `IMultiPeerTransport` + `TransportBroadcast.SendToAll`; sync-сервисы уже используют broadcast |
 | AOI для 3+ игроков | P1 | Частично: `InterestManager` и `NetworkOrchestrator` уже перебирают всех получателей; нужен реальный multi-peer транспорт |
 | Host-relay для UDP | P2 | 3 игрока за NAT без port forwarding |

@@ -865,6 +865,26 @@ namespace SilksongCoop.Mod.UI
                 ? Loc.T("<b>Partner state:</b>  alive")
                 : Loc.T("<b>Partner state:</b>  dead / spectating"));
 
+            // The peer registry becomes meaningful when a multi-peer transport lands.
+            // Keep the single-player Status tab unchanged and only list extra peers.
+            var peerRecords = _sessionState.Peers.Peers;
+            if (peerRecords.Count > 1)
+            {
+                GUILayout.Space(4);
+                GUILayout.Label(Loc.T("<b>Connected peers:</b>  {0}", peerRecords.Count));
+                for (int i = 0; i < peerRecords.Count; i++)
+                {
+                    var peerRecord = peerRecords[i];
+                    string state = peerRecord.State switch
+                    {
+                        PeerState.Connecting => Loc.T("Connecting"),
+                        PeerState.Authenticated => Loc.T("Authenticated"),
+                        _ => Loc.T("Ready")
+                    };
+                    GUILayout.Label($"  {peerRecord.Peer.DisplayName} — {state}");
+                }
+            }
+
             if (peerId.HasValue &&
                 SilksongCoopPlugin.Instance?.CloneSpawner != null &&
                 SilksongCoopPlugin.Instance.CloneSpawner.TryGetInterpolationDelayMs(peerId.Value, out float interpDelay))

@@ -94,6 +94,17 @@ namespace SilksongCoop.Mod.Diagnostics
             text.AppendLine($"tick: {session.CurrentTick}");
             text.AppendLine($"tick_hz: {plugin.CurrentTickHz:F1}");
 
+            var peers = session.Peers.Peers;
+            text.AppendLine($"peer_registry_count: {peers.Count}");
+            text.AppendLine($"peer_registry_ready: {session.Peers.ReadyPeers.Count}");
+            for (int i = 0; i < peers.Count; i++)
+            {
+                var peer = peers[i];
+                text.AppendLine(
+                    $"peer[{i}]: id={peer.Peer.Value} state={peer.State} role={peer.Role} " +
+                    $"connected_utc={peer.ConnectedAtUtc:O} last_seen_utc={peer.LastSeenUtc:O}");
+            }
+
             if (session.RemotePeerId.HasValue &&
                 plugin.CloneSpawner != null &&
                 plugin.CloneSpawner.TryGetInterpolationDelayMs(session.RemotePeerId.Value, out float interpDelayMs))
