@@ -39,6 +39,18 @@ namespace SilksongCoop.Tests.Networking
         }
 
         [Fact]
+        public void MultiPeerTransport_ReportsCapabilities()
+        {
+            var transport = new RecordingMultiPeerTransport(new[]
+            {
+                new NetworkPeerId(2), new NetworkPeerId(3)
+            });
+
+            Assert.Equal(3, transport.MaxRemotePeers);
+            Assert.False(transport.SupportsHostRelay);
+        }
+
+        [Fact]
         public void SendToAll_NoPeers_DoesNothing()
         {
             var transport = new RecordingTransport(Array.Empty<NetworkPeerId>());

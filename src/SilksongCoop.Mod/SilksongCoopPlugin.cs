@@ -88,6 +88,7 @@ namespace SilksongCoop.Mod
         public BepInEx.Configuration.ConfigEntry<int>? TickRateHzConfig;
         public BepInEx.Configuration.ConfigEntry<bool>? AutoReconnectConfig;
         public BepInEx.Configuration.ConfigEntry<int>? MaxReconnectAttemptsConfig;
+        public BepInEx.Configuration.ConfigEntry<int>? SteamMaxPlayersConfig;
         public BepInEx.Configuration.ConfigEntry<bool>? SaveConnectionHistoryConfig;
         public BepInEx.Configuration.ConfigEntry<bool>? SyncQuestFlagsConfig;
         public BepInEx.Configuration.ConfigEntry<string>? LanguageConfig;
@@ -201,6 +202,8 @@ namespace SilksongCoop.Mod
                 TickRateHzConfig = Config.Bind("Network", "TickRateHz", 30, "Network replication tick rate (20-60 Hz)");
                 AutoReconnectConfig = Config.Bind("Network", "AutoReconnect", true, "Automatically attempt to reconnect after an unexpected disconnect");
                 MaxReconnectAttemptsConfig = Config.Bind("Network", "MaxReconnectAttempts", 5, "Maximum number of automatic reconnection attempts (1-10)");
+                SteamMaxPlayersConfig = Config.Bind("Network", "SteamMaxPlayers", 2,
+                    "Maximum Steam lobby size including yourself (2-8). Values above 2 enable the experimental full-mesh mode; death/revive and the partner HUD are still optimized for two players.");
                 SaveConnectionHistoryConfig = Config.Bind("Network", "SaveConnectionHistory", true, "Persist the last five connection targets in PlayerPrefs (Windows registry)");
                 SyncQuestFlagsConfig = Config.Bind("Gameplay", "SyncQuestFlags", true,
                     "Replicate quest-related PlayerData bool/int flags changed during NPC dialogue (best-effort; disable if a quest misbehaves)");
@@ -253,7 +256,8 @@ namespace SilksongCoop.Mod
 
             try
             {
-                SteamTransport = new SteamP2PTransport();
+                SteamTransport = new SteamP2PTransport(
+                    Math.Clamp(SteamMaxPlayersConfig?.Value ?? 2, 2, 8));
                 if (SteamTransport != null)
                     Container.Register<SteamP2PTransport>(SteamTransport);
             }
@@ -419,6 +423,7 @@ namespace SilksongCoop.Mod
             NormalizeInt(DefaultUdpPortConfig, 1024, 65535, 7777, "DefaultUdpPort");
             NormalizeInt(TickRateHzConfig, 20, 60, 30, "TickRateHz");
             NormalizeInt(MaxReconnectAttemptsConfig, 1, 10, 5, "MaxReconnectAttempts");
+            NormalizeInt(SteamMaxPlayersConfig, 2, 8, 2, "SteamMaxPlayers");
         }
 
         private void NormalizeFloat(
@@ -1084,25 +1089,41 @@ namespace SilksongCoop.Mod
                     _reconnectAttempts = 0;
                     _reconnectAddress = null;
 
-                    // Issue #2.2: never inherit a wipe/spectator latch from the previous
-                    // session. If the old session ended mid-wipe, this flag stayed set until
-                    // the game was restarted and every later team wipe silently no-oped.
-                    Interlocked.Exchange(ref _teamWipeInProgress, 0);
-                    // Clearing the flag without restoring the hero would leave it with
-                    // gravity/colliders/rendering disabled if a reconnect raced the bench
-                    // reload. ExitSpectatorMode performs the actual restore.
-                    if (Spectator.IsActive) ExitSpectatorMode();
-                    _lastHeartPiecesBroadcast = -1;
-                    _lastSilkPartsBroadcast = -1;
-                    EnemySync?.ResetSession();
-                    InventorySync?.ResetSessionState();
-                    QuestStateSync?.ResetSession();
+                    bool firstPeer = SessionState?.IsConnected != true;
+
+                    if (firstPeer)
+                    {
+                        // Issue #2.2: never inherit a wipe/spectator latch from the previous
+                        // session. If the old session ended mid-wipe, this flag stayed set until
+                        // the game was restarted and every later team wipe silently no-oped.
+                        Interlocked.Exchange(ref _teamWipeInProgress, 0);
+                        // Clearing the flag without restoring the hero would leave it with
+                        // gravity/colliders/rendering disabled if a reconnect raced the bench
+                        // reload. ExitSpectatorMode performs the actual restore.
+                        if (Spectator.IsActive) ExitSpectatorMode();
+                        _lastHeartPiecesBroadcast = -1;
+                        _lastSilkPartsBroadcast = -1;
+                        EnemySync?.ResetSession();
+                        InventorySync?.ResetSessionState();
+                        QuestStateSync?.ResetSession();
+                    }
 
                     Logger.LogInfo($"[Coop] Peer connected: {peer}");
-                    SessionState?.SetConnected(peer, transport.IsHost ? SessionRole.Host : SessionRole.Client);
-                    ResetDesyncTracking();
+                    if (firstPeer)
+                    {
+                        SessionState?.SetConnected(peer, transport.IsHost ? SessionRole.Host : SessionRole.Client);
+                        ResetDesyncTracking();
+                    }
+                    else
+                    {
+                        SessionState?.AddRemotePeer(peer);
+                    }
+
                     EventBus?.Publish(new PeerConnectedEvent { PeerId = peer });
-                    MenuUI?.Diagnostics?.OnSessionStarted();
+                    if (firstPeer)
+                    {
+                        MenuUI?.Diagnostics?.OnSessionStarted();
+                    }
                     MenuUI?.SetStatusMessage(Loc.T("Connected to {0}", peer.DisplayName));
 
                     if (CloneSpawner == null)
@@ -1112,21 +1133,18 @@ namespace SilksongCoop.Mod
                     }
 
                     bool remoteIsPlayer2 = transport.IsHost;
-                    CloneSpawner.ResetAllClones();
+                    if (firstPeer)
+                    {
+                        CloneSpawner.ResetAllClones();
+                        RefreshLocalVisuals(!transport.IsHost);
+                        DeathCoordinator?.SynchronizeEpochForNewSession();
+                    }
                     CloneSpawner.SpawnRemotePlayer(peer, remoteIsPlayer2);
-
-                    RefreshLocalVisuals(!transport.IsHost);
-
-                    // BUG-A2: BOTH sides must initialize and broadcast — previously only the
-                    // host did, so the host never received the client's vitals, currency or
-                    // inventory and its HUD stayed empty with 0-level remote damage.
-                    // BUG-A4: also resync the death epoch at session start.
-                    DeathCoordinator?.SynchronizeEpochForNewSession();
 
                     if (VitalsSync != null)
                     {
                         var pd = PlayerData.instance;
-                        if (pd != null)
+                        if (firstPeer && pd != null)
                         {
                             VitalsSync.InitializeState(
                                 pd.health,
@@ -1138,6 +1156,9 @@ namespace SilksongCoop.Mod
                                 pd.ShellShards
                             );
                         }
+
+                        // Broadcast to all peers; the newly connected one needs the current
+                        // state and existing peers simply receive an idempotent update.
                         VitalsSync.BroadcastCurrentVitals();
                         VitalsSync.BroadcastCurrentCurrency();
                         // Tell the newly connected peer which world drops were already
@@ -1161,19 +1182,37 @@ namespace SilksongCoop.Mod
                     // BUG-07: ignore disconnect events from a transport that is not active —
                     // otherwise a stale UDP/Steam event would tear down a live session.
                     if (!ReferenceEquals(transport, ActiveTransport)) return;
+                    if (SessionState == null || SessionState.Status == SessionStatus.Disconnected) return;
 
                     Logger.LogInfo($"[Coop] Peer disconnected: {peer}, reason: {reason}");
+
+                    bool wasHost = SessionState.Role == SessionRole.Host;
+                    bool wasPrimary = SessionState.RemotePeerId == peer;
+                    bool wasLastPeer = SessionState.RemotePeerIds.Count <= 1;
+
+                    // On a client the primary peer is the host; if the host leaves, the
+                    // lobby is over even when additional peers are still registered.
+                    bool endSession = wasLastPeer || (!wasHost && wasPrimary);
+
+                    SessionState.RemoveRemotePeer(peer);
+                    CloneSpawner?.DespawnRemotePlayer(peer);
+                    EventBus?.Publish(new PeerDisconnectedEvent { PeerId = peer, Reason = reason });
+
+                    if (!endSession)
+                    {
+                        MenuUI?.SetStatusMessage(Loc.T("Player left: {0}", peer.DisplayName));
+                        return;
+                    }
 
                     // SetDisconnected() clears CurrentRoomCode and SteamLobbyId, so the
                     // reconnect target must be captured before it runs. A host has
                     // nobody to dial back, so it just keeps listening.
-                    bool wasHost = SessionState?.Role == SessionRole.Host;
                     string? reconnectTarget = wasHost
                         ? null
                         : (transport == SteamTransport
-                            ? SessionState?.SteamLobbyId?.ToString()
-                            : SessionState?.CurrentRoomCode);
-                    string? hostRoomCode = wasHost ? SessionState?.CurrentRoomCode : null;
+                            ? SessionState.SteamLobbyId?.ToString()
+                            : SessionState.CurrentRoomCode);
+                    string? hostRoomCode = wasHost ? SessionState.CurrentRoomCode : null;
 
                     // CRIT-02: If partner disconnected while local player was spectating/pending revive,
                     // the local player must fall back to a bench respawn to avoid a perma-softlock.
@@ -1186,12 +1225,13 @@ namespace SilksongCoop.Mod
                         DeathCoordinator?.CurrentState == DeathState.Spectating ||
                         DeathCoordinator?.CurrentState == DeathState.RespawningAtPartner;
 
-                    SessionState?.SetDisconnected(reason);
+                    SessionState.SetDisconnected(reason);
                     ResetDesyncTracking();
-                    EventBus?.Publish(new PeerDisconnectedEvent { PeerId = peer, Reason = reason });
                     EventBus?.Publish(new SessionEndedEvent { Reason = reason });
                     MenuUI?.Diagnostics?.OnSessionEnded();
-                    CloneSpawner?.DespawnRemotePlayer(peer);
+                    // In a 3+ session the transport may disconnect several peers in one
+                    // teardown; drop every clone, not just the first event's peer.
+                    CloneSpawner?.ResetAllClones();
                     RefreshLocalVisuals(false);
 
                     // New peer = new inventory session. Clear the once-per-item dedup on

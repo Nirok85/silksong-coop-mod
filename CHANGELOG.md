@@ -27,16 +27,23 @@
   принимает пакеты от любого пира из `SessionState.RemotePeerIds`, а не только
   от первого `RemotePeerId`. Для 2-игроковой сессии это тот же пир; снят жёсткий
   блокер для будущего multi-peer транспорта.
+- **Steam full-mesh multi-peer (experimental).** `SteamMaxPlayers` (2-8, default 2)
+  расширяет Steam-лобби: primary peer сохраняет прежний путь, остальные члены
+  лобби подключаются как дополнительные пиры, шлют handshake друг другу и
+  получают broadcast-пакеты. При `SteamMaxPlayers=2` поведение идентично 3.2.0.
+  Death/revive и partner HUD пока рассчитаны на двух игроков, поэтому 3+ режим
+  помечен экспериментальным.
 - **Явные возможности транспорта.** `IMultiPeerTransport` сообщает
-  `MaxRemotePeers` и `SupportsHostRelay`; текущие UDP/Steam реализации честно
-  возвращают `1`/`false`, а diagnostics bundle выводит эти значения.
+  `MaxRemotePeers` и `SupportsHostRelay`; UDP честно возвращает `1`/`false`,
+  Steam — `SteamMaxPlayers - 1`, а diagnostics bundle выводит эти значения.
 
 ### Проверка
-- 830/830 тестов (реестр пиров, конкурентные upsert, broadcast fallback и
+- 831/831 тестов (реестр пиров, конкурентные upsert, broadcast fallback и
   multi-peer путь, синхронизация реестра с сессией).
 - Release и Debug: 0 ошибок компилятора (только `NU1900`).
-- Протокол не менялся; фактические multi-peer транспорты, host-relay и
-  feature-set handshake остаются следующими шагами Фазы 3.
+- Протокол не менялся; UDP host-relay и feature-set handshake остаются
+  следующими шагами Фазы 3. Steam full-mesh проверен только сборкой — живой
+  Steam-сессии с 3+ клиентами в этой сессии не было.
 
 ## [3.2.0] - 2026-11-03
 

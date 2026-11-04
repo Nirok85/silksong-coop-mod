@@ -1,6 +1,7 @@
 // SteamP2PTransport.cs — Steamworks.NET P2P network transport using lobbies and SteamNetworking.
 // Handles lobby creation/joining, friend invites, P2P packet streaming, and connection lifecycle.
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using SilksongCoop.Core.Networking;
 using Steamworks;
@@ -17,6 +18,25 @@ namespace SilksongCoop.Mod.Networking
 
         private CSteamID _lobbyId = CSteamID.Nil;
         private CSteamID _remoteSteamId = CSteamID.Nil;
+
+        /// <summary>
+        /// Additional lobby members beyond the primary peer. The primary peer keeps the
+        /// original single-peer code path (RTT probes, heartbeat, reconnect) intact; these
+        /// entries turn the transport into a full-mesh 3+ player transport.
+        /// </summary>
+        private sealed class AdditionalPeer
+        {
+            public CSteamID SteamId;
+            public NetworkPeerId PeerId;
+            public bool Validated;
+            public bool Notified;
+            public long LastSeenMs;
+        }
+
+        private readonly Dictionary<ulong, AdditionalPeer> _additionalPeers =
+            new Dictionary<ulong, AdditionalPeer>();
+        private readonly HashSet<ulong> _additionalRejectedPeers = new HashSet<ulong>();
+        private readonly int _maxPlayers = 2;
 
         // A peer that failed protocol validation is kept out until it leaves the lobby.
         // Otherwise the next datagram would re-adopt it and restart the reject/disconnect
@@ -94,10 +114,24 @@ namespace SilksongCoop.Mod.Networking
         public bool IsHost { get; private set; }
         public bool IsConnected { get; private set; }
         public NetworkPeerId LocalPeerId { get; private set; }
-        public System.Collections.Generic.IReadOnlyList<NetworkPeerId> ConnectedPeers =>
-            IsConnected && _remoteSteamId != CSteamID.Nil
-                ? new System.Collections.Generic.List<NetworkPeerId> { new NetworkPeerId((ulong)_remoteSteamId) }
-                : new System.Collections.Generic.List<NetworkPeerId>();
+        public System.Collections.Generic.IReadOnlyList<NetworkPeerId> ConnectedPeers
+        {
+            get
+            {
+                var peers = new List<NetworkPeerId>();
+                if (IsConnected && _remoteSteamId != CSteamID.Nil)
+                {
+                    peers.Add(new NetworkPeerId((ulong)_remoteSteamId));
+                }
+
+                foreach (var pair in _additionalPeers)
+                {
+                    if (pair.Value.Notified) peers.Add(pair.Value.PeerId);
+                }
+
+                return peers;
+            }
+        }
         public CSteamID CurrentLobbyId => _lobbyId;
 
         // Steamworks.NET's P2P API exposes no RTT/loss counters for lobby networking, so
@@ -137,8 +171,14 @@ namespace SilksongCoop.Mod.Networking
         /// <summary>
         /// Initializes a new Steam P2P transport instance.
         /// </summary>
-        public SteamP2PTransport()
+        /// <param name="maxPlayers">
+        /// Total lobby size including the local player. Values below 2 fall back to 2.
+        /// The default keeps the proven 2-player path; set 3..8 to enable the experimental
+        /// full-mesh mode.
+        /// </param>
+        public SteamP2PTransport(int maxPlayers = 2)
         {
+            _maxPlayers = Math.Clamp(maxPlayers, 2, 8);
             // BUG-14: never fall back to peer id 0 — the clone dictionaries key on
             // NetworkPeerId and a zero id could collide with the transport-default
             // sentinel. The Steam transport cannot connect without Steam anyway, but the
@@ -194,6 +234,8 @@ namespace SilksongCoop.Mod.Networking
 
             // Re-hosting must not leak the previous lobby/P2P session: the fields are
             // about to be overwritten, so leave/close them explicitly first.
+            ClearAdditionalPeers(DisconnectReason.GracefulDisconnect, notify: false);
+            _additionalRejectedPeers.Clear();
             if (_lobbyId != CSteamID.Nil)
             {
                 try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
@@ -209,7 +251,7 @@ namespace SilksongCoop.Mod.Networking
             _lobbyId = CSteamID.Nil;
             _requestedLobbyId = 0;
             _lobbyRequestGeneration = ++_sessionGeneration;
-            SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, 2);
+            SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, _maxPlayers);
         }
 
         /// <summary>
@@ -234,6 +276,8 @@ namespace SilksongCoop.Mod.Networking
             SilksongCoopPlugin.Instance?.SetActiveTransport(this);
 
             // Drop the previous lobby/P2P session before joining a new one.
+            ClearAdditionalPeers(DisconnectReason.GracefulDisconnect, notify: false);
+            _additionalRejectedPeers.Clear();
             if (_lobbyId != CSteamID.Nil)
             {
                 try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
@@ -274,6 +318,11 @@ namespace SilksongCoop.Mod.Networking
             _lobbyRequestGeneration = -1;
             _requestedLobbyId = 0;
             _protocolRejectedPeer = CSteamID.Nil;
+            _additionalRejectedPeers.Clear();
+
+            // Fire disconnect events for extra peers before the primary is cleared, so
+            // the plugin can remove each clone independently.
+            ClearAdditionalPeers(DisconnectReason.GracefulDisconnect, notify: true);
 
             if (_lobbyId != CSteamID.Nil)
             {
@@ -333,16 +382,7 @@ namespace SilksongCoop.Mod.Networking
             _pingsSentInWindow = 0;
             _pongsReceivedInWindow = 0;
 
-            string displayName = peer.m_SteamID.ToString();
-            try
-            {
-                string persona = SteamFriends.GetFriendPersonaName(peer);
-                if (!string.IsNullOrEmpty(persona)) displayName = persona;
-            }
-            catch
-            {
-                // Persona lookup is cosmetic; never let it break the connection.
-            }
+            string displayName = GetPersonaName(peer);
 
             try
             {
@@ -352,6 +392,10 @@ namespace SilksongCoop.Mod.Networking
             {
                 Logger?.LogError($"[Steam] OnPeerConnected handler threw: {ex.Message}");
             }
+
+            // Additional peers may have completed their handshake while the primary was
+            // still pending; surface them only after the primary event above.
+            NotifyPendingAdditionalPeers();
         }
 
         private void NotifyPeerDisconnected(DisconnectReason reason)
@@ -359,7 +403,6 @@ namespace SilksongCoop.Mod.Networking
             var peer = _remoteSteamId;
             bool wasNotified = _peerConnectNotified;
             _remoteSteamId = CSteamID.Nil;
-            IsConnected = false;
             _peerConnectNotified = false;
             _rttMs = 0;
             _packetLossPercent = 0;
@@ -368,6 +411,12 @@ namespace SilksongCoop.Mod.Networking
             if (wasNotified)
             {
                 OnPeerDisconnected?.Invoke(new NetworkPeerId(peer.m_SteamID), reason);
+            }
+
+            // Keep a 3+ session alive if another validated peer remains.
+            if (!PromoteAdditionalPeerToPrimary())
+            {
+                IsConnected = false;
             }
         }
 
@@ -397,6 +446,196 @@ namespace SilksongCoop.Mod.Networking
             return false;
         }
 
+        private static string GetPersonaName(CSteamID peer)
+        {
+            try
+            {
+                string persona = SteamFriends.GetFriendPersonaName(peer);
+                if (!string.IsNullOrEmpty(persona)) return persona;
+            }
+            catch
+            {
+                // Cosmetic only.
+            }
+            return peer.m_SteamID.ToString();
+        }
+
+        private void SendHandshake(CSteamID peer)
+        {
+            try
+            {
+                byte[] handshake =
+                {
+                    (byte)(NetworkProtocol.Version & 0xFF),
+                    (byte)(NetworkProtocol.Version >> 8)
+                };
+                if (!SteamNetworking.SendP2PPacket(
+                        peer, handshake, (uint)handshake.Length,
+                        EP2PSend.k_EP2PSendReliable, 2))
+                {
+                    Logger?.LogWarning($"[Steam] Failed to send handshake to {peer.m_SteamID}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger?.LogWarning($"[Steam] Failed to send handshake: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Registers an extra lobby member and starts the full-mesh handshake. The primary
+        /// peer keeps its original code path; this is only used when the lobby is larger
+        /// than two players.
+        /// </summary>
+        private void AddAdditionalPeer(CSteamID peer)
+        {
+            if (peer == CSteamID.Nil || _additionalRejectedPeers.Contains(peer.m_SteamID))
+                return;
+            if (_additionalPeers.ContainsKey(peer.m_SteamID)) return;
+
+            int remoteCount = (_remoteSteamId != CSteamID.Nil ? 1 : 0) + _additionalPeers.Count;
+            if (remoteCount >= MaxRemotePeers)
+            {
+                Logger?.LogWarning($"[Steam] Lobby full; rejecting extra member {peer.m_SteamID}");
+                try { SteamNetworking.CloseP2PSessionWithUser(peer); } catch { /* best-effort */ }
+                return;
+            }
+
+            _additionalPeers[peer.m_SteamID] = new AdditionalPeer
+            {
+                SteamId = peer,
+                PeerId = new NetworkPeerId(peer.m_SteamID, GetPersonaName(peer)),
+                Notified = false,
+                LastSeenMs = NowMs()
+            };
+
+            try
+            {
+                SteamNetworking.AcceptP2PSessionWithUser(peer);
+                SendHandshake(peer);
+            }
+            catch (Exception ex)
+            {
+                Logger?.LogWarning($"[Steam] Failed to prepare additional peer {peer.m_SteamID}: {ex.Message}");
+            }
+        }
+
+        private void NotifyAdditionalPeerConnected(CSteamID peer)
+        {
+            if (!_additionalPeers.TryGetValue(peer.m_SteamID, out var entry)) return;
+            entry.Validated = true;
+            entry.LastSeenMs = NowMs();
+
+            // Keep the plugin's "first peer" path deterministic: the primary handshake
+            // must reach the game layer before any additional OnPeerConnected event.
+            if (!_peerConnectNotified) return;
+
+            FireAdditionalPeerConnected(entry);
+        }
+
+        private void FireAdditionalPeerConnected(AdditionalPeer entry)
+        {
+            if (entry.Notified) return;
+            entry.Notified = true;
+            IsConnected = true;
+            _connectionAttemptStartMs = 0;
+            OnPeerConnected?.Invoke(entry.PeerId);
+        }
+
+        private void NotifyPendingAdditionalPeers()
+        {
+            List<AdditionalPeer>? pending = null;
+            foreach (var pair in _additionalPeers)
+            {
+                if (pair.Value.Validated && !pair.Value.Notified)
+                {
+                    (pending ??= new List<AdditionalPeer>()).Add(pair.Value);
+                }
+            }
+
+            if (pending == null) return;
+            for (int i = 0; i < pending.Count; i++)
+            {
+                FireAdditionalPeerConnected(pending[i]);
+            }
+        }
+
+        private void NotifyAdditionalPeerDisconnected(CSteamID peer, DisconnectReason reason)
+        {
+            if (!_additionalPeers.TryGetValue(peer.m_SteamID, out var entry)) return;
+            _additionalPeers.Remove(peer.m_SteamID);
+
+            if (entry.Notified)
+            {
+                OnPeerDisconnected?.Invoke(entry.PeerId, reason);
+            }
+
+            if (_remoteSteamId == CSteamID.Nil && !HasNotifiedAdditionalPeer())
+            {
+                IsConnected = false;
+            }
+        }
+
+        private bool HasNotifiedAdditionalPeer()
+        {
+            foreach (var pair in _additionalPeers)
+            {
+                if (pair.Value.Notified) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// When the primary peer leaves, keep the session alive by promoting the first
+        /// already-validated additional peer to the primary slot. Its connection and clone
+        /// already exist, so no second OnPeerConnected event is emitted.
+        /// </summary>
+        private bool PromoteAdditionalPeerToPrimary()
+        {
+            ulong promoteKey = 0;
+            AdditionalPeer? promote = null;
+            foreach (var pair in _additionalPeers)
+            {
+                if (pair.Value.Notified)
+                {
+                    promoteKey = pair.Key;
+                    promote = pair.Value;
+                    break;
+                }
+            }
+
+            if (promote == null) return false;
+
+            _additionalPeers.Remove(promoteKey);
+            _remoteSteamId = promote.SteamId;
+            _peerConnectNotified = true;
+            IsConnected = true;
+            _rttMs = 0;
+            _packetLossPercent = 0;
+            _lastPingSentMs = 0;
+            _lastPongReceivedMs = NowMs();
+            _lossWindowStartMs = 0;
+            _pingsSentInWindow = 0;
+            _pongsReceivedInWindow = 0;
+            return true;
+        }
+
+        private void ClearAdditionalPeers(DisconnectReason reason, bool notify)
+        {
+            if (_additionalPeers.Count == 0) return;
+
+            var removed = new List<AdditionalPeer>(_additionalPeers.Values);
+            _additionalPeers.Clear();
+            for (int i = 0; i < removed.Count; i++)
+            {
+                try { SteamNetworking.CloseP2PSessionWithUser(removed[i].SteamId); } catch { /* best-effort */ }
+                if (notify && removed[i].Notified)
+                {
+                    OnPeerDisconnected?.Invoke(removed[i].PeerId, reason);
+                }
+            }
+        }
+
         #endregion // Connection Notification Helpers
 
         #region Data Transmission
@@ -413,10 +652,10 @@ namespace SilksongCoop.Mod.Networking
             }
         }
 
-        /// <summary>Current Steam transport holds one remote peer at a time.</summary>
-        public int MaxRemotePeers => 1;
+        /// <summary>Current Steam transport holds one primary peer plus additional lobby members.</summary>
+        public int MaxRemotePeers => Math.Max(0, _maxPlayers - 1);
 
-        /// <summary>Steam clients can connect directly; host relay is not implemented.</summary>
+        /// <summary>Steam clients connect directly; no host relay is needed.</summary>
         public bool SupportsHostRelay => false;
 
         /// <summary>
@@ -430,8 +669,22 @@ namespace SilksongCoop.Mod.Networking
         /// <param name="channel">Channel index (0–255).</param>
         public void Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
-            if (!IsSteamAvailable || _remoteSteamId == CSteamID.Nil) return;
+            if (!IsSteamAvailable) return;
             if (data == null || offset < 0 || length < 0 || offset + length > data.Length) return;
+
+            CSteamID targetId;
+            if (_remoteSteamId != CSteamID.Nil && target.Value == _remoteSteamId.m_SteamID && IsConnected)
+            {
+                targetId = _remoteSteamId;
+            }
+            else if (_additionalPeers.TryGetValue(target.Value, out var additional) && additional.Notified)
+            {
+                targetId = additional.SteamId;
+            }
+            else
+            {
+                return;
+            }
 
             EP2PSend sendType = (method == DeliveryMethod.Unreliable || method == DeliveryMethod.Sequenced)
                 ? EP2PSend.k_EP2PSendUnreliableNoDelay
@@ -449,10 +702,10 @@ namespace SilksongCoop.Mod.Networking
 
             try
             {
-                bool sent = SteamNetworking.SendP2PPacket(_remoteSteamId, _sendBuffer, (uint)framedLength, sendType, channel);
+                bool sent = SteamNetworking.SendP2PPacket(targetId, _sendBuffer, (uint)framedLength, sendType, channel);
                 if (!sent && method == DeliveryMethod.ReliableOrdered)
                 {
-                    Logger?.LogWarning($"Failed to send P2P packet to {_remoteSteamId.m_SteamID} on channel {channel}");
+                    Logger?.LogWarning($"Failed to send P2P packet to {targetId.m_SteamID} on channel {channel}");
                 }
             }
             catch (Exception ex)
@@ -538,10 +791,16 @@ namespace SilksongCoop.Mod.Networking
                     // A host keeps its lobby: the plugin reports "still hosting" and the
                     // partner can rejoin the same lobby after fixing the connection. Only a
                     // client leaves, because its lobby membership belongs to the host.
-                    if (!IsHost && _lobbyId != CSteamID.Nil)
+                    if (!IsHost)
                     {
-                        try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
-                        _lobbyId = CSteamID.Nil;
+                        // Leaving the lobby also invalidates every additional full-mesh
+                        // peer; clear them before promoting anything to the primary slot.
+                        ClearAdditionalPeers(DisconnectReason.Timeout, notify: true);
+                        if (_lobbyId != CSteamID.Nil)
+                        {
+                            try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
+                            _lobbyId = CSteamID.Nil;
+                        }
                     }
                     if (_remoteSteamId != CSteamID.Nil)
                     {
@@ -549,6 +808,31 @@ namespace SilksongCoop.Mod.Networking
                     }
                     NotifyPeerDisconnected(DisconnectReason.Timeout);
                     return;
+                }
+            }
+
+            // Additional full-mesh peers do not run RTT probes, but they must not stay
+            // "connected" forever after a crash or network loss.
+            if (_additionalPeers.Count > 0)
+            {
+                long now = NowMs();
+                List<CSteamID>? stale = null;
+                foreach (var pair in _additionalPeers)
+                {
+                    if (now - pair.Value.LastSeenMs > SteamHeartbeatTimeoutMs)
+                    {
+                        (stale ??= new List<CSteamID>()).Add(pair.Value.SteamId);
+                    }
+                }
+
+                if (stale != null)
+                {
+                    for (int i = 0; i < stale.Count; i++)
+                    {
+                        Logger?.LogWarning($"[Steam] Additional peer heartbeat timed out: {stale[i].m_SteamID}");
+                        try { SteamNetworking.CloseP2PSessionWithUser(stale[i]); } catch { /* best-effort */ }
+                        NotifyAdditionalPeerDisconnected(stale[i], DisconnectReason.Timeout);
+                    }
                 }
             }
 
@@ -583,11 +867,14 @@ namespace SilksongCoop.Mod.Networking
                             // the rest of its lobby membership. Check before the RTT branch:
                             // otherwise its control pings would keep the heartbeat alive and
                             // mask a session whose game data is never accepted.
-                            if (_protocolRejectedPeer != CSteamID.Nil && remoteId == _protocolRejectedPeer)
+                            if ((_protocolRejectedPeer != CSteamID.Nil && remoteId == _protocolRejectedPeer) ||
+                                _additionalRejectedPeers.Contains(remoteId.m_SteamID))
                             {
                                 try { SteamNetworking.CloseP2PSessionWithUser(remoteId); } catch { /* best-effort */ }
                                 if (_remoteSteamId == remoteId)
                                     NotifyPeerDisconnected(DisconnectReason.VersionMismatch);
+                                else
+                                    NotifyAdditionalPeerDisconnected(remoteId, DisconnectReason.VersionMismatch);
                                 continue;
                             }
 
@@ -635,8 +922,24 @@ namespace SilksongCoop.Mod.Networking
                             }
                             else if (_remoteSteamId != remoteId)
                             {
-                                Logger?.LogWarning($"[Steam] Rejected packet from unexpected peer: {remoteId.m_SteamID}");
-                                continue;
+                                // 3+ full mesh: any other member of our lobby may become an
+                                // additional peer. The primary slot keeps the original path.
+                                if (!_additionalPeers.ContainsKey(remoteId.m_SteamID))
+                                {
+                                    if (!IsLobbyMember(remoteId))
+                                    {
+                                        Logger?.LogWarning($"[Steam] Rejected packet from non-lobby user: {remoteId.m_SteamID}");
+                                        SteamNetworking.CloseP2PSessionWithUser(remoteId);
+                                        continue;
+                                    }
+
+                                    AddAdditionalPeer(remoteId);
+                                    if (!_additionalPeers.ContainsKey(remoteId.m_SteamID))
+                                    {
+                                        Logger?.LogWarning($"[Steam] Rejected packet from extra peer {remoteId.m_SteamID} (full or rejected)");
+                                        continue;
+                                    }
+                                }
                             }
 
                             ushort remoteProtocol = (ushort)(_readBuffer[0] | (_readBuffer[1] << 8));
@@ -644,26 +947,47 @@ namespace SilksongCoop.Mod.Networking
                             {
                                 Logger?.LogWarning(
                                     $"[Steam] Peer protocol {remoteProtocol} is incompatible with local {NetworkProtocol.Version}; disconnecting {remoteId.m_SteamID}");
-                                _protocolRejectedPeer = remoteId;
+
+                                bool isPrimary = _remoteSteamId == remoteId ||
+                                                 (_remoteSteamId == CSteamID.Nil && IsHost);
+                                if (isPrimary)
+                                {
+                                    _protocolRejectedPeer = remoteId;
+                                }
+                                else
+                                {
+                                    _additionalRejectedPeers.Add(remoteId.m_SteamID);
+                                }
+
                                 try { SteamNetworking.CloseP2PSessionWithUser(remoteId); } catch { /* best-effort */ }
                                 if (_remoteSteamId == remoteId)
                                     NotifyPeerDisconnected(DisconnectReason.VersionMismatch);
+                                else
+                                    NotifyAdditionalPeerDisconnected(remoteId, DisconnectReason.VersionMismatch);
                                 continue;
                             }
 
-                            // The host adopts the peer only after it passed both lobby and
-                            // protocol validation.
+                            // The host adopts the primary peer only after it passed both lobby
+                            // and protocol validation. Other lobby members are already in
+                            // _additionalPeers.
                             if (_remoteSteamId == CSteamID.Nil)
                                 _remoteSteamId = remoteId;
 
-                            if (!_peerConnectNotified && _remoteSteamId == remoteId)
+                            if (_remoteSteamId == remoteId)
                             {
-                                NotifyPeerConnected(remoteId);
-                            }
+                                if (!_peerConnectNotified)
+                                    NotifyPeerConnected(remoteId);
 
-                            // Any authenticated traffic proves the peer is alive; do not
-                            // require the RTT probe specifically to succeed.
-                            _lastPongReceivedMs = NowMs();
+                                // Any authenticated traffic proves the peer is alive; do not
+                                // require the RTT probe specifically to succeed.
+                                _lastPongReceivedMs = NowMs();
+                            }
+                            else if (_additionalPeers.TryGetValue(remoteId.m_SteamID, out var additionalPeer))
+                            {
+                                additionalPeer.LastSeenMs = NowMs();
+                                if (!additionalPeer.Notified)
+                                    NotifyAdditionalPeerConnected(remoteId);
+                            }
 
                             // Capture buffer reference to avoid aliasing if buffer is resized.
                             // Skip the protocol prefix: the game layer sees a bare packet.
@@ -858,56 +1182,67 @@ namespace SilksongCoop.Mod.Networking
 
                 // Send the protocol revision to trigger P2P session acceptance on the host
                 // and let it verify compatibility before marking the session connected.
+                SendHandshake(hostId);
+
+                // 3+ full mesh: connect to every other lobby member as well. The host and
+                // other clients will do the same when they see this client join.
                 try
                 {
-                    byte[] handshake = new byte[]
+                    int memberCount = SteamMatchmaking.GetNumLobbyMembers(_lobbyId);
+                    CSteamID self = SteamUser.GetSteamID();
+                    for (int i = 0; i < memberCount; i++)
                     {
-                        (byte)(NetworkProtocol.Version & 0xFF),
-                        (byte)(NetworkProtocol.Version >> 8)
-                    };
-                    bool sent = SteamNetworking.SendP2PPacket(hostId, handshake, (uint)handshake.Length, EP2PSend.k_EP2PSendReliable, 2);
-                    if (!sent)
-                        Logger?.LogWarning("[Steam] Failed to send handshake packet to host");
+                        CSteamID member = SteamMatchmaking.GetLobbyMemberByIndex(_lobbyId, i);
+                        if (member == CSteamID.Nil || member == self || member == hostId)
+                            continue;
+
+                        AddAdditionalPeer(member);
+                    }
                 }
                 catch (Exception ex)
                 {
-                    Logger?.LogWarning($"[Steam] Failed to send Steam handshake: {ex.Message}");
+                    Logger?.LogWarning($"[Steam] Failed to enumerate lobby members for full mesh: {ex.Message}");
                 }
             }
         }
 
         private void OnP2PSessionRequest(P2PSessionRequest_t callback)
         {
+            CSteamID remote = callback.m_steamIDRemote;
+
             // A peer rejected for an incompatible protocol must not be re-adopted by a
             // session request while it is still in the lobby.
-            if (_protocolRejectedPeer != CSteamID.Nil && _protocolRejectedPeer == callback.m_steamIDRemote)
+            if ((_protocolRejectedPeer != CSteamID.Nil && _protocolRejectedPeer == remote) ||
+                _additionalRejectedPeers.Contains(remote.m_SteamID))
             {
-                SteamNetworking.CloseP2PSessionWithUser(callback.m_steamIDRemote);
+                SteamNetworking.CloseP2PSessionWithUser(remote);
                 return;
             }
 
-            // Only accept P2P traffic from the expected peer, or (on the host) from a
-            // verified member of the current lobby. Being able to send a Steam packet to a
-            // SteamID must not be enough to claim the single co-op slot.
-            if (_remoteSteamId != CSteamID.Nil && _remoteSteamId == callback.m_steamIDRemote)
+            if (_remoteSteamId != CSteamID.Nil && _remoteSteamId == remote)
             {
-                SteamNetworking.AcceptP2PSessionWithUser(callback.m_steamIDRemote);
+                SteamNetworking.AcceptP2PSessionWithUser(remote);
             }
-            else if (_remoteSteamId == CSteamID.Nil && IsHost && IsLobbyMember(callback.m_steamIDRemote))
+            else if (IsLobbyMember(remote))
             {
-                SteamNetworking.AcceptP2PSessionWithUser(callback.m_steamIDRemote);
-                _remoteSteamId = callback.m_steamIDRemote;
-
-                // Do not report the session as connected here. A Steam P2P session only
-                // proves lobby membership, not build compatibility. NotifyPeerConnected
-                // runs after the first datagram is validated against the protocol
-                // revision, so an incompatible client never initializes the game session.
+                // Full mesh: any verified lobby member may be a peer. Only the host may
+                // claim the primary slot here; a client waits for OnLobbyEntered to resolve
+                // the host before accepting game data.
+                SteamNetworking.AcceptP2PSessionWithUser(remote);
+                if (_remoteSteamId == CSteamID.Nil && IsHost)
+                {
+                    _remoteSteamId = remote;
+                }
+                else if (_remoteSteamId != CSteamID.Nil && _remoteSteamId != remote)
+                {
+                    AddAdditionalPeer(remote);
+                }
             }
             else
             {
-                // Reject session requests from unexpected peers
-                SteamNetworking.CloseP2PSessionWithUser(callback.m_steamIDRemote);
-                Logger?.LogWarning($"Rejected P2P session request from unexpected peer: {callback.m_steamIDRemote.m_SteamID}");
+                // Reject session requests from unexpected peers.
+                SteamNetworking.CloseP2PSessionWithUser(remote);
+                Logger?.LogWarning($"Rejected P2P session request from unexpected peer: {remote.m_SteamID}");
             }
         }
 
@@ -920,6 +1255,8 @@ namespace SilksongCoop.Mod.Networking
 
             IsHost = false;
             _protocolRejectedPeer = CSteamID.Nil;
+            _additionalRejectedPeers.Clear();
+            ClearAdditionalPeers(DisconnectReason.GracefulDisconnect, notify: false);
             _requestedLobbyId = callback.m_steamIDLobby.m_SteamID;
             _lobbyRequestGeneration = ++_sessionGeneration;
             SilksongCoopPlugin.Instance?.SetActiveTransport(this);
@@ -959,52 +1296,57 @@ namespace SilksongCoop.Mod.Networking
                 if (joinedUser == SteamUser.GetSteamID())
                     return;
 
-                // Host: detect client joining the lobby
+                // Host: detect client joining the lobby. A client also connects to every
+                // other member (full mesh) so a third player is visible to both existing
+                // peers without a relay.
                 if (IsHost)
                 {
                     // This callback can arrive after the first game datagram, so the peer
                     // may already have been rejected for an incompatible protocol. Do not
                     // re-adopt it.
-                    if (_protocolRejectedPeer != CSteamID.Nil && _protocolRejectedPeer == joinedUser)
+                    if ((_protocolRejectedPeer != CSteamID.Nil && _protocolRejectedPeer == joinedUser) ||
+                        _additionalRejectedPeers.Contains(joinedUser.m_SteamID))
                     {
                         try { SteamNetworking.CloseP2PSessionWithUser(joinedUser); } catch { /* best-effort */ }
                         return;
                     }
 
-                    if (_remoteSteamId != CSteamID.Nil && _remoteSteamId != joinedUser)
+                    if (_remoteSteamId == CSteamID.Nil)
                     {
-                        try { SteamNetworking.CloseP2PSessionWithUser(joinedUser); } catch { /* best-effort */ }
-                        Logger?.LogWarning($"[Steam] Ignoring additional lobby member {joinedUser.m_SteamID} - slot already taken");
-                        return;
+                        _remoteSteamId = joinedUser;
+                        try { SteamNetworking.AcceptP2PSessionWithUser(joinedUser); } catch { /* best-effort */ }
+                        SendHandshake(joinedUser);
                     }
-
-                    _remoteSteamId = joinedUser;
-
-                    // Accept the P2P session up front and send a handshake.
-                    try
+                    else if (_remoteSteamId == joinedUser)
                     {
-                        SteamNetworking.AcceptP2PSessionWithUser(joinedUser);
-                        // Send the protocol revision so the peer can verify compatibility
-                        // before marking the session connected. A bare 0x01 ping carried
-                        // no version and could not gate the connection.
-                        byte[] handshake = new byte[]
+                        try { SteamNetworking.AcceptP2PSessionWithUser(joinedUser); } catch { /* best-effort */ }
+                        SendHandshake(joinedUser);
+                    }
+                    else
+                    {
+                        AddAdditionalPeer(joinedUser);
+                    }
+                }
+                else
+                {
+                    // Client: the host is the primary peer; every other member is an
+                    // additional full-mesh peer.
+                    CSteamID owner = CSteamID.Nil;
+                    try { owner = SteamMatchmaking.GetLobbyOwner(_lobbyId); } catch { /* best-effort */ }
+
+                    if (owner != CSteamID.Nil && joinedUser == owner)
+                    {
+                        if (_remoteSteamId != joinedUser)
                         {
-                            (byte)(NetworkProtocol.Version & 0xFF),
-                            (byte)(NetworkProtocol.Version >> 8)
-                        };
-                        SteamNetworking.SendP2PPacket(
-                            joinedUser,
-                            handshake,
-                            (uint)handshake.Length,
-                            EP2PSend.k_EP2PSendReliable,
-                            2);
+                            _remoteSteamId = joinedUser;
+                            try { SteamNetworking.AcceptP2PSessionWithUser(joinedUser); } catch { /* best-effort */ }
+                            SendHandshake(joinedUser);
+                        }
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        Logger?.LogWarning($"[Steam] Failed to prepare P2P session for {joinedUser.m_SteamID}: {ex.Message}");
+                        AddAdditionalPeer(joinedUser);
                     }
-
-                    // Don't notify connected until protocol verified on first valid packet
                 }
             }
             else if ((callback.m_rgfChatMemberStateChange & (uint)EChatMemberStateChange.k_EChatMemberStateChangeLeft) != 0 ||
@@ -1016,14 +1358,40 @@ namespace SilksongCoop.Mod.Networking
                 // and rejoins; the rejection is scoped to one lobby membership.
                 if (_protocolRejectedPeer != CSteamID.Nil && _protocolRejectedPeer == leftUser)
                     _protocolRejectedPeer = CSteamID.Nil;
+                _additionalRejectedPeers.Remove(leftUser.m_SteamID);
 
-                // Role-agnostic: the client must also notice when the host leaves the
-                // lobby, otherwise it stays "connected" and streams into the void.
                 if (_remoteSteamId != CSteamID.Nil && _remoteSteamId == leftUser)
                 {
                     Logger?.LogInfo($"[Steam] Remote peer left lobby: {leftUser.m_SteamID}");
+
+                    // A client's primary peer is the host. If the host leaves, the lobby
+                    // is over for this client; remove every peer and leave the lobby.
+                    bool hostLeft = !IsHost;
+                    if (hostLeft)
+                    {
+                        ClearAdditionalPeers(DisconnectReason.PeerDisconnected, notify: true);
+                        _remoteSteamId = CSteamID.Nil;
+                        _peerConnectNotified = false;
+                        IsConnected = false;
+                        if (_lobbyId != CSteamID.Nil)
+                        {
+                            try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
+                            _lobbyId = CSteamID.Nil;
+                        }
+                        try { SteamNetworking.CloseP2PSessionWithUser(leftUser); } catch { /* best-effort */ }
+                        OnPeerDisconnected?.Invoke(new NetworkPeerId(leftUser.m_SteamID), DisconnectReason.PeerDisconnected);
+                    }
+                    else
+                    {
+                        try { SteamNetworking.CloseP2PSessionWithUser(leftUser); } catch { /* best-effort */ }
+                        NotifyPeerDisconnected(DisconnectReason.PeerDisconnected);
+                    }
+                }
+                else if (_additionalPeers.ContainsKey(leftUser.m_SteamID))
+                {
+                    Logger?.LogInfo($"[Steam] Additional peer left lobby: {leftUser.m_SteamID}");
                     try { SteamNetworking.CloseP2PSessionWithUser(leftUser); } catch { /* best-effort */ }
-                    NotifyPeerDisconnected(DisconnectReason.PeerDisconnected);
+                    NotifyAdditionalPeerDisconnected(leftUser, DisconnectReason.PeerDisconnected);
                 }
             }
         }

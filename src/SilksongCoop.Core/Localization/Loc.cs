@@ -254,6 +254,7 @@ namespace SilksongCoop.Core.Localization
 
             // ── Connection status messages ────────────────────────────────────
             ["Connected to {0}"] = "Подключено к {0}",
+            ["Player left: {0}"] = "Игрок вышел: {0}",
             ["Partner timed out — still hosting. Share the same room code to reconnect."] =
                 "Напарник не отвечает — хостинг продолжается. Передайте тот же код комнаты для переподключения.",
             ["Partner left — still hosting. Share the same room code to reconnect."] =

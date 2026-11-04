@@ -147,6 +147,7 @@ namespace SilksongCoop.Mod.Diagnostics
             text.AppendLine($"TickRateHz: {plugin.TickRateHzConfig?.Value}");
             text.AppendLine($"AutoReconnect: {plugin.AutoReconnectConfig?.Value}");
             text.AppendLine($"MaxReconnectAttempts: {plugin.MaxReconnectAttemptsConfig?.Value}");
+            text.AppendLine($"SteamMaxPlayers: {plugin.SteamMaxPlayersConfig?.Value}");
             text.AppendLine($"SaveConnectionHistory: {plugin.SaveConnectionHistoryConfig?.Value}");
             text.AppendLine($"Language: {plugin.LanguageConfig?.Value}");
             text.AppendLine($"OnboardingCompleted: {plugin.OnboardingCompletedConfig?.Value}");
