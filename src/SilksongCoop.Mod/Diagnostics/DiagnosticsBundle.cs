@@ -119,6 +119,11 @@ namespace SilksongCoop.Mod.Diagnostics
                 text.AppendLine($"transport_connected: {transport.IsConnected}");
                 text.AppendLine($"transport_rtt_ms: {transport.RoundTripTimeMs:F2}");
                 text.AppendLine($"transport_loss_percent: {transport.PacketLossPercent:F2}");
+                if (transport is IMultiPeerTransport multiPeer)
+                {
+                    text.AppendLine($"transport_max_remote_peers: {multiPeer.MaxRemotePeers}");
+                    text.AppendLine($"transport_host_relay: {multiPeer.SupportsHostRelay}");
+                }
             }
             else
             {

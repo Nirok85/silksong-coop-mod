@@ -8,6 +8,15 @@ namespace SilksongCoop.Core.Networking
     /// </summary>
     public interface IMultiPeerTransport : INetworkTransport
     {
+        /// <summary>
+        /// Maximum number of remote peers this transport can hold. Legacy single-peer
+        /// transports report 1; a host-relay/full-mesh transport reports its real limit.
+        /// </summary>
+        int MaxRemotePeers { get; }
+
+        /// <summary>True when the host forwards peer-to-peer traffic (UDP relay).</summary>
+        bool SupportsHostRelay { get; }
+
         void Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel);
     }
 

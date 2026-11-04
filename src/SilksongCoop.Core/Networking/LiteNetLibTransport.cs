@@ -618,6 +618,12 @@ namespace SilksongCoop.Core.Networking
             }
         }
 
+        /// <summary>Legacy UDP transport holds one remote peer at a time.</summary>
+        public int MaxRemotePeers => 1;
+
+        /// <summary>Client-to-client UDP relay is not implemented yet.</summary>
+        public bool SupportsHostRelay => false;
+
         /// <summary>
         /// Sends data to the specified target peer.
         /// </summary>

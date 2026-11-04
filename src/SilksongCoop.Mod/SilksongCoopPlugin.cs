@@ -1282,16 +1282,38 @@ namespace SilksongCoop.Mod
         }
 
         /// <summary>
+        /// True when <paramref name="peer"/> is the current session partner or one of the
+        /// additional peers registered for a future multi-peer transport. The legacy
+        /// single-peer path always registers exactly one peer.
+        /// </summary>
+        private bool IsKnownPeer(NetworkPeerId peer)
+        {
+            var session = SessionState;
+            if (session == null) return false;
+
+            if (session.RemotePeerId.HasValue && session.RemotePeerId.Value == peer)
+                return true;
+
+            var peers = session.RemotePeerIds;
+            for (int i = 0; i < peers.Count; i++)
+            {
+                if (peers[i] == peer) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// Dispatches one framed packet.
         /// </summary>
         private void ProcessPacket(NetworkPeerId peer, ReadOnlySpan<byte> span)
         {
             try
             {
-                // Every gameplay packet must come from the session peer. Without this,
-                // a queued packet from a previous connection (or a second endpoint in a
-                // future multi-peer transport) could mutate the new session's state.
-                if (SessionState?.RemotePeerId == null || SessionState.RemotePeerId.Value != peer)
+                // Every gameplay packet must come from a registered session peer. Without
+                // this, a queued packet from a previous connection (or a second endpoint in
+                // a future multi-peer transport) could mutate the new session's state.
+                if (!IsKnownPeer(peer))
                 {
                     MenuUI?.Diagnostics?.RecordRejected();
                     return;

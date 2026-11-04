@@ -37,8 +37,9 @@ arbitration, this section must be rewritten together with the protocol revision.
 
 ## Transport trust boundary
 
-`SilksongCoopPlugin.ProcessPacket` drops any datagram whose sender is not the
-current `SessionState.RemotePeerId`, before desync frames or gameplay packets are
+`SilksongCoopPlugin.ProcessPacket` drops any datagram whose sender is not a
+registered session peer (the first `RemotePeerId` or an entry in
+`SessionState.RemotePeerIds`), before desync frames or gameplay packets are
 parsed. This keeps a queued packet from a previous connection (or a second
 endpoint) from mutating the new session. Rejected packets are counted in the
 diagnostics rather than logged one by one.

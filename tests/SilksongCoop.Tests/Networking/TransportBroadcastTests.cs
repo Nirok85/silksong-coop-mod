@@ -109,6 +109,8 @@ namespace SilksongCoop.Tests.Networking
             public RecordingMultiPeerTransport(IReadOnlyList<NetworkPeerId> peers) : base(peers) { }
 
             public int BroadcastCalls { get; private set; }
+            public int MaxRemotePeers => 3;
+            public bool SupportsHostRelay => false;
 
             public void Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel)
             {

@@ -413,6 +413,12 @@ namespace SilksongCoop.Mod.Networking
             }
         }
 
+        /// <summary>Current Steam transport holds one remote peer at a time.</summary>
+        public int MaxRemotePeers => 1;
+
+        /// <summary>Steam clients can connect directly; host relay is not implemented.</summary>
+        public bool SupportsHostRelay => false;
+
         /// <summary>
         /// Sends data to a remote peer via Steam P2P.
         /// </summary>
