@@ -117,8 +117,12 @@ Produces, with the version read from `SilksongCoop.Mod.csproj`:
 | `dist/SilksongCoop_vX.Y.Z_SHA256SUMS.txt` | hashes of both archives |
 
 The script downloads BepInEx unless `BEPINEX_ZIP` points at a local copy;
-`SKIP_BUNDLE=1` builds only the plugin-only package. Pin the loader with
-`-BepInExSha256`/`BEPINEX_SHA256`, and check that ZIP entry names use `/` so the
+`SKIP_BUNDLE=1` builds only the plugin-only package. A caller-provided archive
+**must** be pinned with `-BepInExSha256`/`BEPINEX_SHA256`; the script refuses to
+build otherwise (`-AllowUnpinnedBepInEx` / `ALLOW_UNPINNED_BEPINEX=1` exists only
+for local tests, never for a release). A downloaded archive is checked against the
+built-in SHA-256 pin. The plugin-only build now writes its own
+`SilksongCoop_vX.Y.Z_SHA256SUMS.txt` too. Check that ZIP entry names use `/` so the
 plugin-only archive extracts correctly on Unix. Do not publish without the hashes.
 
 ## 4. Commit, tag, push

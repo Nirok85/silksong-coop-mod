@@ -17,6 +17,7 @@ param(
     [string]$BepInExZip = $env:BEPINEX_ZIP,
     [string]$BepInExSha256 = $env:BEPINEX_SHA256,
     [switch]$SkipBundle,
+    [switch]$AllowUnpinnedBepInEx,
     [switch]$NoRestore
 )
 
@@ -53,8 +54,7 @@ function Assert-File {
 }
 
 function Assert-SafeZip {
-    param([string]$Path)
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    param([string]$Path)    Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [System.IO.Compression.ZipFile]::OpenRead($Path)
     try {
         foreach ($entry in $archive.Entries) {
@@ -102,8 +102,24 @@ function New-PortableZip {
     }
 }
 
+function Write-ChecksumManifest {
+    param([string]$Directory, [string]$Version, [string[]]$Files)
+
+    $hashes = Get-FileHash $Files -Algorithm SHA256
+    $hashes |
+        Select-Object @{ Name = 'File'; Expression = { Split-Path $_.Path -Leaf } }, Hash |
+        Format-Table -AutoSize
+
+    $manifest = Join-Path $Directory "SilksongCoop_v${Version}_SHA256SUMS.txt"
+    $hashes | ForEach-Object {
+        "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)"
+    } | Set-Content -LiteralPath $manifest -Encoding ASCII
+    Write-Host "  -> $manifest"
+}
+
 function Copy-ReleaseDocs {
     param([string]$Destination)
+
     foreach ($doc in @('README.md', 'README.ru.md', 'CHANGELOG.md', 'ROADMAP.md')) {
         $path = Join-Path $root $doc
         if (Test-Path -LiteralPath $path -PathType Leaf) {
@@ -172,6 +188,8 @@ try {
 
     if ($SkipBundle) {
         Write-Host '==> -SkipBundle: self-contained package skipped' -ForegroundColor Yellow
+        Write-Host '==> SHA256' -ForegroundColor Cyan
+        Write-ChecksumManifest -Directory $OutputDir -Version $version -Files @($pluginZip)
         return
     }
 
@@ -193,8 +211,11 @@ try {
     elseif (-not $bepInExWasProvided) {
         $defaultBepInExSha256
     }
-    else {
+    elseif ($AllowUnpinnedBepInEx) {
         ''
+    }
+    else {
+        throw 'A caller-provided -BepInExZip requires -BepInExSha256 (or BEPINEX_SHA256). Use -AllowUnpinnedBepInEx only for local tests, never for a release.'
     }
 
     if (-not [string]::IsNullOrWhiteSpace($expectedBepInExHash)) {
@@ -204,7 +225,7 @@ try {
         Write-Host '  [ok]   BepInEx SHA256 matches the pinned value'
     }
     else {
-        Write-Host '  [warn] BepInEx SHA256 is not pinned for a caller-provided archive; pass -BepInExSha256 (or BEPINEX_SHA256)' -ForegroundColor Yellow
+        Write-Host '  [warn] BepInEx SHA256 is not pinned (-AllowUnpinnedBepInEx); do not publish this archive' -ForegroundColor Yellow
     }
 
     Assert-SafeZip $BepInExZip
@@ -228,16 +249,7 @@ try {
     Write-Host "  -> $fullZip"
 
     Write-Host '==> SHA256' -ForegroundColor Cyan
-    $hashes = Get-FileHash $pluginZip, $fullZip -Algorithm SHA256
-    $hashes |
-        Select-Object @{ Name = 'File'; Expression = { Split-Path $_.Path -Leaf } }, Hash |
-        Format-Table -AutoSize
-
-    $manifest = Join-Path $OutputDir "SilksongCoop_v${version}_SHA256SUMS.txt"
-    $hashes | ForEach-Object {
-        "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)"
-    } | Set-Content -LiteralPath $manifest -Encoding ASCII
-    Write-Host "  -> $manifest"
+    Write-ChecksumManifest -Directory $OutputDir -Version $version -Files @($pluginZip, $fullZip)
 }
 finally {
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue

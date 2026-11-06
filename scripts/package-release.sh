@@ -72,12 +72,26 @@ rm -f "$PLUGIN_ZIP"
 (cd "$PLUGIN" && zip -qr "$PLUGIN_ZIP" .)
 echo "  -> $PLUGIN_ZIP"
 
+write_plugin_manifest() {
+    HASH_FILE="$OUT_DIR/SilksongCoop_v${VERSION}_SHA256SUMS.txt"
+    (cd "$OUT_DIR" && sha256sum "SilksongCoop_v${VERSION}_plugin-only.zip" > "$HASH_FILE")
+    cat "$HASH_FILE"
+}
+
 if [ "${SKIP_BUNDLE:-0}" = "1" ]; then
     echo "==> SKIP_BUNDLE=1 — skipping self-contained package"
+    echo "==> SHA256"
+    write_plugin_manifest
     exit 0
 fi
 
 # ---------------- self-contained (Windows) package ----------------
+DEFAULT_BEPINEX_SHA="2af69fe0aaf821e95c4cd3e4d53860e667c54648f97dca6f971a5bcd3c22aa34"
+if [ -n "${BEPINEX_ZIP:-}" ] && [ -z "${BEPINEX_SHA256:-}" ] && [ "${ALLOW_UNPINNED_BEPINEX:-0}" != "1" ]; then
+    echo "error: BEPINEX_ZIP requires BEPINEX_SHA256 (set ALLOW_UNPINNED_BEPINEX=1 only for local tests)" >&2
+    exit 1
+fi
+
 BEPINEX_SRC="${BEPINEX_ZIP:-$WORK/bepinex.zip}"
 if [ -z "${BEPINEX_ZIP:-}" ]; then
     echo "==> Downloading BepInEx $BEPINEX_VERSION"
@@ -93,8 +107,14 @@ if [ -n "${BEPINEX_SHA256:-}" ]; then
         exit 1
     fi
     echo "  [ok]   BepInEx SHA256 matches the pinned value"
+elif [ -z "${BEPINEX_ZIP:-}" ]; then
+    if [ "$ACTUAL_BEPINEX_SHA" != "$DEFAULT_BEPINEX_SHA" ]; then
+        echo "error: downloaded BepInEx SHA256 does not match the built-in pin $DEFAULT_BEPINEX_SHA" >&2
+        exit 1
+    fi
+    echo "  [ok]   downloaded BepInEx matches the built-in SHA256"
 else
-    echo "  [warn] BepInEx SHA256 is not pinned; set BEPINEX_SHA256 for release builds"
+    echo "  [warn] BepInEx SHA256 is not pinned (ALLOW_UNPINNED_BEPINEX=1); do not publish this archive"
 fi
 
 WIN="$WORK/win"
