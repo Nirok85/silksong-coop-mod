@@ -1,11 +1,12 @@
 # Migration guide: 2.x → 3.0.0
 
-> **Patch 3.0.3-3.3.0:** no protocol change and no extra migration step. Install
-> 3.3.0 instead of 3.0.0; Steam lobbies compare the full mod version, so both
-> players should use the same release (UDP remains wire-compatible with 3.0.x,
-> but stable pickup dedup needs 3.2.0 on both sides). 3.3.0 adds the optional
-> `[Network] SteamMaxPlayers`; leave it at 2 unless every player is on 3.3.0 and
-> wants the experimental 3+ Steam mesh.
+> **Patch 3.0.3-3.3.1:** no protocol change and no extra migration step. Install
+> 3.3.1 instead of 3.0.0; Steam lobbies compare the full mod version, so both
+> players must use the same release (UDP remains wire-compatible with 3.0.x,
+> but stable pickup dedup needs 3.2.0 on both sides and correct combined-damage
+> semantics need 3.3.1). 3.3.0 adds the optional `[Network] SteamMaxPlayers`;
+> leave it at 2 unless every player is on 3.3.1 and wants the experimental 3+
+> Steam mesh.
 
 ## Breaking changes
 

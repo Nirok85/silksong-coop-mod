@@ -1,4 +1,7 @@
-# Release checklist (3.3.0)
+# Release checklist
+
+> Substitute the release version for `<version>` below. The checklist is intentionally
+> version-neutral so it cannot silently describe a previous release.
 
 ## Pre-release
 
@@ -7,9 +10,10 @@
 - [ ] All tests pass and none are unexpectedly skipped (do not gate on a hard-coded count).
 - [ ] Core and Mod build with 0 compiler warnings (TreatWarningsAsErrors=true; NU1900 is a NuGet network warning).
 - [ ] Protocol version is unchanged or bumped and documented (`docs/protocol-v8.md`).
-- [ ] Plugin version and assembly versions bumped to 3.3.0.
+- [ ] Plugin version and assembly versions bumped to `<version>` in both csproj files and `PluginVersion`.
+- [ ] Release commit SHA recorded together with the version.
 - [ ] Migration guide updated.
-- [ ] CHANGELOG.md updated.
+- [ ] CHANGELOG.md updated (`[Unreleased]` moved to `[<version>]`).
 - [ ] README.md / README.ru.md updated - limits section matches what is implemented.
 
 ## Build
@@ -33,26 +37,28 @@
 
 ## Smoke tests (manual)
 
-Record game version, mod version, OS, transport and pass/fail for every run.
+Record game version, mod version, release commit SHA, OS, transport and pass/fail for every run.
 
 - [ ] Host + client connect (UDP and Steam).
 - [ ] Version mismatch rejected.
 - [ ] Dual join rejected on host.
 - [ ] Death/revive visibility, including a partner who dies immediately after a bench respawn.
 - [ ] Simultaneous hits: both players hit the same enemy and the combined damage is not lost.
+- [ ] Snapshot + late hit: a hit that is already in the host snapshot is not counted twice.
+- [ ] Pending world state: a door/chest changed while the other player is in another room does not roll back after that player enters.
 - [ ] Scene transition + cross-scene revive falls back to the local bench.
 - [ ] Reconnect to the same host after a graceful disconnect and after a timeout.
 - [ ] Late joiner catch-up: third player sees existing enemy HP/deaths, opened doors and inventory.
 - [ ] Steam 3+ lobby (`SteamMaxPlayers=3`): all peers see each other, per-peer vitals/HUD work, death/revive affects only the correct player, a quiet peer is not timed out, and primary promotion keeps the session alive.
-- [ ] Quest interaction: offer/progress a quest and verify the partner sees the same quest state.
+- [ ] Quest interaction: offer/progress a quest and verify the partner sees the same quest state; no duplicate flags are re-sent.
 - [ ] Diagnostics bundle writes a file and the room code is redacted.
 
 ## Publish
 
-- [ ] Tag `v3.3.0`.
+- [ ] Tag `v<version>` on the tested commit SHA.
 - [ ] GitHub release with notes.
 - [ ] Attach both ZIP archives and `SilksongCoop_v<version>_SHA256SUMS.txt`.
-- [ ] Announce breaking changes.
+- [ ] Announce breaking changes (Steam compares the full mod version).
 
 ## Rollback
 

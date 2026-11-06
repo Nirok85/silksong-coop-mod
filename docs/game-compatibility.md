@@ -8,13 +8,22 @@
 - At runtime, protocol and mod version are enforced per session
   (`NetworkProtocol.Version`, `SilksongCoopPlugin.PluginVersion`), so a peer on a
   different build is rejected instead of silently desynchronising.
+- Startup writes a compatibility banner to `BepInEx/LogOutput.log`:
+  `[Coop] Compatibility: game <version>, Unity <version>, mod <version>, protocol v8,
+  runtime <version>`. Attach that line to any bug report; it identifies the exact
+  game build the mod ran against.
 - Missing Steamworks → the Steam transport reports itself unavailable and logs why;
   UDP remains usable.
 
 ## Not implemented
 
-There is no startup `GameCompatibilityReport`: the mod does not enumerate the
-game/Unity version, does not verify individual Harmony patch targets, and does not
-disable itself on an unsupported game build. If a Harmony target disappears after
-a game update, the failure is logged by Harmony and the affected feature silently
-stops working — verify patches manually after each game patch.
+There is no per-patch `Harmony` target report: the mod does not verify that each
+individual patch target still exists before patching, and does not disable only the
+affected feature on an unsupported game build. If a target disappears after a game
+update, Harmony logs the failure and that feature silently stops working — check
+`LogOutput.log` for `Harmony`/`patch` errors after each game patch.
+
+The startup banner is a diagnostic aid, not a support guarantee. A build that
+compiles against the installed DLLs can still miss a target that was renamed at
+runtime; record the game version and a two-client smoke result before calling a
+game build supported.

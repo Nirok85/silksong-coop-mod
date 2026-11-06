@@ -41,13 +41,27 @@ jobs:
       - name: Run tests
         run: dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj -c Release --logger "trx;LogFileName=results.trx"
 
+      - name: Verify test results
+        if: always()
+        run: |
+          set -euo pipefail
+          trx=$(find . -name results.trx -print -quit)
+          if [ -z "$trx" ]; then
+            echo "::error::results.trx was not produced; the test run cannot be trusted"
+            exit 1
+          fi
+          if grep -q 'outcome="NotExecuted"' "$trx"; then
+            echo "::error::tests were reported as NotExecuted; inspect the uploaded results.trx"
+            exit 1
+          fi
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
           path: '**/results.trx'
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   mod:
     name: Mod - compile against game assemblies (self-hosted)

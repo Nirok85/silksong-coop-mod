@@ -34,19 +34,23 @@ property-based invariants, integration/E2E over UDP loopback.
 |---|---|---|
 | Core protocol/state/pure logic | Yes | - |
 | Real UDP connect/reconnect/retransmit | Yes (loopback) | Yes (LAN/VPN) |
+| Reliable backlog cap and drop diagnostics | Yes (loopback) | - |
 | Unity Harmony hooks and patch targets | No | Yes |
-| Steam lobby/P2P/full mesh | No (fake transport only) | Yes, including 3+ |
+| Steam lobby/P2P/full mesh | No (fake transport only; the create-callback sequencing is code-reviewed) | Yes, including 3+ |
 | Scene transitions, saves, boss phases | No | Yes |
+| Pending world/quest state across scene loads | Core rules only (`RevisionLedger`, packet size) | Yes |
 | Release archives | Packaging script checks | Install smoke |
 
 A green Core test run does not prove that the Mod compiled against the current game
 build or that Steam/Unity behaviour is correct. Record the game version, mod
-version, OS, transport and result for every manual run.
+version, release commit SHA, OS, transport and result for every manual run.
 
 ## Adding tests
 
 - Core tests only (no Unity dependency).
 - Use `MockNetworkTransport.CreatePair()` for network scenarios.
-- Use `RemoteApplyScope` to simulate remote application.
+- Remote application (`RemoteApplyScope`) lives in the Mod assembly and cannot be
+  used from this project; model the receive rule directly in Core instead, or
+  verify it manually in game.
 - Static-analysis tests must account for partial classes (check every
   `SilksongCoopPlugin*.cs` file).

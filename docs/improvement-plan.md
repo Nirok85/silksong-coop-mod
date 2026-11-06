@@ -1,5 +1,8 @@
 # Silksong Co-op Mod — Large-Scale Improvement Plan
 
+> **Historical document.** Written for v1.0.0. Current priorities live in
+> `docs/improvement-plan-2026-11.md` and `ROADMAP.md`.
+
 **Date:** 2026-10-26
 **Current state:** v1.0.0, 603 tests passing, 0 errors (30 pre-existing warnings), 4 commits of stability work.
 **Goal:** Transform the mod from a "working prototype" into a robust, production-grade co-op experience.

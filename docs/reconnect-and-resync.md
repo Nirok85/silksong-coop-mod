@@ -11,7 +11,13 @@
   persistent values in throttled batches to the newly connected peer, preserving
   the original `StateRevision`/`OriginPeerId`.
 - **Deferred application.** Events whose objects are not in the loaded scene are
-  cached and retried; the applied revision is recorded when the retry succeeds.
+  cached and retried; the applied revision is recorded when the retry succeeds and
+  re-checked immediately before applying, so a newer revision applied in the
+  meantime is not rolled back by the older cached entry.
+- **Reliable-drop recovery.** If transport backpressure rejects reliable packets,
+  the host replays world/persistent state and a full snapshot after the backlog
+  drains; quest sync re-sends its full allowlisted snapshot. A packet lost by the
+  OS without a backlog drop is covered only by the next live update or replay.
 - **Boss-death catch-up.** The host keeps boss death records across scene changes
   (`DeadEnemyRegistry`), and a client that receives a dead-boss snapshot while the
   boss room is unloaded caches it until the scene loads. Ordinary-enemy deaths are

@@ -1,7 +1,11 @@
 # Release process
 
 How a new version of the mod is built, tagged and published to GitHub.
-Everything here is reproducible from a clean clone plus a Silksong install.
+The process is repeatable from a clean clone plus a Silksong install and the
+pinned external inputs. It is **not** a byte-for-byte reproducible build: BepInEx
+is downloaded, the game DLLs come from the local install, and archive metadata may
+vary between machines. The published SHA-256 manifest is the integrity reference
+for the exact artifacts that were released.
 
 ## 0. Prerequisites
 

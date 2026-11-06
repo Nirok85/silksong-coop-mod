@@ -5,7 +5,7 @@ receiver resolves conflicts, and which failures are accepted by design. When cod
 and this document disagree, the code is wrong unless the document is updated in
 the same change.
 
-## Current state (3.3.0)
+## Current state (3.3.1)
 
 | State | Writer(s) | Receiver rule | Conflict resolution |
 |---|---|---|---|
@@ -14,10 +14,10 @@ the same change.
 | Shared vitals (max HP, silk spools, needle) | Either peer | Monotonic upgrades only, applied under `RemoteApplyScope` | A higher value wins; a lower value never downgrades |
 | Currency | Either peer | Transaction GUID dedup + per-sender sequence, applied under `RemoteApplyScope` | Duplicate transaction IDs are dropped; wallet is clamped to a sane ceiling |
 | Inventory unlocks | Either peer | Idempotent per item key | First unlock wins; repeats are no-ops |
-| Enemy/boss HP, deaths and phases | The attacker's local hit is replicated to the partner | `EnemySyncController` + `EnemySyncService`; a replicated hit re-emits `TookDamage`/`TOOK DAMAGE` without reapplying damage | Exact `scene + hierarchy` key; a newer absolute HP wins, equal/higher HP is combined additively from `Damage` and deduplicated by sender + packet sequence; host snapshot corrects drift |
-| World events (breakables, gates) | Either peer | `WorldEventPacket` with `StateRevision`/`OriginPeerId` | Per-key revision/ origin comparison; replay of stored events on join |
-| Persistent world values | Either peer | `PersistentStatePacket` keyed by scene + persistent id + type; `SaveState` hook plus a 1 Hz poll of `PersistentBoolItem`/`PersistentIntItem` | Per-key revision/origin comparison; polling seeds initial scene state without broadcasting it |
-| Quest flags from NPC dialogue | Either peer | `QuestStatePacket` (0x56) after `NPCControlBase` dialogue plus a 1 Hz poll; only allowlisted `PlayerData` bool/int names | Diff of before/after snapshots; only changed values are sent and applied under `RemoteApplyScope` |
+| Enemy/boss HP, deaths and phases | Attackers replicate hits; the host simulates its scene | `EnemySyncController` + `EnemySyncService`; a replicated hit re-emits `TookDamage`/`TOOK DAMAGE` without reapplying damage | Exact `scene + hierarchy` key; see the authority rules below (absolute host HP, additive client damage only without host authority, per-sender sequence dedup) |
+| World events (breakables, gates) | Either peer | `WorldEventPacket` with `StateRevision`/`OriginPeerId` | Per-key revision/ origin comparison in `RevisionLedger`; replay of stored events on join; queued stale revisions are discarded before applying |
+| Persistent world values | Either peer | `PersistentStatePacket` keyed by scene + persistent id + type; `SaveState` hook plus a 1 Hz poll of `PersistentBoolItem`/`PersistentIntItem` | Same `RevisionLedger` rule; the retry queue re-checks staleness before `SaveState`; polling seeds initial scene state without broadcasting it |
+| Quest flags from NPC dialogue | Either peer | `QuestStatePacket` (0x56) after `NPCControlBase` dialogue plus a 1 Hz poll; only allowlisted `PlayerData` bool/int names | Diff of before/after snapshots; only changed values are sent and applied under `RemoteApplyScope`; batches are split by encoded size; overlapping dialogue flushes keep separate baselines |
 | Physical pickups | Either peer | Stable pickup key + one-time claim tracking | Exact key first; coordinates only as a guarded fallback |
 
 ## What "authoritative" means here
@@ -26,14 +26,27 @@ There is **no** host-authoritative arbitration for arbitrary state: the mod does
 not vote, does not compare peers, and does not reject a peer's vitals, currency,
 world events or deaths merely because the local peer is the host.
 
-The host is authoritative for **enemy HP in its current scene**. Its periodic
-`EnemySnapshotPacket` is applied by clients as a drift correction after field
-validation, and while a recent host snapshot covers an enemy, clients combine
-client hits additively but clamp combined lethal damage to 1 HP. Only the host
-confirms the resulting death (death packet or snapshot), so a hit already present
-in a snapshot cannot be double-counted into a false kill. When the host is in
-another room and has no snapshot for an enemy, the clients in that room combine
-damage and may kill it themselves.
+The host is authoritative for **enemy HP in its current scene**, and the primary
+peer (`SessionState.RemotePeerId`) is the source of that authority for a client —
+the same peer whose `EnemySnapshotPacket` is accepted. The rules are:
+
+1. **Host sender, fresh authority: absolute HP.** A hit packet from that peer
+   replaces the local HP with the packet's absolute value. It is never subtracted
+   from the local value, because the host snapshot may already contain the same
+   hit. Equal or higher HP is treated as a duplicate/stale packet and ignored.
+2. **Other peer, fresh authority: deferred.** While the host has sent a snapshot
+   for that enemy in the last 3 seconds, hits and deaths reported by other clients
+   are ignored. The host already received those hits; applying them again would
+   double-count the damage or let a client declare an unconfirmed death. The next
+   host snapshot/death packet converges the state.
+3. **No fresh authority: additive.** When the host is in another room (no recent
+   snapshot for that enemy), clients combine simultaneous damage additively and
+   may kill the enemy themselves. The local host uses the same additive path for
+   remote client hits.
+4. **Sequence dedup first.** A packet whose sender+sequence was already applied is
+   dropped before the death branch, so a delayed death cannot override a newer hit.
+5. **Host confirms kills.** When the host resolves combined lethal damage it
+   broadcasts a death packet; clients that clamped to 1 HP then apply it.
 
 The host is not authoritative for player position, death lifecycle, wallet,
 inventory or world-progress state, and there is no vote-based arbitration. Do not
@@ -117,6 +130,15 @@ comparison, revision `0` opt-out, cache behaviour, reset on new session).
   are not replicated; pure visual dialogue text is not mirrored. Only changes made
   during the co-op session are synced; joining does not overwrite the partner's
   existing quest progress. A live quest playthrough is still needed.
+- Quest sync trusts every connected peer to write allowlisted `PlayerData` flags,
+  and those flags are persisted by the game. This is a deliberate co-op trust
+  boundary (Steam lobbies are friends-only; UDP room codes should only be shared
+  with people you trust). Set `[Gameplay] SyncQuestFlags = false` to disable it and
+  back up saves before testing long sessions.
+- Reliable packets rejected by the UDP backlog are counted and trigger an
+  idempotent host replay / full quest snapshot after the backlog drains. A packet
+  lost by the OS without a backlog drop is recovered only when a later snapshot,
+  poll or replay covers that state.
 - A physical drop without a serialized persistent id can still be credited twice if
   its position diverges beyond the 0.5-unit dedup window; wallet reconciliation
   converges to the higher value. Drops with a `PersistentBoolItem` use its stable id

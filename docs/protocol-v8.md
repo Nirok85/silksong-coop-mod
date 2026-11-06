@@ -70,14 +70,19 @@ compare the full mod version, so 3.2.0 and 3.3.0 cannot mix over Steam; UDP
 remains wire-compatible. The experimental Steam 3+ mode only works when every
 player sets the same `[Network] SteamMaxPlayers` value.
 
-**Post-3.3.0 reliability build.** The existing `EnemySyncPacket.Damage` field is
-now also used to combine simultaneous hits, and `TickSequence` is used only as a
-per-sender dedup key. While a recent host snapshot covers an enemy, clients clamp
-combined lethal damage to 1 HP and wait for the host's death packet/snapshot; the
-host may emit a regular `Death` packet after combining client hits. No field was
-added or reordered. A 3.3.0 peer still understands every packet, but it may
-collapse two simultaneous hits into one and does not apply the host-confirmation
-clamp; update every player for correct combined damage.
+**Post-3.3.0 reliability builds (3.3.1).** The existing `EnemySyncPacket.Damage`
+field is used to combine simultaneous hits, and `TickSequence` is used only as a
+per-sender dedup key. 3.3.1 refines the merge rules without changing the format:
+a hit from the authoritative peer replaces HP with its absolute value (so a hit
+already present in a snapshot is not subtracted twice), while hits and deaths from
+other clients are deferred while that authority is fresh. Sequence dedup now runs
+before the death branch. `PersistentStatePacket` / `WorldEventPacket` revision
+handling is unchanged, but queued stale revisions are discarded before they reach
+`SaveState`. `QuestStatePacket` is now split by encoded size; the wire layout and
+`MaxEntries` are unchanged. No field was added or reordered. A 3.3.0 peer still
+understands every packet, but may double-count a hit contained in a snapshot and
+does not defer unconfirmed client deaths; update every player for correct damage
+semantics.
 
 **Pickup-key semantics in 3.2.0.** `CurrencySyncPacket.PickupKey` now prefers the
 drop's serialized persistent id instead of its rounded position. The field layout
@@ -96,6 +101,9 @@ Receiver side (`EnemySyncController`):
 - A revision equal to or lower than the last applied one for that key is dropped.
 - A revision is recorded when the change is actually applied — including when a
   cached event is applied later after a scene load.
+- A cached event is re-checked against the applied ledger immediately before it is
+  applied. If a newer revision for the same key/origin was applied while the event
+  waited for its scene, the cached event is discarded instead of rolling state back.
 - Pending (scene-not-loaded) caches keep the newest revision per key.
 - Applied revisions are cleared on `ResetSession()`.
 

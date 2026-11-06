@@ -4,7 +4,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 3.0.x | :white_check_mark: |
+| 3.3.x | :white_check_mark: |
+| 3.0.x–3.2.x | :x: (no security updates; upgrade to 3.3.x) |
 | < 3.0.0 | :x: |
 
 ## Threat Model
@@ -38,11 +39,16 @@ If you do not trust the person you are connecting to, assume they can influence 
 
 If you believe you've found a security vulnerability:
 1. **Do not** open a public issue with exploit details.
-2. Email or privately message the maintainer with a clear description, steps to reproduce, and impact.
-3. Allow reasonable time for a fix before public disclosure.
+2. Use GitHub's private vulnerability reporting for this repository
+   (`Security` tab → `Report a vulnerability`). If that is unavailable, contact the
+   maintainer privately through their GitHub profile (`Nirok85`); do not post details
+   in a public issue, discussion or chat.
+3. Include a clear description, steps to reproduce, affected version and impact.
+4. Allow reasonable time for a fix before public disclosure.
 
 ## Known Limitations (by design)
 
 - **No host-authoritative arbitration**: any authenticated peer can send world/event/vitals/currency packets. The mod validates formats and uses idempotency, but does not vote or reject arbitrary actions from peers.
+- **Quest flags are writable by connected peers**: the allowlisted `PlayerData` bool/int values are applied and persisted by the game. Only play co-op with people you trust, or set `[Gameplay] SyncQuestFlags = false`. Back up saves before long sessions.
 - **Direct IP joins are allowed**: for convenience, direct connections are possible without a room-code secret unless explicitly restricted.
 - **Trust required**: there is no anti-cheat. Only connect to people you trust.
