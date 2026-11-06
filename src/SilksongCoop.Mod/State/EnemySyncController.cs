@@ -65,9 +65,13 @@ namespace SilksongCoop.Mod.State
         private readonly Dictionary<ulong, WorldEventPacket> _worldEvents = new Dictionary<ulong, WorldEventPacket>();
         private readonly Queue<ulong> _worldEventOrder = new Queue<ulong>();
         private readonly Dictionary<ulong, PersistentStatePacket> _persistentStates = new Dictionary<ulong, PersistentStatePacket>();
-        private readonly Dictionary<ulong, (uint Revision, ulong Origin)> _appliedWorldRevisions = new Dictionary<ulong, (uint Revision, ulong Origin)>();
-        private readonly Dictionary<ulong, (uint Revision, ulong Origin)> _appliedPersistentRevisions = new Dictionary<ulong, (uint Revision, ulong Origin)>();
-        private readonly Queue<ulong> _persistentStateOrder = new Queue<ulong>();
+        private readonly RevisionLedger _appliedWorldRevisions = new RevisionLedger();
+        private readonly RevisionLedger _appliedPersistentRevisions = new RevisionLedger();
+        // Reliable packets rejected by transport backpressure are gone for good. Once the
+        // backlog drains, the host replays idempotent world state instead of leaving the
+        // client permanently behind.
+        private long _observedDroppedReliable;
+        private bool _resyncAfterBacklog;        private readonly Queue<ulong> _persistentStateOrder = new Queue<ulong>();
         private readonly Dictionary<ulong, PersistentStatePacket> _persistentLastValue = new Dictionary<ulong, PersistentStatePacket>();
         // States that arrived while their scene was not loaded. They are retried after a
         // scene change instead of being dropped; a late joiner in another room otherwise
@@ -180,6 +184,7 @@ namespace SilksongCoop.Mod.State
             PumpPendingPersistentStates();
             PumpPendingWorldEvents();
             PumpPendingDeadEnemies();
+            TrackReliableDrops();
 
             // Only the host is authoritative for periodic snapshots and world catch-up.
             if (_plugin.SessionState.IsHost != true) return;
@@ -329,11 +334,31 @@ namespace SilksongCoop.Mod.State
             var session = _plugin?.SessionState;
             bool localHost = session?.IsHost == true;
 
-            // While the host is simulating this enemy, a client may combine damage but must
-            // not kill: the host snapshot may already contain the hit, and double-counting
-            // it would produce a false death. The host (or a room without host authority)
-            // allows the combined damage to kill.
-            bool allowLethal = localHost || !_service.HasFreshHostAuthority(packet.EnemyKey);
+            // The authority model is defined in docs/state-authority.md. While the host
+            // actively simulates this enemy, its absolute HP is authoritative and every
+            // other peer's hit is deferred: the host already received that hit and its
+            // snapshot contains it, so applying it again would double-count the damage (or
+            // let a client declare a death the host has not confirmed). The legacy
+            // clamp exists only for callers that cannot determine the sender role.
+            RemoteHitPolicy policy;
+            if (localHost)
+            {
+                policy = RemoteHitPolicy.LocalHost;
+            }
+            else if (!_service.HasFreshHostAuthority(packet.EnemyKey))
+            {
+                policy = RemoteHitPolicy.NoAuthority;
+            }
+            else if (session?.RemotePeerId.HasValue == true &&
+                     session.RemotePeerId.Value == sender)
+            {
+                policy = RemoteHitPolicy.Authoritative;
+            }
+            else
+            {
+                policy = RemoteHitPolicy.Deferred;
+            }
+
             bool wasDead = target.GetIsDead();
 
             // Only mark the packet as applied once the target was found. Otherwise the
@@ -345,8 +370,8 @@ namespace SilksongCoop.Mod.State
                     packet.Damage,
                     sender.Value,
                     packet.Header.TickSequence,
-                    out int appliedHp,
-                    allowLethal))
+                    policy,
+                    out int appliedHp))
             {
                 return;
             }
@@ -478,6 +503,42 @@ namespace SilksongCoop.Mod.State
             _lastSnapshotDead.Clear();
             _worldReplayPending = true;
             _forceSnapshotReconcile = true;
+        }
+
+        /// <summary>
+        /// Detects reliable packets rejected by transport backpressure and schedules an
+        /// idempotent replay once the backlog has drained. Without this, a burst that fills
+        /// the reliable queue leaves world state permanently behind even though the
+        /// connection itself recovers.
+        /// </summary>
+        private void TrackReliableDrops()
+        {
+            if (_plugin?.ActiveTransport is not IReliableDropDiagnostics diagnostics)
+                return;
+
+            long dropped = diagnostics.DroppedReliablePackets;
+            if (dropped < _observedDroppedReliable)
+            {
+                // A new transport instance starts its counter from zero.
+                _observedDroppedReliable = dropped;
+            }
+            else if (dropped > _observedDroppedReliable)
+            {
+                _observedDroppedReliable = dropped;
+                _resyncAfterBacklog = true;
+            }
+
+            if (!_resyncAfterBacklog) return;
+
+            // Do not add more traffic while the reliable queue is still near its cap.
+            if (_plugin.ActiveTransport.ReliableBacklogCount > 128) return;
+
+            _resyncAfterBacklog = false;
+            if (_plugin.SessionState?.IsHost != true) return;
+
+            _worldReplayPending = true;
+            _forceSnapshotReconcile = true;
+            SilksongCoopPlugin.LogInfo("[EnemySync] Reliable backlog recovered; replaying world state");
         }
 
         private void SendSnapshot(bool reconcile)
@@ -845,7 +906,7 @@ namespace SilksongCoop.Mod.State
 
             // Idempotency: drop stale or duplicate revisions. A revision is only meaningful
             // together with its origin, and revision 0 means "unversioned" (legacy sender).
-            if (IsStaleRevision(_appliedWorldRevisions, packet.ObjectKey, packet.StateRevision, packet.OriginPeerId))
+            if (_appliedWorldRevisions.IsStale(packet.ObjectKey, packet.StateRevision, packet.OriginPeerId))
                 return;
 
             bool allowProximity = IsSenderInLocalScene(sender);
@@ -856,7 +917,7 @@ namespace SilksongCoop.Mod.State
             else
             {
                 RecordWorldEventForReplay(packet);
-                RecordRevision(_appliedWorldRevisions, packet.ObjectKey, packet.StateRevision, packet.OriginPeerId);
+                _appliedWorldRevisions.Record(packet.ObjectKey, packet.StateRevision, packet.OriginPeerId);
             }
         }
 
@@ -892,32 +953,6 @@ namespace SilksongCoop.Mod.State
                 SilksongCoopPlugin.LogWarn($"[EnemySync] Failed applying world event: {ex.Message}");
                 return false;
             }
-        }
-
-        /// <summary>
-        /// Compares an incoming revision with the last applied one for a world key.
-        /// Revisions from a different origin are not comparable, so they are applied.
-        /// </summary>
-        private static bool IsStaleRevision(
-            Dictionary<ulong, (uint Revision, ulong Origin)> applied,
-            ulong key,
-            uint revision,
-            ulong origin)
-        {
-            if (revision == 0) return false;
-            if (!applied.TryGetValue(key, out var last)) return false;
-            if (last.Origin != origin) return false;
-            return revision <= last.Revision;
-        }
-
-        private static void RecordRevision(
-            Dictionary<ulong, (uint Revision, ulong Origin)> applied,
-            ulong key,
-            uint revision,
-            ulong origin)
-        {
-            if (revision != 0)
-                applied[key] = (revision, origin);
         }
 
         private void CachePendingWorldEvent(WorldEventPacket packet, NetworkPeerId sender)
@@ -958,8 +993,19 @@ namespace SilksongCoop.Mod.State
             if (Time.unscaledTime < _pendingWorldRetryAt) return;
 
             List<ulong>? applied = null;
+            List<ulong>? stale = null;
             foreach (var pair in _pendingWorldEvents)
             {
+                // A newer revision for the same object may have been applied directly while
+                // this event was queued (the object was not loaded when it arrived). Applying
+                // the older cached value now would roll the world state back.
+                if (_appliedWorldRevisions.IsStale(
+                        pair.Key, pair.Value.StateRevision, pair.Value.OriginPeerId))
+                {
+                    (stale ??= new List<ulong>()).Add(pair.Key);
+                    continue;
+                }
+
                 // A cached event belongs to a scene that was not loaded when it arrived.
                 // Once the scene is loaded the sender may or may not be there; only allow
                 // the proximity fallback when presence can actually be proven.
@@ -967,16 +1013,28 @@ namespace SilksongCoop.Mod.State
                                       IsSenderInLocalScene(sender);
                 if (!TryApplyWorldEvent(pair.Value, allowProximity)) continue;
                 RecordWorldEventForReplay(pair.Value);
-                RecordRevision(_appliedWorldRevisions, pair.Key, pair.Value.StateRevision, pair.Value.OriginPeerId);
+                _appliedWorldRevisions.Record(pair.Key, pair.Value.StateRevision, pair.Value.OriginPeerId);
                 (applied ??= new List<ulong>()).Add(pair.Key);
             }
 
-            if (applied != null)
+            if (stale != null)
             {
-                for (int i = 0; i < applied.Count; i++)
+                for (int i = 0; i < stale.Count; i++)
                 {
-                    _pendingWorldEvents.Remove(applied[i]);
-                    _pendingWorldEventSenders.Remove(applied[i]);
+                    _pendingWorldEvents.Remove(stale[i]);
+                    _pendingWorldEventSenders.Remove(stale[i]);
+                }
+            }
+
+            if (applied != null || stale != null)
+            {
+                if (applied != null)
+                {
+                    for (int i = 0; i < applied.Count; i++)
+                    {
+                        _pendingWorldEvents.Remove(applied[i]);
+                        _pendingWorldEventSenders.Remove(applied[i]);
+                    }
                 }
 
                 _pendingWorldRetryAt = Time.unscaledTime + 0.5f;
@@ -1063,7 +1121,7 @@ namespace SilksongCoop.Mod.State
 
             // Idempotency: drop stale or duplicate revisions. A revision is only meaningful
             // together with its origin, and revision 0 means "unversioned" (legacy sender).
-            if (IsStaleRevision(_appliedPersistentRevisions, packet.ItemKey, packet.StateRevision, packet.OriginPeerId))
+            if (_appliedPersistentRevisions.IsStale(packet.ItemKey, packet.StateRevision, packet.OriginPeerId))
                 return;
 
             EnsurePersistentIndex();
@@ -1089,7 +1147,7 @@ namespace SilksongCoop.Mod.State
             else
             {
                 RecordPersistentStateForReplay(packet);
-                RecordRevision(_appliedPersistentRevisions, packet.ItemKey, packet.StateRevision, packet.OriginPeerId);
+                _appliedPersistentRevisions.Record(packet.ItemKey, packet.StateRevision, packet.OriginPeerId);
             }
         }
 
@@ -1237,29 +1295,52 @@ namespace SilksongCoop.Mod.State
             EnsurePersistentIndex();
 
             List<ulong>? applied = null;
+            List<ulong>? stale = null;
             foreach (var pair in _pendingPersistentStates)
             {
+                // A newer revision may have been applied directly after this packet was
+                // queued (for example when the object streamed in while the pump was
+                // waiting). Re-checking here prevents the old cached value from rolling the
+                // door/chest/lift back and persisting that rollback through SaveState.
+                if (_appliedPersistentRevisions.IsStale(
+                        pair.Key, pair.Value.StateRevision, pair.Value.OriginPeerId))
+                {
+                    (stale ??= new List<ulong>()).Add(pair.Key);
+                    continue;
+                }
+
                 if (!TryApplyPersistentState(pair.Value)) continue;
                 RecordPersistentStateForReplay(pair.Value);
-                RecordRevision(_appliedPersistentRevisions, pair.Key, pair.Value.StateRevision, pair.Value.OriginPeerId);
+                _appliedPersistentRevisions.Record(pair.Key, pair.Value.StateRevision, pair.Value.OriginPeerId);
                 (applied ??= new List<ulong>()).Add(pair.Key);
             }
 
-            if (applied != null)
+            if (stale != null)
             {
-                for (int i = 0; i < applied.Count; i++)
-                    _pendingPersistentStates.Remove(applied[i]);
+                for (int i = 0; i < stale.Count; i++)
+                    _pendingPersistentStates.Remove(stale[i]);
+            }
+
+            if (applied != null || stale != null)
+            {
+                if (applied != null)
+                {
+                    for (int i = 0; i < applied.Count; i++)
+                        _pendingPersistentStates.Remove(applied[i]);
+                }
 
                 _pendingPersistentRetryAt = Time.unscaledTime + 0.5f;
             }
-            else
+
+            if (applied == null && _pendingPersistentStates.Count > 0)
             {
-                // Keep retrying at a slower cadence; the object may activate later in the
-                // same scene (lazy room loading) and must not be dropped permanently.
-                // Ask for a fresh index on the next attempt: an object instantiated after
-                // the first scan is not in the cached dictionary yet.
+                // Some entries still could not be applied. Ask for a fresh index on the
+                // next attempt: an object instantiated after the first scan is not in the
+                // cached dictionary yet. When nothing changed at all, back off to 5 s so a
+                // permanently missing object does not force a scene scan twice a second.
                 _persistentIndexDirty = true;
-                _pendingPersistentRetryAt = Time.unscaledTime + 5f;
+                if (stale == null)
+                    _pendingPersistentRetryAt = Time.unscaledTime + 5f;
             }
 
             while (_pendingPersistentOrder.Count > 0 &&

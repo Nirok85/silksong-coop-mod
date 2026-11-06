@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 using SilksongCoop.Core.Progression;
 
 namespace SilksongCoop.Core.Protocol.Packets
@@ -23,6 +24,30 @@ namespace SilksongCoop.Core.Protocol.Packets
     public struct QuestStatePacket
     {
         public const int MaxEntries = 64;
+
+        /// <summary>
+        /// Conservative upper bound for one serialized packet. The UDP transport receives
+        /// datagrams into a 2048-byte buffer that also holds an 8-byte frame header and an
+        /// 8-byte MAC; 1500 bytes leaves headroom for future framing. A packet larger than
+        /// the receive buffer is rejected by the OS and retransmitted forever on the
+        /// reliable channel, so the sender must split by encoded size, not only by entry
+        /// count.
+        /// </summary>
+        public const int MaxEncodedBytes = 1500;
+
+        /// <summary>Header plus the entry-count byte.</summary>
+        public const int EncodedOverhead = PacketHeader.HeaderSize + 1;
+
+        /// <summary>
+        /// Exact number of bytes one entry occupies on the wire. Used to split a large
+        /// flag diff into datagrams that fit the transport buffer.
+        /// </summary>
+        public static int GetEntryEncodedSize(string? key, QuestFlagKind kind)
+        {
+            int keyBytes = string.IsNullOrEmpty(key) ? 0 : Encoding.UTF8.GetByteCount(key);
+            // kind (1) + string length prefix (2) + UTF-8 key + int (4) or bool (1)
+            return 1 + 2 + keyBytes + (kind == QuestFlagKind.Int ? 4 : 1);
+        }
 
         public PacketHeader Header;
         public int Count;

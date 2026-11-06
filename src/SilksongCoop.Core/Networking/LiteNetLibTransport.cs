@@ -13,7 +13,7 @@ namespace SilksongCoop.Core.Networking
     /// reliable ordered and reliable unordered delivery with room-code and direct IP:port
     /// connection.
     /// </summary>
-    public class LiteNetLibTransport : INetworkTransport, IMultiPeerTransport
+    public class LiteNetLibTransport : INetworkTransport, IMultiPeerTransport, IReliableDropDiagnostics
     {
         /// <summary>
         /// Wire protocol revision. Bumped when packet layouts change incompatibly; both
@@ -242,6 +242,12 @@ namespace SilksongCoop.Core.Networking
         {
             get { lock (_lock) { return _unacknowledged.Count; } }
         }
+
+        private long _droppedReliablePackets;
+        private long _lastBacklogWarningMs;
+
+        /// <inheritdoc />
+        public long DroppedReliablePackets => System.Threading.Interlocked.Read(ref _droppedReliablePackets);
 
         #endregion
 
@@ -652,7 +658,19 @@ namespace SilksongCoop.Core.Networking
                                   method == DeliveryMethod.ReliableUnordered;
                 if (isReliable && _unacknowledged.Count >= MaxUnacknowledgedPackets)
                 {
-                    CoopLog.Warn($"[LiteNetLibTransport] Reliable backlog full ({MaxUnacknowledgedPackets}); dropping new packet on channel {channel}");
+                    System.Threading.Interlocked.Increment(ref _droppedReliablePackets);
+
+                    // Throttle: a saturated link would otherwise write one line per packet
+                    // per frame and drown the log.
+                    long now = Environment.TickCount;
+                    if (unchecked(now - _lastBacklogWarningMs) >= 1000)
+                    {
+                        _lastBacklogWarningMs = now;
+                        CoopLog.Warn(
+                            $"[LiteNetLibTransport] Reliable backlog full ({MaxUnacknowledgedPackets}); " +
+                            $"dropping new packet on channel {channel} " +
+                            $"(total dropped: {DroppedReliablePackets})");
+                    }
                     return;
                 }
 

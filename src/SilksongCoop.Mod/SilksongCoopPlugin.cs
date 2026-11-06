@@ -46,7 +46,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "3.3.0";
+        public const string PluginVersion = "3.3.1";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -171,6 +171,20 @@ namespace SilksongCoop.Mod
             SteamP2PTransport.Logger = Logger;
             CoopLog.Logger = this;
             Logger.LogInfo($"Initializing {PluginName} v{PluginVersion}...");
+
+            // Startup compatibility report. When a game update moves a Harmony target, the
+            // first thing needed is the exact game/Unity build; log it once instead of
+            // asking a player to dig it out of the Steam client.
+            try
+            {
+                Logger.LogInfo(
+                    $"[Coop] Compatibility: game {Application.version}, Unity {Application.unityVersion}, " +
+                    $"mod {PluginVersion}, protocol v{NetworkProtocol.Version}, runtime {Environment.Version}");
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Compatibility report failed: {ex.Message}");
+            }
 
             // Initialize DI container and EventBus
             Container = new ServiceContainer();

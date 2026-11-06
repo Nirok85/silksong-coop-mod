@@ -4,6 +4,41 @@ using System.Collections.Generic;
 namespace SilksongCoop.Core.State
 {
     /// <summary>
+    /// How a remote hit from another peer relates to the authoritative simulator for that
+    /// enemy. The caller decides this from the session role and the freshness of the last
+    /// host snapshot; the service then applies the matching merge rule.
+    /// </summary>
+    public enum RemoteHitPolicy : byte
+    {
+        /// <summary>
+        /// The local player is the host: combine simultaneous damage and resolve lethal
+        /// damage locally.
+        /// </summary>
+        LocalHost = 0,
+
+        /// <summary>
+        /// No authoritative peer is simulating this enemy (for example the host is in
+        /// another room): combine simultaneous damage and allow client kills.
+        /// </summary>
+        NoAuthority = 1,
+
+        /// <summary>
+        /// The packet comes from the authoritative peer: its absolute HP is authoritative,
+        /// so it replaces the local value instead of being subtracted from it. Without this
+        /// rule a hit already contained in a snapshot would be counted twice.
+        /// </summary>
+        Authoritative = 2,
+
+        /// <summary>
+        /// Another peer sent the packet while an authoritative peer is actively simulating
+        /// this enemy. The packet is ignored: the host snapshot already contains every hit
+        /// it received, and applying the hit again would double-count it or let a client
+        /// declare a death the host has not confirmed.
+        /// </summary>
+        Deferred = 3
+    }
+
+    /// <summary>
     /// Engine-agnostic bookkeeping for replicated enemy HP. The Unity layer finds the
     /// <c>HealthManager</c> and applies the actual HP/death; this service decides whether an
     /// incoming packet is new, so delayed duplicates cannot double-damage or resurrect an
@@ -20,6 +55,12 @@ namespace SilksongCoop.Core.State
             public Dictionary<ulong, uint>? LastSequenceBySender;
             public bool HostAuthoritative;
             public int LastHostAuthorityTick;
+
+            // Monotonic order of the last authoritative snapshot vs. the last local hit.
+            // An authoritative hit is combined additively only when the local player hit
+            // after that snapshot: then the snapshot cannot already contain this hit.
+            public int LastSnapshotOrder;
+            public int LastLocalHitOrder;
         }
 
         // A small cap keeps a long session from growing one dictionary per enemy without
@@ -37,6 +78,7 @@ namespace SilksongCoop.Core.State
         private readonly Dictionary<ulong, Entry> _enemies = new Dictionary<ulong, Entry>();
         private readonly Queue<ulong> _enemyOrder = new Queue<ulong>();
         private readonly object _lock = new object();
+        private int _stateOrder;
 
         /// <summary>
         /// Number of enemies currently tracked (diagnostics/tests).
@@ -147,6 +189,7 @@ namespace SilksongCoop.Core.State
                 entry.HasState = true;
                 entry.LastHp = dead ? 0 : Math.Max(1, hp);
                 entry.Dead = dead;
+                entry.LastLocalHitOrder = ++_stateOrder;
                 _enemies[enemyKey] = entry;
             }
         }
@@ -184,10 +227,14 @@ namespace SilksongCoop.Core.State
         /// <param name="resultingHp">HP that should be applied locally.</param>
         /// <returns>True when the event is new and should be applied.</returns>
         /// <param name="allowLethal">
-        /// False while the host is authoritative for this enemy. The client then clamps
-        /// combined damage to 1 HP and waits for the host's death event/snapshot, so a hit
-        /// already present in a snapshot cannot be double-counted into a false kill.
+        /// False while an authoritative peer is simulating this enemy. The client then
+        /// clamps combined damage to 1 HP and waits for the host's death event/snapshot, so
+        /// a hit already present in a snapshot cannot be double-counted into a false kill.
         /// </param>
+        /// <remarks>
+        /// This legacy overload keeps the pre-policy merge rules for callers and tests that
+        /// predate <see cref="RemoteHitPolicy"/>. New code should use the policy overload.
+        /// </remarks>
         public bool TryAcceptRemoteHit(
             ulong enemyKey,
             int hp,
@@ -197,6 +244,51 @@ namespace SilksongCoop.Core.State
             uint sequence,
             out int resultingHp,
             bool allowLethal = true)
+        {
+            return AcceptRemoteHitCore(
+                enemyKey, hp, dead, damage, senderId, sequence,
+                additive: true, allowLethal: allowLethal, out resultingHp);
+        }
+
+        /// <summary>
+        /// Accepts a remote hit according to the caller's authority decision. Unlike the
+        /// legacy overload, a packet from the authoritative peer replaces HP with its
+        /// absolute value (the snapshot may already contain the same hit), and packets from
+        /// other peers are ignored while that authority is fresh.
+        /// </summary>
+        public bool TryAcceptRemoteHit(
+            ulong enemyKey,
+            int hp,
+            bool dead,
+            short damage,
+            ulong senderId,
+            uint sequence,
+            RemoteHitPolicy policy,
+            out int resultingHp)
+        {
+            if (policy == RemoteHitPolicy.Deferred)
+            {
+                resultingHp = 0;
+                return false;
+            }
+
+            return AcceptRemoteHitCore(
+                enemyKey, hp, dead, damage, senderId, sequence,
+                additive: policy != RemoteHitPolicy.Authoritative,
+                allowLethal: true,
+                out resultingHp);
+        }
+
+        private bool AcceptRemoteHitCore(
+            ulong enemyKey,
+            int hp,
+            bool dead,
+            short damage,
+            ulong senderId,
+            uint sequence,
+            bool additive,
+            bool allowLethal,
+            out int resultingHp)
         {
             resultingHp = hp;
             if (enemyKey == 0) return false;
@@ -212,16 +304,9 @@ namespace SilksongCoop.Core.State
 
                 if (entry.Dead) return false;
 
-                if (dead)
-                {
-                    entry.HasState = true;
-                    entry.Dead = true;
-                    entry.LastHp = 0;
-                    resultingHp = 0;
-                    _enemies[enemyKey] = entry;
-                    return true;
-                }
-
+                // Sequence deduplication runs before the death branch: a stale death packet
+                // must not override a newer hit, and a duplicate death from the same sender
+                // must not be re-applied after the enemy was reset.
                 // Reliable packets are rare duplicates, but a reconnect/replay can repeat
                 // one. Sequence 0 means "unversioned" and skips deduplication.
                 if (senderId != 0 && sequence != 0 &&
@@ -241,6 +326,16 @@ namespace SilksongCoop.Core.State
                         entry.LastSequenceBySender.Clear();
                     }
                     entry.LastSequenceBySender[senderId] = sequence;
+                }
+
+                if (dead)
+                {
+                    entry.HasState = true;
+                    entry.Dead = true;
+                    entry.LastHp = 0;
+                    resultingHp = 0;
+                    _enemies[enemyKey] = entry;
+                    return true;
                 }
 
                 if (!entry.HasState)
@@ -269,6 +364,25 @@ namespace SilksongCoop.Core.State
                     entry.HasState = true;
                     entry.LastHp = hp;
                     resultingHp = hp;
+                    _enemies[enemyKey] = entry;
+                    return true;
+                }
+
+                // An authoritative packet is absolute unless the local player hit after the
+                // last applied snapshot: that snapshot cannot contain the local hit, so the
+                // host's damage is combined exactly like the additive path. If the host did
+                // receive the local hit, its lower absolute HP still wins through Min().
+                bool localHitSinceSnapshot = entry.LastLocalHitOrder > entry.LastSnapshotOrder;
+                if (!additive && !localHitSinceSnapshot)
+                {
+                    // The authoritative peer's absolute HP replaces the local value. An
+                    // equal or higher value is a duplicate or a stale packet: while that
+                    // peer simulates the enemy, HP only goes down.
+                    if (hp >= entry.LastHp) return false;
+
+                    entry.LastHp = Math.Max(0, hp);
+                    resultingHp = entry.LastHp;
+                    if (entry.LastHp == 0) entry.Dead = true;
                     _enemies[enemyKey] = entry;
                     return true;
                 }
@@ -363,6 +477,7 @@ namespace SilksongCoop.Core.State
                 entry.LastSnapshotTimestamp = timestamp;
                 entry.HostAuthoritative = true;
                 entry.LastHostAuthorityTick = Environment.TickCount;
+                entry.LastSnapshotOrder = ++_stateOrder;
                 entry.Dead = dead;
                 entry.LastHp = dead ? 0 : hp;
                 _enemies[enemyKey] = entry;

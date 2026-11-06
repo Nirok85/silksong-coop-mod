@@ -50,6 +50,15 @@ namespace SilksongCoop.Mod.Networking
         private int _lobbyRequestGeneration = -1;
         private ulong _requestedLobbyId;
 
+        // Steam's LobbyCreated callback carries no request id. Two overlapping CreateLobby
+        // calls therefore make it impossible to tell which lobby a callback describes: the
+        // older lobby can be adopted as the new session and the real result rejected as
+        // stale. Only one create may be in flight; a newer host request waits for it.
+        private int _pendingCreateLobbyCount;
+        private long _pendingCreateLobbyStartedMs;
+        private int _pendingCreateGeneration;
+        private bool _deferredHostStart;
+
         // Monotonic clock: system-clock adjustments must not stretch or collapse the
         // Steam connection timeout.
         private static readonly Stopwatch Clock = Stopwatch.StartNew();
@@ -239,6 +248,26 @@ namespace SilksongCoop.Mod.Networking
                 throw new InvalidOperationException("Steam is not initialized or offline.");
             }
 
+            if (_pendingCreateLobbyCount > 0)
+            {
+                if (_pendingCreateGeneration == _sessionGeneration)
+                {
+                    // Already creating the lobby this request wants. Firing a second
+                    // CreateLobby would make the callback ambiguous.
+                    Logger?.LogInfo("[Steam] Lobby creation is already in flight; ignoring duplicate host request");
+                    return;
+                }
+
+                _deferredHostStart = true;
+                Logger?.LogInfo("[Steam] Deferring host start until the previous CreateLobby callback arrives");
+                return;
+            }
+
+            StartHostCore();
+        }
+
+        private void StartHostCore()
+        {
             IsHost = true;
             IsConnected = false;
             _connectionAttemptStartMs = 0;
@@ -262,6 +291,9 @@ namespace SilksongCoop.Mod.Networking
             _lobbyId = CSteamID.Nil;
             _requestedLobbyId = 0;
             _lobbyRequestGeneration = ++_sessionGeneration;
+            _pendingCreateLobbyCount = 1;
+            _pendingCreateLobbyStartedMs = NowMs();
+            _pendingCreateGeneration = _sessionGeneration;
             SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, _maxPlayers);
         }
 
@@ -328,6 +360,10 @@ namespace SilksongCoop.Mod.Networking
             _sessionGeneration++;
             _lobbyRequestGeneration = -1;
             _requestedLobbyId = 0;
+            // A queued host start belongs to the previous intent. The transport keeps
+            // _pendingCreateLobbyCount until Steam delivers the outstanding callback so a
+            // later StartHost cannot create a second, ambiguous lobby.
+            _deferredHostStart = false;
             _protocolRejectedPeer = CSteamID.Nil;
             _additionalRejectedPeers.Clear();
 
@@ -744,6 +780,21 @@ namespace SilksongCoop.Mod.Networking
             catch (Exception ex)
             {
                 Logger?.LogError($"[Steam] RunCallbacks threw: {ex.Message}");
+            }
+
+            // A CreateLobby callback carries no request id. If it never arrives (Steam
+            // failure), unblock a queued host request instead of waiting forever.
+            if (_pendingCreateLobbyCount > 0 &&
+                NowMs() - _pendingCreateLobbyStartedMs > SteamConnectionTimeoutMs)
+            {
+                Logger?.LogWarning("[Steam] Lobby creation callback timed out; allowing a new host request");
+                _pendingCreateLobbyCount = 0;
+            }
+
+            if (_deferredHostStart && _pendingCreateLobbyCount == 0)
+            {
+                _deferredHostStart = false;
+                StartHostCore();
             }
 
             // Connection timeout check
@@ -1207,6 +1258,11 @@ namespace SilksongCoop.Mod.Networking
 
         private void OnLobbyCreated(LobbyCreated_t callback)
         {
+            // This callback consumes one in-flight CreateLobby request, whether it succeeds
+            // or fails. The deferred host request (if any) is started from PollEvents once
+            // this callback has fully unwound.
+            if (_pendingCreateLobbyCount > 0) _pendingCreateLobbyCount--;
+
             var createdLobby = new CSteamID(callback.m_ulSteamIDLobby);
 
             // Some Steam builds deliver LobbyEntered before LobbyCreated. If that already
