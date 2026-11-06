@@ -107,6 +107,13 @@ namespace SilksongCoop.Mod.State
         private float _snapshotTimer;
         private uint _packetSequence;
 
+        // Snapshots are normally change-driven. A periodic reconciliation resends every
+        // damaged/dead enemy even if an earlier send was dropped by the transport, and a
+        // newly connected peer requests an immediate one so it does not wait for a change.
+        private const float SnapshotReconcileInterval = 10f;
+        private float _snapshotReconcileAt;
+        private bool _forceSnapshotReconcile;
+
         private static AccessTools.FieldRef<HealthManager, int>? _initHpRef;
         private static bool _initHpResolved;
         private static bool _bossProbeWarningLogged;
@@ -130,6 +137,8 @@ namespace SilksongCoop.Mod.State
             _lastSnapshotHp.Clear();
             _lastSnapshotDead.Clear();
             _snapshotTimer = 0f;
+            _snapshotReconcileAt = 0f;
+            _forceSnapshotReconcile = false;
 
             // Do NOT clear _sceneName here. Forcing a scene change on the next Update
             // used to wipe the world-event/dead-enemy catch-up registries exactly when a
@@ -184,9 +193,19 @@ namespace SilksongCoop.Mod.State
             PumpWorldReplay();
 
             _snapshotTimer += Time.unscaledDeltaTime;
-            if (_snapshotTimer < 1f) return;
+
+            bool reconcile = _forceSnapshotReconcile ||
+                             Time.unscaledTime >= _snapshotReconcileAt;
+            if (_snapshotTimer < 1f && !reconcile) return;
+
             _snapshotTimer = 0f;
-            SendSnapshot();
+            if (reconcile)
+            {
+                _forceSnapshotReconcile = false;
+                _snapshotReconcileAt = Time.unscaledTime + SnapshotReconcileInterval;
+            }
+
+            SendSnapshot(reconcile);
         }
 
         #region Enemy hits
@@ -201,6 +220,10 @@ namespace SilksongCoop.Mod.State
 
             ulong key = GetKey(target);
             if (key == 0) return;
+
+            // Keep the local HP baseline in the same bookkeeping as remote hits, so the
+            // additive path knows the enemy was at 100 before this 10-damage hit.
+            _service.NoteLocalEnemyState(key, dead ? 0 : Math.Max(0, hpAfter), dead);
 
             var packet = new EnemySyncPacket
             {
@@ -229,6 +252,8 @@ namespace SilksongCoop.Mod.State
 
             ulong key = GetKey(target);
             if (key == 0) return;
+
+            _service.NoteLocalEnemyState(key, 0, dead: true);
 
             // Register even before a peer connects so a later client is caught up. Bosses
             // are flagged here, while the scene is still loaded, because the registry uses
@@ -301,11 +326,49 @@ namespace SilksongCoop.Mod.State
                 return;
             }
 
+            var session = _plugin?.SessionState;
+            bool localHost = session?.IsHost == true;
+
+            // While the host is simulating this enemy, a client may combine damage but must
+            // not kill: the host snapshot may already contain the hit, and double-counting
+            // it would produce a false death. The host (or a room without host authority)
+            // allows the combined damage to kill.
+            bool allowLethal = localHost || !_service.HasFreshHostAuthority(packet.EnemyKey);
+            bool wasDead = target.GetIsDead();
+
             // Only mark the packet as applied once the target was found. Otherwise the
             // service would reject every retry even though nothing was applied locally.
-            if (!_service.TryAcceptHit(packet.EnemyKey, packet.Hp, dead)) return;
+            if (!_service.TryAcceptRemoteHit(
+                    packet.EnemyKey,
+                    packet.Hp,
+                    dead,
+                    packet.Damage,
+                    sender.Value,
+                    packet.Header.TickSequence,
+                    out int appliedHp,
+                    allowLethal))
+            {
+                return;
+            }
 
-            ApplyEnemyState(target, packet.Hp, dead, authoritative: false);
+            bool appliedDeath = dead || appliedHp <= 0;
+            ApplyEnemyState(target, appliedHp, appliedDeath, authoritative: false);
+
+            // The host resolved combined lethal damage: broadcast the death so clients that
+            // clamped to 1 HP do not leave a zero-health enemy alive.
+            if (localHost && appliedDeath && !wasDead)
+            {
+                var deathPacket = packet;
+                deathPacket.Header = new PacketHeader(
+                    PacketType.EnemySync,
+                    WorldChannel,
+                    ++_packetSequence,
+                    NetworkClock.NowMs);
+                deathPacket.Hp = 0;
+                deathPacket.Damage = 0;
+                deathPacket.EventType = EnemySyncEventType.Death;
+                SendEnemyPacket(deathPacket);
+            }
         }
 
         private void ApplyEnemyState(HealthManager target, int hp, bool dead, bool authoritative)
@@ -403,7 +466,21 @@ namespace SilksongCoop.Mod.State
 
         #region Snapshots
 
-        private void SendSnapshot()
+        /// <summary>
+        /// Asks the host to send a full snapshot and world replay to every peer. Called when
+        /// a new peer connects: the registries already hold past world changes, but without
+        /// clearing the sent markers the new peer would only receive future changes.
+        /// Existing peers merely receive idempotent repeats.
+        /// </summary>
+        public void BeginCatchUpForNewPeer()
+        {
+            _lastSnapshotHp.Clear();
+            _lastSnapshotDead.Clear();
+            _worldReplayPending = true;
+            _forceSnapshotReconcile = true;
+        }
+
+        private void SendSnapshot(bool reconcile)
         {
             List<HealthManager>? enemies;
             try
@@ -440,11 +517,11 @@ namespace SilksongCoop.Mod.State
                 bool damaged = hp < initHp || firstSeen;
                 bool changed = knownHp && lastHp != hp;
 
-                if (dead && !newlyDead) continue;
-                if (!dead && !damaged && !changed) continue;
-
-                _lastSnapshotHp[key] = hp;
-                _lastSnapshotDead[key] = dead;
+                if (!reconcile)
+                {
+                    if (dead && !newlyDead) continue;
+                    if (!dead && !damaged && !changed) continue;
+                }
 
                 batch.Add(new EnemySnapshotEntry
                 {
@@ -457,7 +534,7 @@ namespace SilksongCoop.Mod.State
 
                 if (batch.Count >= EnemySnapshotPacket.MaxEntries)
                 {
-                    SendSnapshotBatch(batch);
+                    if (SendSnapshotBatch(batch)) MarkSnapshotBatchSent(batch);
                     batch.Clear();
                 }
             }
@@ -468,10 +545,12 @@ namespace SilksongCoop.Mod.State
             // the boss room after the host has already left it.
             foreach (var dead in _deadRegistry.Records)
             {
-                if (_lastSnapshotDead.TryGetValue(dead.Key, out bool alreadySent) && alreadySent)
+                if (!reconcile &&
+                    _lastSnapshotDead.TryGetValue(dead.Key, out bool alreadySent) && alreadySent)
+                {
                     continue;
+                }
 
-                _lastSnapshotDead[dead.Key] = true;
                 batch.Add(new EnemySnapshotEntry
                 {
                     EnemyKey = dead.Key,
@@ -483,18 +562,33 @@ namespace SilksongCoop.Mod.State
 
                 if (batch.Count >= EnemySnapshotPacket.MaxEntries)
                 {
-                    SendSnapshotBatch(batch);
+                    if (SendSnapshotBatch(batch)) MarkSnapshotBatchSent(batch);
                     batch.Clear();
                 }
             }
 
             if (batch.Count > 0)
             {
-                SendSnapshotBatch(batch);
+                if (SendSnapshotBatch(batch)) MarkSnapshotBatchSent(batch);
             }
         }
 
-        private void SendSnapshotBatch(List<EnemySnapshotEntry> batch)
+        /// <summary>
+        /// Records a batch as sent only after serialization and the transport call
+        /// succeeded. Marking before the send meant a single failure suppressed that enemy
+        /// for the rest of the session.
+        /// </summary>
+        private void MarkSnapshotBatchSent(List<EnemySnapshotEntry> batch)
+        {
+            for (int i = 0; i < batch.Count; i++)
+            {
+                var entry = batch[i];
+                _lastSnapshotHp[entry.EnemyKey] = entry.Hp;
+                _lastSnapshotDead[entry.EnemyKey] = entry.IsDead;
+            }
+        }
+
+        private bool SendSnapshotBatch(List<EnemySnapshotEntry> batch)
         {
             var packet = new EnemySnapshotPacket
             {
@@ -508,11 +602,12 @@ namespace SilksongCoop.Mod.State
             {
                 var writer = new PacketWriter(buffer);
                 packet.Serialize(ref writer);
-                SendBuffer(buffer, writer.Position);
+                return SendBuffer(buffer, writer.Position, requireReliableCapacity: true);
             }
             catch (Exception ex)
             {
                 SilksongCoopPlugin.LogWarn($"[EnemySync] Failed sending snapshot: {ex.Message}");
+                return false;
             }
             finally
             {
@@ -530,6 +625,16 @@ namespace SilksongCoop.Mod.State
         /// <param name="sender">Host peer that produced the snapshot.</param>
         public void ApplyRemoteSnapshot(EnemySnapshotPacket packet, NetworkPeerId sender)
         {
+            // Only the host produces authoritative snapshots. A client that sends one must
+            // not be able to rewrite enemy HP or mark the host authority for another peer.
+            var snapshotSession = _plugin?.SessionState;
+            if (snapshotSession?.IsHost == true) return;
+            if (snapshotSession?.RemotePeerId.HasValue == true &&
+                sender != snapshotSession.RemotePeerId.Value)
+            {
+                return;
+            }
+
             if (_plugin?.SessionState?.IsHost == true) return;
             if (packet.Entries == null) return;
 
@@ -596,20 +701,32 @@ namespace SilksongCoop.Mod.State
             };
 
             // Register even before a peer connects so a later client is caught up.
-            if (!_worldEvents.ContainsKey(key))
+            RecordWorldEventForReplay(packet);
+
+            if (_plugin?.SessionState?.IsConnected != true) return;
+
+            SendWorldPacket(packet);
+        }
+
+        /// <summary>
+        /// Stores a world event for late-join replay. Used both for local events and for
+        /// events the host applied on behalf of another peer, so a third player who joins
+        /// later still receives the opened gate/breakable.
+        /// </summary>
+        private void RecordWorldEventForReplay(WorldEventPacket packet)
+        {
+            if (packet.ObjectKey == 0) return;
+
+            if (!_worldEvents.ContainsKey(packet.ObjectKey))
             {
                 while (_worldEvents.Count >= 1024 && _worldEventOrder.Count > 0)
                 {
                     ulong oldest = _worldEventOrder.Dequeue();
                     if (_worldEvents.Remove(oldest)) break;
                 }
-                _worldEventOrder.Enqueue(key);
+                _worldEventOrder.Enqueue(packet.ObjectKey);
             }
-            _worldEvents[key] = packet;
-
-            if (_plugin?.SessionState?.IsConnected != true) return;
-
-            SendWorldPacket(packet);
+            _worldEvents[packet.ObjectKey] = packet;
         }
 
         /// <summary>
@@ -738,6 +855,7 @@ namespace SilksongCoop.Mod.State
             }
             else
             {
+                RecordWorldEventForReplay(packet);
                 RecordRevision(_appliedWorldRevisions, packet.ObjectKey, packet.StateRevision, packet.OriginPeerId);
             }
         }
@@ -848,6 +966,7 @@ namespace SilksongCoop.Mod.State
                 bool allowProximity = _pendingWorldEventSenders.TryGetValue(pair.Key, out var sender) &&
                                       IsSenderInLocalScene(sender);
                 if (!TryApplyWorldEvent(pair.Value, allowProximity)) continue;
+                RecordWorldEventForReplay(pair.Value);
                 RecordRevision(_appliedWorldRevisions, pair.Key, pair.Value.StateRevision, pair.Value.OriginPeerId);
                 (applied ??= new List<ulong>()).Add(pair.Key);
             }
@@ -901,7 +1020,22 @@ namespace SilksongCoop.Mod.State
                 OriginPeerId = (ulong)(_plugin?.ActiveTransport?.LocalPeerId.Value ?? 0)
             };
 
-            if (!_persistentStates.ContainsKey(key))
+            RecordPersistentStateForReplay(packet);
+
+            if (_plugin?.SessionState?.IsConnected != true) return;
+
+            SendPersistentPacket(packet);
+        }
+
+        /// <summary>
+        /// Stores a persistent object value for late-join replay. Called for local changes
+        /// and for remote changes the host applied, so a third player sees them too.
+        /// </summary>
+        private void RecordPersistentStateForReplay(PersistentStatePacket packet)
+        {
+            if (packet.ItemKey == 0) return;
+
+            if (!_persistentStates.ContainsKey(packet.ItemKey))
             {
                 while (_persistentStates.Count >= 2048 && _persistentStateOrder.Count > 0)
                 {
@@ -912,15 +1046,11 @@ namespace SilksongCoop.Mod.State
                         break;
                     }
                 }
-                _persistentStateOrder.Enqueue(key);
+                _persistentStateOrder.Enqueue(packet.ItemKey);
             }
 
-            _persistentStates[key] = packet;
-            _persistentLastValue[key] = packet;
-
-            if (_plugin?.SessionState?.IsConnected != true) return;
-
-            SendPersistentPacket(packet);
+            _persistentStates[packet.ItemKey] = packet;
+            _persistentLastValue[packet.ItemKey] = packet;
         }
 
         /// <summary>
@@ -958,6 +1088,7 @@ namespace SilksongCoop.Mod.State
             }
             else
             {
+                RecordPersistentStateForReplay(packet);
                 RecordRevision(_appliedPersistentRevisions, packet.ItemKey, packet.StateRevision, packet.OriginPeerId);
             }
         }
@@ -1109,6 +1240,7 @@ namespace SilksongCoop.Mod.State
             foreach (var pair in _pendingPersistentStates)
             {
                 if (!TryApplyPersistentState(pair.Value)) continue;
+                RecordPersistentStateForReplay(pair.Value);
                 RecordRevision(_appliedPersistentRevisions, pair.Key, pair.Value.StateRevision, pair.Value.OriginPeerId);
                 (applied ??= new List<ulong>()).Add(pair.Key);
             }
@@ -1350,12 +1482,18 @@ namespace SilksongCoop.Mod.State
 
         #region Helpers
 
-        private void SendBuffer(byte[] buffer, int length)
+        private bool SendBuffer(byte[] buffer, int length, bool requireReliableCapacity = false)
         {
             var transport = _plugin?.ActiveTransport;
-            if (transport == null || _plugin?.SessionState?.IsConnected != true) return;
+            if (transport == null || _plugin?.SessionState?.IsConnected != true) return false;
+
+            // SendToAll has no return value, and a full reliable window silently drops the
+            // new packet. Avoid entering that state for snapshots so the batch is retried
+            // instead of being marked as sent.
+            if (requireReliableCapacity && transport.ReliableBacklogCount >= 448) return false;
 
             transport.SendToAll(buffer, 0, length, DeliveryMethod.ReliableOrdered, WorldChannel);
+            return true;
         }
 
         private void DetectSceneChange()

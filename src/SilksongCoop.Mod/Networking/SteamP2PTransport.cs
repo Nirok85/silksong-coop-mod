@@ -93,6 +93,13 @@ namespace SilksongCoop.Mod.Networking
         private const int RttLossWindowMs = 5000;
         private const int SteamHeartbeatTimeoutMs = 15000;
         private const int MaxSteamDatagramsPerPoll = 256;
+        // A single flooding channel used to consume the whole per-poll budget, delaying
+        // game/control traffic on the channels after it. The poll is fair-share now.
+        private const int MaxDatagramsPerChannelPerPoll = 64;
+        // Legacy Steam P2P is documented around a 1 MiB payload ceiling. The discard cap
+        // is deliberately above that so an oversized datagram can always be consumed and
+        // its channel unblocked, while remaining bounded.
+        private const int MaxSteamDiscardBytes = 8 * 1024 * 1024;
         // Upper bound for one P2P datagram. The reported size is untrusted, so the receive
         // buffer must never be resized to an attacker-controlled value.
         private const int MaxSteamDatagramBytes = 64 * 1024;
@@ -103,6 +110,9 @@ namespace SilksongCoop.Mod.Networking
         private long _lossWindowStartMs;
         private int _pingsSentInWindow;
         private int _pongsReceivedInWindow;
+        private long _lastAdditionalHeartbeatMs;
+        private int _pollChannelStart = MinChannel;
+        private byte[] _discardBuffer = new byte[MaxSteamDatagramBytes];
 
         #endregion // Fields and State
 
@@ -745,6 +755,15 @@ namespace SilksongCoop.Mod.Networking
                     _connectionAttemptStartMs = 0;
                     Logger?.LogWarning("[Steam] Connection timeout");
 
+                    // Invalidate the in-flight lobby operation. Without this, a late
+                    // LobbyEnter callback after the timeout was still accepted and could
+                    // connect the player to a lobby the session had already abandoned.
+                    if (_lobbyRequestGeneration == _sessionGeneration)
+                    {
+                        _lobbyRequestGeneration = -1;
+                    }
+                    _requestedLobbyId = 0;
+
                     // NotifyPeerDisconnected() suppresses the event when no peer was ever
                     // accepted, which left the UI stuck on "Connecting" forever. A failed
                     // attempt is a real disconnect for the session.
@@ -817,6 +836,16 @@ namespace SilksongCoop.Mod.Networking
             if (_additionalPeers.Count > 0)
             {
                 long now = NowMs();
+
+                // Additional peers are not part of the primary RTT path. Without their own
+                // pings a quiet peer (pause menu, long spectator session) looks dead after
+                // 15 seconds even though its connection is healthy.
+                if (now - _lastAdditionalHeartbeatMs >= RttPingIntervalMs)
+                {
+                    _lastAdditionalHeartbeatMs = now;
+                    SendAdditionalPeerHeartbeats(now);
+                }
+
                 List<CSteamID>? stale = null;
                 foreach (var pair in _additionalPeers)
                 {
@@ -837,20 +866,32 @@ namespace SilksongCoop.Mod.Networking
                 }
             }
 
-            // 2. Fix: Poll only the channels used by the protocol (2-4) and reuse buffer
+            // 2. Poll only the channels used by the protocol (2-4) and reuse buffer.
+            // Channels are visited round-robin with a per-channel cap, so a single noisy
+            // channel cannot starve the others.
             int processedDatagrams = 0;
-            for (int channel = MinChannel; channel <= MaxChannel; channel++)
+            int channelCount = MaxChannel - MinChannel + 1;
+            int startChannel = _pollChannelStart;
+            for (int channelIndex = 0;
+                 channelIndex < channelCount && processedDatagrams < MaxSteamDatagramsPerPoll;
+                 channelIndex++)
             {
+                int channel = MinChannel + ((startChannel - MinChannel + channelIndex) % channelCount);
+                int processedOnChannel = 0;
+
                 while (processedDatagrams < MaxSteamDatagramsPerPoll &&
+                       processedOnChannel < MaxDatagramsPerChannelPerPoll &&
                        SteamNetworking.IsP2PPacketAvailable(out uint msgSize, channel))
                 {
-                    // Never allocate from an untrusted length. An oversized datagram stays
-                    // queued; skipping the channel keeps the poll bounded and lets the
-                    // heartbeat timeout remove the sender.
+                    // Oversized datagrams used to stay at the head of their channel forever,
+                    // blocking every later packet on it. Drain and discard the datagram (the
+                    // length is capped before allocating) and drop the offending session.
                     if (msgSize > MaxSteamDatagramBytes)
                     {
-                        Logger?.LogWarning($"[Steam] Dropped oversized packet on channel {channel} ({msgSize} bytes)");
-                        break;
+                        if (!DrainOversizedPacket(channel, msgSize)) break;
+                        processedDatagrams++;
+                        processedOnChannel++;
+                        continue;
                     }
 
                     // Fix: Reuse buffer, expand only if necessary
@@ -862,6 +903,7 @@ namespace SilksongCoop.Mod.Networking
                     if (SteamNetworking.ReadP2PPacket(_readBuffer, msgSize, out uint bytesRead, out CSteamID remoteId, channel))
                     {
                         processedDatagrams++;
+                        processedOnChannel++;
                         try
                         {
                             // A peer rejected for an incompatible protocol stays rejected for
@@ -1001,8 +1043,53 @@ namespace SilksongCoop.Mod.Networking
                             Logger?.LogError($"[Steam] Error processing packet: {ex.Message}");
                         }
                     }
+                    else
+                    {
+                        // The reported size was readable but the payload was not; retrying the
+                        // same channel would spin forever inside this Update.
+                        break;
+                    }
                 }
             }
+
+            // Rotate the starting channel so every channel eventually gets the first slot.
+            _pollChannelStart = MinChannel + ((startChannel - MinChannel + 1) % channelCount);
+        }
+
+        /// <summary>
+        /// Reads and discards one oversized datagram so it cannot block its channel. The
+        /// sender is disconnected only after the payload was actually consumed.
+        /// </summary>
+        private bool DrainOversizedPacket(int channel, uint msgSize)
+        {
+            if (msgSize > MaxSteamDiscardBytes)
+            {
+                Logger?.LogWarning(
+                    $"[Steam] Oversized packet on channel {channel} ({msgSize} bytes) exceeds the discard cap");
+                return false;
+            }
+
+            if (_discardBuffer.Length < msgSize)
+            {
+                _discardBuffer = new byte[msgSize];
+            }
+
+            if (!SteamNetworking.ReadP2PPacket(
+                    _discardBuffer, msgSize, out uint bytesRead, out CSteamID remoteId, channel))
+            {
+                return false;
+            }
+
+            Logger?.LogWarning(
+                $"[Steam] Disconnected peer {remoteId.m_SteamID}: oversized packet on channel {channel} ({bytesRead} bytes)");
+            try { SteamNetworking.CloseP2PSessionWithUser(remoteId); } catch { /* best-effort */ }
+
+            if (_remoteSteamId == remoteId)
+                NotifyPeerDisconnected(DisconnectReason.ConnectionFailed);
+            else
+                NotifyAdditionalPeerDisconnected(remoteId, DisconnectReason.ConnectionFailed);
+
+            return true;
         }
 
         private void SendRttPing()
@@ -1026,10 +1113,63 @@ namespace SilksongCoop.Mod.Networking
             }
         }
 
+        /// <summary>
+        /// Sends a lightweight ping to every validated additional peer. The pong is handled
+        /// by <see cref="HandleRttControl"/>; only LastSeenMs is used for these peers, not
+        /// the primary peer's RTT statistics.
+        /// </summary>
+        private void SendAdditionalPeerHeartbeats(long now)
+        {
+            byte[] ping = new byte[9];
+            ping[0] = RttPing;
+            Buffer.BlockCopy(BitConverter.GetBytes(now), 0, ping, 1, 8);
+
+            foreach (var pair in _additionalPeers)
+            {
+                var entry = pair.Value;
+                if (!entry.Validated) continue;
+
+                try
+                {
+                    SteamNetworking.SendP2PPacket(
+                        entry.SteamId, ping, (uint)ping.Length,
+                        EP2PSend.k_EP2PSendUnreliableNoDelay, RttChannel);
+                }
+                catch (Exception ex)
+                {
+                    Logger?.LogWarning($"[Steam] Failed to send heartbeat to additional peer: {ex.Message}");
+                }
+            }
+        }
+
         private void HandleRttControl(CSteamID remoteId, uint bytesRead)
         {
-            if (_remoteSteamId == CSteamID.Nil || remoteId != _remoteSteamId) return;
             if (bytesRead < 9) return;
+
+            // Full-mesh peers exchange control heartbeats too, otherwise their LastSeenMs
+            // would only advance on game traffic and a quiet peer would be timed out.
+            if (_remoteSteamId == CSteamID.Nil || remoteId != _remoteSteamId)
+            {
+                if (!_additionalPeers.TryGetValue(remoteId.m_SteamID, out var additional))
+                    return;
+
+                additional.LastSeenMs = NowMs();
+                if (_readBuffer[0] == RttPing)
+                {
+                    _readBuffer[0] = RttPong;
+                    try
+                    {
+                        SteamNetworking.SendP2PPacket(
+                            remoteId, _readBuffer, 9,
+                            EP2PSend.k_EP2PSendUnreliableNoDelay, RttChannel);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger?.LogWarning($"[Steam] Failed to reply to additional peer heartbeat: {ex.Message}");
+                    }
+                }
+                return;
+            }
 
             _lastPongReceivedMs = NowMs();
             byte type = _readBuffer[0];
@@ -1135,6 +1275,7 @@ namespace SilksongCoop.Mod.Networking
             if (callback.m_EChatRoomEnterResponse != (uint)EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess)
             {
                 Logger?.LogWarning($"Failed to enter lobby: {callback.m_EChatRoomEnterResponse}");
+                _lobbyRequestGeneration = -1;
                 _requestedLobbyId = 0;
                 _connectionAttemptStartMs = 0;
                 try { SteamMatchmaking.LeaveLobby(enteredLobby); } catch { /* best-effort */ }
@@ -1171,6 +1312,7 @@ namespace SilksongCoop.Mod.Networking
                         $"[Steam] Refusing incompatible lobby: mod='{modName}', version='{modVersion}', protocol='{protocolText}' (local {NetworkProtocol.Version})");
                     try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
                     _lobbyId = CSteamID.Nil;
+                    _lobbyRequestGeneration = -1;
                     _requestedLobbyId = 0;
                     _connectionAttemptStartMs = 0;
                     OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.VersionMismatch);

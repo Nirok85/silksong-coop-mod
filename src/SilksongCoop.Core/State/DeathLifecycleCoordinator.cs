@@ -22,8 +22,17 @@ namespace SilksongCoop.Core.State
         private float _remainingSpectatorTime;
         private (float X, float Y) _lastPartnerPosition = (0f, 0f);
         private uint _currentEpoch = 1;
-        private bool _isPostBenchRespawn = false;
-        private float _postBenchRespawnTimer = 0f;
+
+        // The peer selected for the current revive attempt. Kept separate from
+        // LastPartnerPosition so the plugin can verify that the scene it is about to
+        // revive into belongs to the same player the coordinator picked.
+        private NetworkPeerId? _reviveTargetPeer;
+        private (float X, float Y) _reviveTargetPosition = (0f, 0f);
+
+        // Local death position is used to pick the nearest living partner when a
+        // session has more than one. Without it the selection depended on dictionary
+        // order and could target a player on the other side of the room.
+        private (float X, float Y) _localDeathPosition = (0f, 0f);
 
         private sealed class PartnerState
         {
@@ -34,6 +43,23 @@ namespace SilksongCoop.Core.State
 
         private readonly Dictionary<NetworkPeerId, PartnerState> _partners =
             new Dictionary<NetworkPeerId, PartnerState>();
+
+        // Peers explicitly registered by the plugin. Packets from a legacy 2-player peer
+        // also create _partners entries lazily, so a non-empty _partners dictionary alone
+        // cannot tell a real 3+ session from the legacy single-partner path.
+        private readonly HashSet<NetworkPeerId> _explicitPeers =
+            new HashSet<NetworkPeerId>();
+
+        // Peers whose clone is currently in the local scene. Revive and spectator-camera
+        // selection prefer these so a nearby player in another room is not chosen over a
+        // reachable one. An empty set means "unknown" and preserves legacy behaviour.
+        private readonly HashSet<NetworkPeerId> _sameScenePeers =
+            new HashSet<NetworkPeerId>();
+
+        // A solo bench fallback must not announce success before the reload finishes.
+        // The plugin uses BeginSoloBenchRespawn; the legacy ForceBenchRespawn(false)
+        // overload keeps its immediate packet for existing callers/tests.
+        private bool _pendingSoloBenchRespawn;
 
         #endregion
 
@@ -96,15 +122,57 @@ namespace SilksongCoop.Core.State
                 {
                     if (_partners.Count > 0)
                     {
-                        // Prefer a living partner; if everyone is dead, the last known
-                        // position is still a better fallback than (0,0).
-                        PartnerState? fallback = null;
-                        foreach (var partner in _partners.Values)
+                        // Prefer the nearest living partner in the local scene; then any
+                        // living partner; then same-scene dead; then any dead. This keeps
+                        // both the revive target and the spectator camera from jumping to
+                        // a player in another room while a reachable one exists.
+                        PartnerState? bestSameSceneAlive = null;
+                        PartnerState? bestAnyAlive = null;
+                        PartnerState? bestSameSceneDead = null;
+                        PartnerState? bestAnyDead = null;
+                        float sameSceneAliveDistance = float.MaxValue;
+                        float anyAliveDistance = float.MaxValue;
+                        float sameSceneDeadDistance = float.MaxValue;
+                        float anyDeadDistance = float.MaxValue;
+
+                        foreach (var pair in _partners)
                         {
-                            if (partner.Alive) return (partner.X, partner.Y);
-                            fallback ??= partner;
+                            var partner = pair.Value;
+                            bool sameScene = _sameScenePeers.Contains(pair.Key);
+                            float dx = partner.X - _localDeathPosition.X;
+                            float dy = partner.Y - _localDeathPosition.Y;
+                            float distanceSq = dx * dx + dy * dy;
+
+                            if (partner.Alive)
+                            {
+                                if (distanceSq < anyAliveDistance)
+                                {
+                                    anyAliveDistance = distanceSq;
+                                    bestAnyAlive = partner;
+                                }
+                                if (sameScene && distanceSq < sameSceneAliveDistance)
+                                {
+                                    sameSceneAliveDistance = distanceSq;
+                                    bestSameSceneAlive = partner;
+                                }
+                            }
+                            else
+                            {
+                                if (distanceSq < anyDeadDistance)
+                                {
+                                    anyDeadDistance = distanceSq;
+                                    bestAnyDead = partner;
+                                }
+                                if (sameScene && distanceSq < sameSceneDeadDistance)
+                                {
+                                    sameSceneDeadDistance = distanceSq;
+                                    bestSameSceneDead = partner;
+                                }
+                            }
                         }
-                        if (fallback != null) return (fallback.X, fallback.Y);
+
+                        var chosen = bestSameSceneAlive ?? bestAnyAlive ?? bestSameSceneDead ?? bestAnyDead;
+                        if (chosen != null) return (chosen.X, chosen.Y);
                     }
                     return _lastPartnerPosition;
                 }
@@ -143,6 +211,97 @@ namespace SilksongCoop.Core.State
 
         #endregion
 
+        #region Revive target
+
+        /// <summary>
+        /// Peer selected for the revive that is currently in progress, or null for a
+        /// legacy single-partner session that never registered a peer.
+        /// </summary>
+        public NetworkPeerId? ReviveTargetPeer
+        {
+            get { lock (_lock) { return _reviveTargetPeer; } }
+        }
+
+        /// <summary>
+        /// Position selected for the revive that is currently in progress.
+        /// </summary>
+        public (float X, float Y) ReviveTargetPosition
+        {
+            get { lock (_lock) { return _reviveTargetPosition; } }
+        }
+
+        /// <summary>
+        /// Picks the nearest living peer (or the stored legacy partner position when no
+        /// peers are registered). Returns false only when no living target exists.
+        /// </summary>
+        public bool TryGetReviveTarget(out NetworkPeerId? peer, out float x, out float y)
+        {
+            lock (_lock)
+            {
+                return TrySelectReviveTargetLocked(out peer, out x, out y);
+            }
+        }
+
+        private bool TrySelectReviveTargetLocked(out NetworkPeerId? peer, out float x, out float y)
+        {
+            peer = null;
+            x = 0f;
+            y = 0f;
+
+            if (_partners.Count == 0)
+            {
+                if (!_isPartnerAlive) return false;
+                x = _lastPartnerPosition.X;
+                y = _lastPartnerPosition.Y;
+                return true;
+            }
+
+            NetworkPeerId? bestSameScenePeer = null;
+            PartnerState? bestSameSceneState = null;
+            float bestSameSceneDistanceSq = float.MaxValue;
+            NetworkPeerId? bestAnyPeer = null;
+            PartnerState? bestAnyState = null;
+            float bestAnyDistanceSq = float.MaxValue;
+
+            foreach (var pair in _partners)
+            {
+                var partner = pair.Value;
+                if (!partner.Alive) continue;
+
+                float dx = partner.X - _localDeathPosition.X;
+                float dy = partner.Y - _localDeathPosition.Y;
+                float distanceSq = dx * dx + dy * dy;
+
+                if (distanceSq < bestAnyDistanceSq)
+                {
+                    bestAnyDistanceSq = distanceSq;
+                    bestAnyPeer = pair.Key;
+                    bestAnyState = partner;
+                }
+
+                if (_sameScenePeers.Contains(pair.Key) && distanceSq < bestSameSceneDistanceSq)
+                {
+                    bestSameSceneDistanceSq = distanceSq;
+                    bestSameScenePeer = pair.Key;
+                    bestSameSceneState = partner;
+                }
+            }
+
+            // A same-scene target is reachable without a scene transition; only fall back
+            // to a living peer elsewhere when no same-scene peer is available (the plugin
+            // will then use the bench fallback).
+            var bestPeer = bestSameScenePeer ?? bestAnyPeer;
+            var bestState = bestSameSceneState ?? bestAnyState;
+            if (bestState == null) return false;
+
+            peer = bestPeer;
+            x = bestState.X;
+            y = bestState.Y;
+            return true;
+        }
+
+        #endregion
+
         #region Public Methods
 
         /// <summary>
@@ -165,8 +324,11 @@ namespace SilksongCoop.Core.State
                     return false;
                 }
 
-                _isPostBenchRespawn = false;
-                _postBenchRespawnTimer = 0f;
+                lock (_lock)
+                {
+                    _localDeathPosition = (deathX, deathY);
+                    _reviveTargetPeer = null;
+                }
 
                 if (IsPartnerAlive)
                 {
@@ -347,6 +509,7 @@ namespace SilksongCoop.Core.State
         {
             lock (_lock)
             {
+                _explicitPeers.Add(peer);
                 if (_partners.ContainsKey(peer)) return;
                 _partners[peer] = new PartnerState
                 {
@@ -354,6 +517,26 @@ namespace SilksongCoop.Core.State
                     X = _lastPartnerPosition.X,
                     Y = _lastPartnerPosition.Y
                 };
+            }
+        }
+
+        /// <summary>
+        /// Updates whether the peer's clone is currently in the local scene. Revive and
+        /// camera selection prefer same-scene peers; removing the flag on scene exit keeps
+        /// a player in another room from being chosen over a reachable one.
+        /// </summary>
+        public void SetRemotePeerInSameScene(NetworkPeerId peer, bool sameScene)
+        {
+            lock (_lock)
+            {
+                if (sameScene)
+                {
+                    _sameScenePeers.Add(peer);
+                }
+                else
+                {
+                    _sameScenePeers.Remove(peer);
+                }
             }
         }
 
@@ -366,6 +549,8 @@ namespace SilksongCoop.Core.State
             lock (_lock)
             {
                 _partners.Remove(peer);
+                _explicitPeers.Remove(peer);
+                _sameScenePeers.Remove(peer);
                 if (_partners.Count == 0)
                 {
                     _isPartnerAlive = true;
@@ -383,6 +568,10 @@ namespace SilksongCoop.Core.State
             lock (_lock)
             {
                 _partners.Clear();
+                _explicitPeers.Clear();
+                _sameScenePeers.Clear();
+                _reviveTargetPeer = null;
+                _pendingSoloBenchRespawn = false;
                 _isPartnerAlive = true;
             }
         }
@@ -483,36 +672,49 @@ namespace SilksongCoop.Core.State
         {
             try
             {
-                if (_postBenchRespawnTimer > 0f)
-                {
-                    _postBenchRespawnTimer = Math.Max(0f, _postBenchRespawnTimer - deltaTime);
-                    if (_postBenchRespawnTimer <= 0f)
-                    {
-                        _isPostBenchRespawn = false;
-                    }
-                }
-
                 if (CurrentState == DeathState.Spectating)
                 {
                     RemainingSpectatorTime -= deltaTime;
                     if (RemainingSpectatorTime <= 0f)
                     {
-                        if (IsPartnerAlive)
+                        NetworkPeerId? targetPeer;
+                        float targetX;
+                        float targetY;
+                        bool hasTarget;
+                        lock (_lock)
                         {
-                            // Revive beside surviving partner!
-                            CurrentState = DeathState.RespawningAtPartner;
-                            OnReviveAtPartnerRequested?.Invoke(LastPartnerPosition.X, LastPartnerPosition.Y);
-
-                            var packet = new DeathLifecyclePacket
+                            hasTarget = TrySelectReviveTargetLocked(out targetPeer, out targetX, out targetY);
+                            if (hasTarget)
                             {
-                                Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, NetworkClock.NowMs),
-                                EventType = DeathEventType.PartnerReviveTrigger,
-                                CoordinateX = LastPartnerPosition.X,
-                                CoordinateY = LastPartnerPosition.Y,
-                                RemainingSeconds = 0f,
-                                Epoch = CurrentEpoch
-                            };
-                            OnOutgoingDeathPacket?.Invoke(packet);
+                                _reviveTargetPeer = targetPeer;
+                                _reviveTargetPosition = (targetX, targetY);
+                            }
+                        }
+
+                        if (hasTarget)
+                        {
+                            // The revive request is only a request: the plugin may still
+                            // fall back to a bench respawn (different scene, missing hero,
+                            // target disconnected). PartnerReviveTrigger is sent from
+                            // ConfirmReviveAtPartner after the local revive actually
+                            // succeeded, so other peers never mark us alive too early.
+                            CurrentState = DeathState.RespawningAtPartner;
+                            try
+                            {
+                                OnReviveAtPartnerRequested?.Invoke(targetX, targetY);
+                            }
+                            catch (Exception invokeEx)
+                            {
+                                // A throwing handler used to leave the coordinator stuck in
+                                // RespawningAtPartner forever. Retry shortly instead.
+                                Log($"[DeathLifecycleCoordinator] Revive request failed: {invokeEx.Message}");
+                                lock (_lock)
+                                {
+                                    _reviveTargetPeer = null;
+                                }
+                                CurrentState = DeathState.Spectating;
+                                RemainingSpectatorTime = 1f;
+                            }
                         }
                         else
                         {
@@ -534,9 +736,93 @@ namespace SilksongCoop.Core.State
         /// </summary>
         public void CompleteRevival()
         {
-            CurrentState = DeathState.Alive;
-            _isPostBenchRespawn = false;
-            _postBenchRespawnTimer = 0f;
+            bool wasRespawning;
+            float x;
+            float y;
+            lock (_lock)
+            {
+                wasRespawning = _currentState == DeathState.RespawningAtPartner;
+                x = _reviveTargetPosition.X;
+                y = _reviveTargetPosition.Y;
+                _currentState = DeathState.Alive;
+                _remainingSpectatorTime = 0f;
+                _reviveTargetPeer = null;
+                _pendingSoloBenchRespawn = false;
+            }
+
+            // Legacy completion path (tests and single-partner callers). The plugin now
+            // uses ConfirmReviveAtPartner, which carries the real spawn coordinates.
+            if (!wasRespawning) return;
+
+            var packet = new DeathLifecyclePacket
+            {
+                Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, NetworkClock.NowMs),
+                EventType = DeathEventType.PartnerReviveTrigger,
+                CoordinateX = x,
+                CoordinateY = y,
+                RemainingSeconds = 0f,
+                Epoch = CurrentEpoch
+            };
+            OnOutgoingDeathPacket?.Invoke(packet);
+        }
+
+        /// <summary>
+        /// Confirms that the local player was actually revived at the selected partner.
+        /// Only now is <see cref="DeathEventType.PartnerReviveTrigger"/> broadcast, so a
+        /// bench fallback or an exception cannot make other peers believe we are alive
+        /// at a position we never reached.
+        /// </summary>
+        /// <param name="x">Actual revive X coordinate.</param>
+        /// <param name="y">Actual revive Y coordinate.</param>
+        public void ConfirmReviveAtPartner(float x, float y)
+        {
+            NetworkPeerId? targetPeer;
+            lock (_lock)
+            {
+                targetPeer = _reviveTargetPeer;
+                _currentState = DeathState.Alive;
+                _remainingSpectatorTime = 0f;
+                _lastPartnerPosition = (x, y);
+
+                if (targetPeer.HasValue &&
+                    _partners.TryGetValue(targetPeer.Value, out var partner))
+                {
+                    partner.Alive = true;
+                    partner.X = x;
+                    partner.Y = y;
+                }
+
+                _reviveTargetPeer = null;
+                _pendingSoloBenchRespawn = false;
+            }
+
+            var packet = new DeathLifecyclePacket
+            {
+                Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, NetworkClock.NowMs),
+                EventType = DeathEventType.PartnerReviveTrigger,
+                CoordinateX = x,
+                CoordinateY = y,
+                RemainingSeconds = 0f,
+                Epoch = CurrentEpoch
+            };
+            OnOutgoingDeathPacket?.Invoke(packet);
+        }
+
+        /// <summary>
+        /// Abandons the in-progress revive request without emitting a success packet.
+        /// The caller is expected to start a bench respawn (solo fallback) instead.
+        /// </summary>
+        public void FailReviveAtPartner()
+        {
+            lock (_lock)
+            {
+                _reviveTargetPeer = null;
+                if (_currentState == DeathState.RespawningAtPartner)
+                {
+                    _currentState = DeathState.Alive;
+                    _remainingSpectatorTime = 0f;
+                }
+            }
         }
 
         /// <summary>
@@ -554,10 +840,14 @@ namespace SilksongCoop.Core.State
                 _isPartnerAlive = true;
                 _remainingSpectatorTime = 0f;
                 _currentEpoch = 1;
-                _isPostBenchRespawn = false;
-                _postBenchRespawnTimer = 0f;
                 _lastPartnerPosition = (0f, 0f);
+                _reviveTargetPeer = null;
+                _reviveTargetPosition = (0f, 0f);
+                _localDeathPosition = (0f, 0f);
                 _partners.Clear();
+                _explicitPeers.Clear();
+                _sameScenePeers.Clear();
+                _pendingSoloBenchRespawn = false;
             }
         }
 
@@ -603,13 +893,9 @@ namespace SilksongCoop.Core.State
                 switch (packet.EventType)
                 {
                     case DeathEventType.SoloDeathOccurred:
-                        if (_isPostBenchRespawn && CurrentState == DeathState.Alive && IsPartnerAlive)
-                        {
-                            // Stale solo death packet arriving from prior life cycle before bench reset
-                            break;
-                        }
-                        _isPostBenchRespawn = false;
-                        _postBenchRespawnTimer = 0f;
+                        // Epoch validation above is the authoritative stale-packet filter.
+                        // The old five-second "post bench" window also discarded genuine
+                        // deaths that happened right after a respawn, so it is gone.
                         OnRemotePartnerDied(sender, packet.CoordinateX, packet.CoordinateY);
                         break;
 
@@ -623,29 +909,44 @@ namespace SilksongCoop.Core.State
                         break;
 
                     case DeathEventType.TeamWipeOccurred:
-                        if (CurrentState == DeathState.TeamWipe)
-                        {
-                            // Already in TeamWipe: ignore echo / duplicate packets
-                            break;
-                        }
-                        if (_isPostBenchRespawn && CurrentState == DeathState.Alive && IsPartnerAlive)
-                        {
-                            // Stale wipe packet arriving while alive post-reset: discard
-                            break;
-                        }
+                        bool alreadyWiping = CurrentState == DeathState.TeamWipe;
                         lock (_lock)
                         {
+                            // A team wipe means the sender saw no living partner left, so
+                            // every registered peer is down (each of them sends its own
+                            // death packet too, but this keeps a 3+ session consistent even
+                            // if one of those packets is delayed or lost). This also runs
+                            // during a local solo bench reload: the last living partner may
+                            // die while we are reloading and must not be left "alive".
+                            foreach (var partner in _partners.Values)
+                            {
+                                partner.Alive = false;
+                            }
                             GetOrCreatePartnerLocked(sender).Alive = false;
                             _isPartnerAlive = false;
                         }
+
+                        if (alreadyWiping)
+                        {
+                            // Duplicate/echo packet: state is already updated, do not fire
+                            // the wipe callback twice.
+                            break;
+                        }
+
                         CurrentState = DeathState.TeamWipe;
                         OnTeamWipeTriggered?.Invoke();
                         break;
 
                     case DeathEventType.BenchCheckpointUpdate:
-                        // Epoch-only sync sent after a bench respawn; the epoch was already
-                        // adopted above. Keeps both peers from silently dropping each
-                        // other's death packets after an uneven number of solo respawns.
+                        // Sent after every bench respawn. Besides syncing the epoch (adopted
+                        // above) it proves that THIS sender completed the reload and is alive
+                        // again. Only the sender is marked: in a 3+ session the other peers
+                        // keep their own alive/dead state.
+                        lock (_lock)
+                        {
+                            GetOrCreatePartnerLocked(sender).Alive = true;
+                            _isPartnerAlive = true;
+                        }
                         break;
 
                     case DeathEventType.SoloBenchRespawn:
@@ -675,22 +976,66 @@ namespace SilksongCoop.Core.State
         /// </param>
         public void ForceBenchRespawn(bool notifyPartner)
         {
-            _isPostBenchRespawn = false;
-            _postBenchRespawnTimer = 0f;
+            BeginBenchRespawn(notifyPartner, notifyImmediately: true);
+        }
 
+        /// <summary>
+        /// Starts a solo bench fallback without announcing success yet. The plugin uses
+        /// this path so peers keep treating the player as down until
+        /// <see cref="ResetAfterBenchRespawn"/> runs after the actual reload.
+        /// </summary>
+        public void BeginSoloBenchRespawn()
+        {
+            BeginBenchRespawn(notifyPartner: false, notifyImmediately: false);
+        }
+
+        private void BeginBenchRespawn(bool notifyPartner, bool notifyImmediately)
+        {
             if (CurrentState == DeathState.TeamWipe) return;
 
             CurrentState = DeathState.TeamWipe;
-            // A solo bench fallback leaves the partner alive in another room. Marking it
-            // dead made the next partner death look like a dual wipe and could suppress a
-            // legitimate revive.
-            IsPartnerAlive = !notifyPartner;
+            lock (_lock)
+            {
+                _reviveTargetPeer = null;
+                _pendingSoloBenchRespawn = !notifyPartner && !notifyImmediately;
+
+                if (notifyPartner)
+                {
+                    // A real team wipe: every peer is dead and will reload its own bench.
+                    foreach (var partner in _partners.Values)
+                    {
+                        partner.Alive = false;
+                    }
+                    _isPartnerAlive = false;
+                }
+                else if (_explicitPeers.Count == 0)
+                {
+                    // Legacy single-partner path: a solo fallback leaves the partner
+                    // alive in another room, so the aggregate must stay true. Lazy
+                    // packet-created entries belong to the same legacy pair.
+                    foreach (var partner in _partners.Values)
+                    {
+                        partner.Alive = true;
+                    }
+                    _isPartnerAlive = true;
+                }
+                // Multi-peer solo fallback: do not touch other peers. Marking every
+                // registered peer alive resurrected a genuinely dead third player.
+            }
             OnTeamWipeTriggered?.Invoke();
 
+            if (notifyImmediately)
+            {
+                SendBenchRespawnPacket(notifyPartner);
+            }
+        }
+
+        private void SendBenchRespawnPacket(bool teamWipe)
+        {
             var packet = new DeathLifecyclePacket
             {
                 Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, NetworkClock.NowMs),
-                EventType = notifyPartner
+                EventType = teamWipe
                     ? DeathEventType.TeamWipeOccurred
                     : DeathEventType.SoloBenchRespawn,
                 RemainingSeconds = 0f,
@@ -722,11 +1067,41 @@ namespace SilksongCoop.Core.State
         public void ResetAfterBenchRespawn()
         {
             CurrentState = DeathState.Alive;
-            IsPartnerAlive = true;
             RemainingSpectatorTime = 0f;
             CurrentEpoch++;
-            _isPostBenchRespawn = true;
-            _postBenchRespawnTimer = 5.0f;
+
+            bool notifySoloBenchRespawn;
+            lock (_lock)
+            {
+                _reviveTargetPeer = null;
+                notifySoloBenchRespawn = _pendingSoloBenchRespawn;
+                _pendingSoloBenchRespawn = false;
+
+                if (_explicitPeers.Count == 0)
+                {
+                    // Legacy behaviour: both players reload the same bench after a wipe,
+                    // so lazy packet-created partner entries become alive again too.
+                    foreach (var partner in _partners.Values)
+                    {
+                        partner.Alive = true;
+                    }
+                    _isPartnerAlive = true;
+                }
+                else
+                {
+                    // Multi-peer: the local reload says nothing about the other peers.
+                    // Each of them re-announces BenchCheckpointUpdate after its own
+                    // reload, and only that sender is marked alive.
+                    _isPartnerAlive = AnyPartnerAliveLocked();
+                }
+            }
+
+            // Only now is the solo fallback actually complete. Sending this in
+            // ForceBenchRespawn made peers mark the player alive while still reloading.
+            if (notifySoloBenchRespawn)
+            {
+                SendBenchRespawnPacket(teamWipe: false);
+            }
         }
 
         #endregion

@@ -105,6 +105,8 @@ namespace SilksongCoop.Core.Localization
             ["Partner revived at the last bench."] = "Напарник возродился у последней скамейки.",
             ["Partner is in another room — reviving at the last bench."] =
                 "Напарник в другой комнате — возрождение у последней скамейки.",
+            ["Partner is unavailable — reviving at the last bench."] =
+                "Напарник недоступен — возрождение у последней скамейки.",
             ["TEAM WIPE"] = "КОМАНДНЫЙ ВАЙП",
             ["Both heroes have fallen — Reloading at last bench..."] =
                 "Оба героя пали — загрузка у последней скамейки...",

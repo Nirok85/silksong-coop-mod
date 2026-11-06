@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Threading;
 using SilksongCoop.Core.Localization;
+using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Revive;
 using SilksongCoop.Core.State;
 using UnityEngine;
@@ -120,6 +121,22 @@ namespace SilksongCoop.Mod
         /// <param name="y">Y coordinate of the partner's position.</param>
         public void ReviveAtPartner(float x, float y)
         {
+            TryReviveAtPartner(x, y, targetPeer: null);
+        }
+
+        /// <summary>
+        /// Revives the local player at a specific partner's position.
+        /// </summary>
+        /// <param name="x">X coordinate reported by the coordinator.</param>
+        /// <param name="y">Y coordinate reported by the coordinator.</param>
+        /// <param name="targetPeer">
+        /// Peer the coordinator selected. The scene/alive checks use exactly this peer, so a
+        /// 3+ session cannot validate one player and revive into another player's room.
+        /// Null keeps the legacy single-partner behaviour.
+        /// </param>
+        /// <returns>True when the revive completed and was confirmed to the session.</returns>
+        public bool TryReviveAtPartner(float x, float y, NetworkPeerId? targetPeer)
+        {
             try
             {
                 var hero = HeroController.instance;
@@ -128,27 +145,33 @@ namespace SilksongCoop.Mod
                     // BUG-N10: without a hero there is nothing to revive, but staying in
                     // RespawningAtPartner forever soft-locked the session (no countdown, no
                     // transforms, no input). Fall back to a bench respawn instead.
-                    Logger.LogWarning("[Coop] Cannot revive: HeroController or gameObject is null — falling back to bench respawn");
-                    ExitSpectatorMode();
-                    DeathCoordinator?.ForceBenchRespawn(notifyPartner: false);
-                    return;
+                    return FallbackFromPartnerRevive(
+                        null,
+                        "HeroController or gameObject is null");
                 }
 
-                // BUG-B4: never teleport across scenes — if the partner moved to another room
-                // while we were dead/spectating, their coordinates are meaningless (and
-                // likely wall-embedded) inside our current scene. Fall back to a team-wipe
-                // bench respawn, which always lands on the local scene's bench.
-                if (CloneSpawner != null &&
-                    SessionState?.RemotePeerId != null &&
-                    !CloneSpawner.IsRemoteInSameScene(SessionState.RemotePeerId.Value))
+                // BUG-B4: never teleport across scenes — if the selected partner moved to
+                // another room while we were dead/spectating, their coordinates are
+                // meaningless (and likely wall-embedded) inside our current scene.
+                NetworkPeerId? scenePeer = targetPeer;
+                if (!scenePeer.HasValue && SessionState?.RemotePeerId != null)
                 {
-                    Logger.LogInfo("[Coop] Partner is in a different scene — falling back to bench respawn");
-                    MenuUI?.SetStatusMessage(Loc.T("Partner is in another room — reviving at the last bench."));
-                    ExitSpectatorMode();
-                    // Solo fallback: the partner is alive in another room. Broadcasting a
-                    // team wipe here killed them (issue #2.1) and reloaded their bench.
-                    DeathCoordinator?.ForceBenchRespawn(notifyPartner: false);
-                    return;
+                    scenePeer = SessionState.RemotePeerId.Value;
+                }
+
+                if (targetPeer.HasValue && !IsReviveTargetAvailable(targetPeer.Value))
+                {
+                    return FallbackFromPartnerRevive(
+                        "Partner is unavailable — reviving at the last bench.",
+                        $"selected peer {targetPeer.Value} is no longer alive/connected");
+                }
+
+                if (CloneSpawner != null && scenePeer.HasValue &&
+                    !CloneSpawner.IsRemoteInSameScene(scenePeer.Value))
+                {
+                    return FallbackFromPartnerRevive(
+                        "Partner is in another room — reviving at the last bench.",
+                        $"partner {scenePeer.Value} is in a different scene");
                 }
 
                 // 1. Resolve safe ground position via GroundProber
@@ -216,13 +239,72 @@ namespace SilksongCoop.Mod
                     0f, 10f);
                 StartCoroutine(ReviveInvulnerabilityRoutine(hero, invulnerabilitySeconds));
 
-                DeathCoordinator?.CompleteRevival();
+                // Confirm only after the hero was actually moved and control was restored.
+                // This is what broadcasts PartnerReviveTrigger to the other peers.
+                DeathCoordinator?.ConfirmReviveAtPartner(spawnPos.x, spawnPos.y);
                 SessionState?.ReturnToActive();
+                return true;
             }
             catch (Exception ex)
             {
                 Logger.LogError($"[Coop] Failed reviving at partner: {ex.Message}\n{ex.StackTrace}");
+                return FallbackFromPartnerRevive(
+                    null,
+                    $"revive threw: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// True when the peer selected for the revive is still connected, alive and in the
+        /// same scene. Checked immediately before touching the hero, because the peer can
+        /// die or disconnect during the spectator countdown.
+        /// </summary>
+        private bool IsReviveTargetAvailable(NetworkPeerId peer)
+        {
+            if (DeathCoordinator != null && !DeathCoordinator.IsRemotePeerAlive(peer))
+                return false;
+
+            var session = SessionState;
+            if (session?.IsConnected != true)
+                return false;
+
+            bool registered = false;
+            var peers = session.RemotePeerIds;
+            for (int i = 0; i < peers.Count; i++)
+            {
+                if (peers[i] == peer)
+                {
+                    registered = true;
+                    break;
+                }
+            }
+            if (!registered) return false;
+
+            if (CloneSpawner != null && !CloneSpawner.IsRemoteInSameScene(peer))
+                return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Aborts a partner revive and falls back to a solo bench respawn. Never broadcasts
+        /// a team wipe: the partner may be alive in another room.
+        /// </summary>
+        private bool FallbackFromPartnerRevive(string? message, string reason)
+        {
+            Logger.LogWarning($"[Coop] Partner revive fallback: {reason}");
+            if (message != null)
+            {
+                MenuUI?.SetStatusMessage(Loc.T(message));
+            }
+
+            ExitSpectatorMode();
+            DeathCoordinator?.FailReviveAtPartner();
+            // Solo fallback: the partner is alive (possibly in another room). Broadcasting
+            // a team wipe here killed them and reloaded their bench (issue #2.1).
+            // BeginSoloBenchRespawn defers SoloBenchRespawn until the reload completes.
+            DeathCoordinator?.BeginSoloBenchRespawn();
+            return false;
         }
 
         private IEnumerator ReviveInvulnerabilityRoutine(HeroController hero, float duration)

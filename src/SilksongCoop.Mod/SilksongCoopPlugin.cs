@@ -1143,6 +1143,12 @@ namespace SilksongCoop.Mod
                     }
                     CloneSpawner.SpawnRemotePlayer(peer, remoteIsPlayer2);
                     DeathCoordinator?.RegisterRemotePeer(peer);
+                    DeathCoordinator?.SetRemotePeerInSameScene(peer, CloneSpawner.IsRemoteInSameScene(peer));
+
+                    // Every peer needs the current world state, not only the first one.
+                    // The host resends snapshots/dead enemies/world replay; existing peers
+                    // receive idempotent repeats.
+                    EnemySync?.BeginCatchUpForNewPeer();
 
                     if (VitalsSync != null)
                     {
@@ -1753,6 +1759,10 @@ namespace SilksongCoop.Mod
                         for (int i = 0; i < remotePeers.Count; i++)
                         {
                             var remotePeer = remotePeers[i];
+                            DeathCoordinator?.SetRemotePeerInSameScene(
+                                remotePeer,
+                                CloneSpawner.IsRemoteInSameScene(remotePeer));
+
                             if (CloneSpawner.TryGetRemotePosition(remotePeer, out float posX, out float posY))
                             {
                                 DeathCoordinator?.UpdatePartnerPosition(remotePeer, posX, posY);

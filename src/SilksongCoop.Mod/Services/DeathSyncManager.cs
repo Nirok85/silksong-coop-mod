@@ -75,7 +75,16 @@ namespace SilksongCoop.Mod.Services
 
         private void OnReviveAtPartnerRequested(float x, float y)
         {
-            _gameplay.ReviveAtPartner(x, y);
+            var targetPeer = _deathCoordinator.ReviveTargetPeer;
+            bool revived = _gameplay.TryReviveAtPartner(x, y, targetPeer);
+            if (!revived && _deathCoordinator.CurrentState == DeathState.RespawningAtPartner)
+            {
+                // Defensive: the gameplay layer is expected to start its own solo bench
+                // fallback. If it ever returns without doing so, never leave the session
+                // stuck in RespawningAtPartner without a packet.
+                _deathCoordinator.FailReviveAtPartner();
+                _deathCoordinator.BeginSoloBenchRespawn();
+            }
         }
 
         private void OnTeamWipeTriggered()

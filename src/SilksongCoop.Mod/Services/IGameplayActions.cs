@@ -1,3 +1,5 @@
+using SilksongCoop.Core.Networking;
+
 namespace SilksongCoop.Mod.Services
 {
     /// <summary>
@@ -8,6 +10,7 @@ namespace SilksongCoop.Mod.Services
     {
         void ApplyRemoteItemUnlock(string itemId, SilksongCoop.Core.Protocol.Packets.ItemCategory category);
         void ReviveAtPartner(float x, float y);
+        bool TryReviveAtPartner(float x, float y, NetworkPeerId? targetPeer);
         void TriggerTeamWipe();
     }
 }
