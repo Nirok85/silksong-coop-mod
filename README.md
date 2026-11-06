@@ -79,9 +79,9 @@ No other downloads required.
 
 ## Installation
 
-### Method A — Release Package (Recommended)
+### Method A — Release Package (Windows, Recommended)
 
-The `SilksongCoop_v3.3.0.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21, HarmonyX and the mod DLLs.
+The `SilksongCoop_v3.3.0.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21 (Windows x64), HarmonyX and the mod DLLs. Linux and macOS users should use Method B with BepInEx for Unix.
 
 1. Close the game if it is running.
 2. Open the Silksong install folder in Steam (Manage → Browse local files). Typical path:
@@ -102,7 +102,7 @@ If you already have BepInEx 5.4.x installed (any OS, including Linux/macOS), gra
 `SilksongCoop_v3.3.0_plugin-only.zip` from the release page — it contains just the two DLLs,
 a default config and these instructions.
 
-1. Install [BepInEx 5.4.x (x64)](https://github.com/BepInEx/BepInEx/releases) into the game root (so that `BepInEx\` and `winhttp.dll` appear next to the game exe).
+1. Install [BepInEx 5.4.x](https://github.com/BepInEx/BepInEx/releases) for your OS into the game root. On Windows use the x64 package (so that `BepInEx\` and `winhttp.dll` appear next to the game exe); on Linux/macOS use the Unix package and follow its loader instructions.
 2. Build the mod from source (see [Development & Building](#development--building)) or take the DLLs from the release archive.
 3. Place the two DLLs into the plugins folder (create it if missing):
    ```text
@@ -273,7 +273,7 @@ silksong_coop_mod/
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # xUnit suite (net8.0) — 850 tests
+    └── SilksongCoop.Tests/           # xUnit suite (net8.0), Core only
         ├── TestHarness/              # DualClientTestHarness (2-client simulation, no Unity)
         ├── EndToEnd/                 # Real UDP loopback connect/reconnect tests
         ├── Tier1_FeatureTests/       # Requirement coverage tests (F01–F28)
@@ -287,23 +287,19 @@ silksong_coop_mod/
 
 ## Testing & Verification
 
-The project is fully covered by an automated regression suite:
+The Core layer is covered by an automated regression suite. The Mod layer (Unity
+hooks, Steam lobby/P2P and in-game behaviour) is built against the game's managed
+assemblies and verified by a manual in-game checklist; it is not exercised by the
+Core-only test project.
 
 ```bash
-dotnet test SilksongCoop.sln -c Release
+dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj -c Release
 ```
 
-Current result:
-
-```text
-Total tests:   850
-Passed:        850 (100.0%)
-Failed:        0
-Skipped:       0
-Duration:      ~6 s
-Build:         0 errors, 0 compiler warnings (Debug + Release); NU1900 is a NuGet
-               network warning for the offline BepInEx feed
-```
+Builds and test counts are tied to a specific commit; use the latest CI run or
+run the command above locally instead of relying on a fixed number in this file.
+Release and Debug builds are expected to produce 0 compiler errors and 0 compiler
+warnings (`NU1900` is a NuGet network warning for the offline BepInEx feed).
 
 ---
 

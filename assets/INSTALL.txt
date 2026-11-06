@@ -22,5 +22,6 @@ Steam paths:
   Linux: ~/.local/share/Steam/steamapps/common/Hollow Knight Silksong
   macOS: ~/Library/Application Support/Steam/steamapps/common/Hollow Knight Silksong
 
-If you have no BepInEx at all, use the full "SilksongCoop_v__VERSION__.zip"
-instead - it bundles BepInEx 5.4.21 x64 for Windows.
+The full "SilksongCoop_v__VERSION__.zip" bundles the BepInEx 5.4.21 x64
+loader for WINDOWS only. Do not use it as a loader on Linux/macOS; use this
+plugin-only archive with the Unix BepInEx package instead.

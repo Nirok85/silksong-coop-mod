@@ -48,6 +48,15 @@ Write-Host "  project version: $modVersion"
 Check ($modVersion -eq $coreVersion) "Core csproj version matches Mod ($modVersion)"
 Check ($pluginMatch.Success -and $pluginMatch.Groups[1].Value -eq $modVersion) "PluginVersion matches csproj ($modVersion)"
 
+foreach ($projectFile in @('src\SilksongCoop.Mod\SilksongCoop.Mod.csproj', 'src\SilksongCoop.Core\SilksongCoop.Core.csproj')) {
+    [xml]$project = Get-Content (Join-Path $root $projectFile) -Raw -Encoding UTF8
+    $entry = $project.Project.PropertyGroup | Where-Object { $_.Version } | Select-Object -First 1
+    $assembly = [string]$entry.AssemblyVersion
+    $file = [string]$entry.FileVersion
+    Check ($assembly -eq "$modVersion.0") "$projectFile AssemblyVersion is $modVersion.0 ($assembly)"
+    Check ($file -eq "$modVersion.0") "$projectFile FileVersion is $modVersion.0 ($file)"
+}
+
 Write-Host '==> Changelog and README' -ForegroundColor Cyan
 $changelog = Get-Content (Join-Path $root 'CHANGELOG.md') -Raw -Encoding UTF8
 Check ($changelog -match [regex]::Escape("## [$modVersion]")) "CHANGELOG.md has a [$modVersion] section"
@@ -55,6 +64,13 @@ Check ($changelog -match [regex]::Escape("## [$modVersion]")) "CHANGELOG.md has 
 $readme = Get-Content (Join-Path $root 'README.md') -Raw -Encoding UTF8
 Check ($readme -match [regex]::Escape("Version-$modVersion")) "README.md badge mentions $modVersion"
 Check ($readme -match [regex]::Escape("SilksongCoop_v$modVersion.zip")) "README.md install section mentions the release archive"
+
+$readmeRu = Get-Content (Join-Path $root 'README.ru.md') -Raw -Encoding UTF8
+Check ($readmeRu -match [regex]::Escape("Version-$modVersion")) "README.ru.md badge mentions $modVersion"
+Check ($readmeRu -match [regex]::Escape("SilksongCoop_v$modVersion.zip")) "README.ru.md install section mentions the release archive"
+
+$roadmap = Get-Content (Join-Path $root 'ROADMAP.md') -Raw -Encoding UTF8
+Check ($roadmap -match [regex]::Escape("v$modVersion")) "ROADMAP.md mentions v$modVersion"
 
 Write-Host '==> Working tree' -ForegroundColor Cyan
 $status = & git -C $root status --porcelain
@@ -74,17 +90,24 @@ $buildArgs = @(
 )
 if ($NoRestore) { $buildArgs += '--no-restore' }
 
+$buildSucceeded = $false
 & dotnet build @buildArgs
 if ($LASTEXITCODE -ne 0) {
     $failures.Add("dotnet build failed with exit code $LASTEXITCODE")
     Write-Host '  [FAIL] build failed' -ForegroundColor Red
 }
 else {
+    $buildSucceeded = $true
     Write-Host '  [ok]   build succeeded' -ForegroundColor Green
 }
 
 if ($SkipTests) {
     Write-Host '  [skip] tests (-SkipTests)' -ForegroundColor Yellow
+}
+elseif (-not $buildSucceeded) {
+    # Running --no-build after a failed build would test stale binaries from an earlier
+    # build and could print "tests passed" for code that no longer compiles.
+    Write-Host '  [skip] tests skipped because the build failed' -ForegroundColor Yellow
 }
 else {
     Write-Host '==> Tests' -ForegroundColor Cyan

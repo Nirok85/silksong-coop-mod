@@ -70,6 +70,15 @@ compare the full mod version, so 3.2.0 and 3.3.0 cannot mix over Steam; UDP
 remains wire-compatible. The experimental Steam 3+ mode only works when every
 player sets the same `[Network] SteamMaxPlayers` value.
 
+**Post-3.3.0 reliability build.** The existing `EnemySyncPacket.Damage` field is
+now also used to combine simultaneous hits, and `TickSequence` is used only as a
+per-sender dedup key. While a recent host snapshot covers an enemy, clients clamp
+combined lethal damage to 1 HP and wait for the host's death packet/snapshot; the
+host may emit a regular `Death` packet after combining client hits. No field was
+added or reordered. A 3.3.0 peer still understands every packet, but it may
+collapse two simultaneous hits into one and does not apply the host-confirmation
+clamp; update every player for correct combined damage.
+
 **Pickup-key semantics in 3.2.0.** `CurrencySyncPacket.PickupKey` now prefers the
 drop's serialized persistent id instead of its rounded position. The field layout
 is unchanged, but two peers on different releases derive different keys for the

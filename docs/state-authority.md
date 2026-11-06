@@ -10,11 +10,11 @@ the same change.
 | State | Writer(s) | Receiver rule | Conflict resolution |
 |---|---|---|---|
 | Player transform | Each player writes their own | Field-validated (NaN/Infinity, world bounds, velocity cap) | Newer tick wins; interpolation smooths the rest |
-| Player death/revive | Each player writes their own lifecycle | `DeathLifecycleCoordinator` with epoch + event type; per-peer alive/position state when several peers are registered | Higher epoch is adopted; stale epochs are ignored; a cross-scene revive falls back to the local bench with an explicit banner/toast; a revive targets a living peer |
+| Player death/revive | Each player writes their own lifecycle | `DeathLifecycleCoordinator` with epoch + event type; per-peer alive/position state when several peers are registered | Higher epoch is adopted; stale epochs are ignored; the nearest living peer is selected and re-validated (alive, connected, same scene) immediately before the revive; a fallback goes to the local bench with an explicit banner/toast; `PartnerReviveTrigger` is sent only after `ConfirmReviveAtPartner` |
 | Shared vitals (max HP, silk spools, needle) | Either peer | Monotonic upgrades only, applied under `RemoteApplyScope` | A higher value wins; a lower value never downgrades |
 | Currency | Either peer | Transaction GUID dedup + per-sender sequence, applied under `RemoteApplyScope` | Duplicate transaction IDs are dropped; wallet is clamped to a sane ceiling |
 | Inventory unlocks | Either peer | Idempotent per item key | First unlock wins; repeats are no-ops |
-| Enemy/boss HP, deaths and phases | The attacker's local hit is replicated to the partner | `EnemySyncController` + `EnemySyncService`; a replicated hit re-emits `TookDamage`/`TOOK DAMAGE` without reapplying damage | Exact `scene + hierarchy` key; host snapshot corrects drift |
+| Enemy/boss HP, deaths and phases | The attacker's local hit is replicated to the partner | `EnemySyncController` + `EnemySyncService`; a replicated hit re-emits `TookDamage`/`TOOK DAMAGE` without reapplying damage | Exact `scene + hierarchy` key; a newer absolute HP wins, equal/higher HP is combined additively from `Damage` and deduplicated by sender + packet sequence; host snapshot corrects drift |
 | World events (breakables, gates) | Either peer | `WorldEventPacket` with `StateRevision`/`OriginPeerId` | Per-key revision/ origin comparison; replay of stored events on join |
 | Persistent world values | Either peer | `PersistentStatePacket` keyed by scene + persistent id + type; `SaveState` hook plus a 1 Hz poll of `PersistentBoolItem`/`PersistentIntItem` | Per-key revision/origin comparison; polling seeds initial scene state without broadcasting it |
 | Quest flags from NPC dialogue | Either peer | `QuestStatePacket` (0x56) after `NPCControlBase` dialogue plus a 1 Hz poll; only allowlisted `PlayerData` bool/int names | Diff of before/after snapshots; only changed values are sent and applied under `RemoteApplyScope` |
@@ -26,14 +26,19 @@ There is **no** host-authoritative arbitration for arbitrary state: the mod does
 not vote, does not compare peers, and does not reject a peer's vitals, currency,
 world events or deaths merely because the local peer is the host.
 
-The host is authoritative for exactly one thing: the **periodic enemy HP
-snapshot**. `EnemySnapshotPacket` is sent by the host and applied by clients as a
-drift correction after the fields have been validated. It is not a general
-consensus mechanism and it does not roll back player, wallet or world-progress
-state.
+The host is authoritative for **enemy HP in its current scene**. Its periodic
+`EnemySnapshotPacket` is applied by clients as a drift correction after field
+validation, and while a recent host snapshot covers an enemy, clients combine
+client hits additively but clamp combined lethal damage to 1 HP. Only the host
+confirms the resulting death (death packet or snapshot), so a hit already present
+in a snapshot cannot be double-counted into a false kill. When the host is in
+another room and has no snapshot for an enemy, the clients in that room combine
+damage and may kill it themselves.
 
-Do not describe this mod as "host-authoritative". If a future release adds
-arbitration, this section must be rewritten together with the protocol revision.
+The host is not authoritative for player position, death lifecycle, wallet,
+inventory or world-progress state, and there is no vote-based arbitration. Do not
+describe this mod as generally "host-authoritative": the authority is scoped to
+enemy damage and only while the host simulates that scene.
 
 ## Transport trust boundary
 

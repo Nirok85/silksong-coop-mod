@@ -42,3 +42,8 @@ such a branch manually before merging.
 
 Until `ENABLE_MOD_CI` is `true`, the job stays skipped. Unset the variable if the
 runner is offline so the workflow does not queue forever.
+
+A skipped Mod job is **not** evidence that the Mod compiles. Before publishing,
+either make this job green or run `scripts/preflight-release.ps1` on a machine with
+the game installed and record the commit SHA, game version and result in the release
+checklist.

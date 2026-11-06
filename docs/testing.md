@@ -28,6 +28,21 @@ Protocol serialization/validation, session state, vitals/currency, death lifecyc
 enemy/pickup sync, interpolation, room codes, safe ground, adversarial/stress,
 property-based invariants, integration/E2E over UDP loopback.
 
+## Coverage boundaries
+
+| Area | Automated | Manual in game |
+|---|---|---|
+| Core protocol/state/pure logic | Yes | - |
+| Real UDP connect/reconnect/retransmit | Yes (loopback) | Yes (LAN/VPN) |
+| Unity Harmony hooks and patch targets | No | Yes |
+| Steam lobby/P2P/full mesh | No (fake transport only) | Yes, including 3+ |
+| Scene transitions, saves, boss phases | No | Yes |
+| Release archives | Packaging script checks | Install smoke |
+
+A green Core test run does not prove that the Mod compiled against the current game
+build or that Steam/Unity behaviour is correct. Record the game version, mod
+version, OS, transport and result for every manual run.
+
 ## Adding tests
 
 - Core tests only (no Unity dependency).

@@ -62,8 +62,9 @@ grep -rn "$OLD" --include='*.cs' --include='*.csproj' --include='*.md' . \
   | grep -v '/bin/\|/obj/'
 ```
 
-Or run the cross-platform preflight, which verifies the three version sources,
-`CHANGELOG.md`, `README.md`, the working tree, the build and the tests:
+Or run the cross-platform preflight, which verifies both csproj versions,
+`PluginVersion`, `CHANGELOG.md`, both READMEs, `ROADMAP.md`, the working tree,
+the build and the tests:
 
 ```powershell
 pwsh ./scripts/preflight-release.ps1 -AllowDirty
@@ -80,7 +81,10 @@ dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj -c Release
 ```
 
 Expected: 0 warnings (warnings are errors in Release) and all tests passing.
-CI runs the same steps on `master`, but do not publish an unverified build.
+The hosted CI job builds Core and runs the Core test project; the Mod job is
+conditional on `ENABLE_MOD_CI` and a self-hosted runner. A green Core job alone
+does not prove that the Mod compiled or that Steam/Unity behaviour works. Build the
+Mod against the game assemblies and run the manual smoke checklist before publishing.
 
 If the protocol changed, say so explicitly in the release notes — mixed
 versions refuse to connect, so both players must update.
@@ -94,22 +98,24 @@ bash scripts/package-release.sh dist
 On Windows the same archives are produced by:
 
 ```powershell
-pwsh ./scripts/package-release.ps1 -ManagedDir "D:\SteamLibrary\steamapps\common\Hollow Knight Silksong\Hollow Knight Silksong_Data\Managed"
+pwsh ./scripts/package-release.ps1 -ManagedDir "D:\SteamLibrary\steamapps\common\Hollow Knight Silksong\Hollow Knight Silksong_Data\Managed" -BepInExSha256 <pinned-hash>
 ```
+
+`-OutputDir` is optional; when the script is launched with `powershell -File` and
+the parameter is omitted, it defaults to `<repo>/dist`.
 
 Produces, with the version read from `SilksongCoop.Mod.csproj`:
 
 | File | Contents |
 |---|---|
-| `dist/SilksongCoop_vX.Y.Z.zip` | Windows, self-contained (BepInEx 5.4.21 x64 bundled) |
-| `dist/SilksongCoop_vX.Y.Z_plugin-only.zip` | the two DLLs + config + licenses |
+| `dist/SilksongCoop_vX.Y.Z.zip` | Windows, self-contained (BepInEx 5.4.21 x64 bundled) + docs/licenses |
+| `dist/SilksongCoop_vX.Y.Z_plugin-only.zip` | the two DLLs + config + licenses + docs |
+| `dist/SilksongCoop_vX.Y.Z_SHA256SUMS.txt` | hashes of both archives |
 
 The script downloads BepInEx unless `BEPINEX_ZIP` points at a local copy;
-`SKIP_BUNDLE=1` builds only the plugin-only package. Checksums for the notes:
-
-```bash
-cd dist && sha256sum SilksongCoop_vX.Y.Z*.zip
-```
+`SKIP_BUNDLE=1` builds only the plugin-only package. Pin the loader with
+`-BepInExSha256`/`BEPINEX_SHA256`, and check that ZIP entry names use `/` so the
+plugin-only archive extracts correctly on Unix. Do not publish without the hashes.
 
 ## 4. Commit, tag, push
 
@@ -134,7 +140,10 @@ V=X.Y.Z
 awk -v v="$V" 'index($0,"## [" v "]")==1 {f=1} f && /^## \[/ && index($0,"## [" v "]")!=1 {exit} f' \
   CHANGELOG.md > /tmp/notes.md
 
-gh release create vX.Y.Z dist/SilksongCoop_vX.Y.Z.zip dist/SilksongCoop_vX.Y.Z_plugin-only.zip \
+gh release create vX.Y.Z \
+  dist/SilksongCoop_vX.Y.Z.zip \
+  dist/SilksongCoop_vX.Y.Z_plugin-only.zip \
+  dist/SilksongCoop_vX.Y.Z_SHA256SUMS.txt \
   --title "Silksong Co-op Mod vX.Y.Z — <headline>" \
   --notes-file /tmp/notes.md
 ```
@@ -151,8 +160,9 @@ gh run list --limit 3                        # master build green
 gh release download vX.Y.Z -D /tmp/relcheck  # archives actually downloadable
 ```
 
-Optionally verify the downloaded archives against the published SHA256 and that
-`dist/` is not committed (`dist/` is ignored by git).
+Verify the downloaded archives against the published SHA256 manifest and that
+`dist/` is not committed (`dist/` is ignored by git). Re-download after publishing:
+a local file can differ from the uploaded asset.
 
 ## Troubleshooting
 

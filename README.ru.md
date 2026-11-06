@@ -271,7 +271,7 @@ silksong_coop_mod/
 │       └── UI/                       # CoopMenuUI (F10), DiagnosticsOverlay (F11), ToastNotifier
 │
 └── tests/
-    └── SilksongCoop.Tests/           # Набор тестов xUnit (net8.0) — 850 тестов
+    └── SilksongCoop.Tests/           # Набор тестов xUnit (net8.0), только Core
         ├── TestHarness/              # DualClientTestHarness (симуляция 2 клиентов без Unity)
         ├── EndToEnd/                 # Тесты реального UDP loopback: connect/reconnect
         ├── Tier1_FeatureTests/       # Покрытие требований (F01–F28)
@@ -285,23 +285,18 @@ silksong_coop_mod/
 
 ## 🧪 Тестирование и верификация
 
-Проект полностью покрыт автоматизированным регрессионным набором:
+Автотестами покрыт слой Core. Слой Mod (Unity-хуки, Steam lobby/P2P и игровое
+поведение) собирается против managed-сборок игры и проверяется по ручному
+чек-листу в игре; тестовый проект Core его не запускает.
 
 ```bash
-dotnet test SilksongCoop.sln -c Release
+dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj -c Release
 ```
 
-Текущий результат:
-
-```text
-Всего тестов:   850
-Пройдено:       850 (100.0%)
-Провалено:      0
-Пропущено:      0
-Время:          ~6 с
-Сборка:         0 ошибок, 0 предупреждений компилятора (Debug + Release);
-                NU1900 — сетевое предупреждение NuGet для offline-фида BepInEx
-```
+Сборки и число тестов привязаны к конкретному коммиту: ориентируйтесь на
+последний прогон CI или выполните команду выше локально, а не на фиксированное
+число в этом файле. Ожидается 0 ошибок и 0 предупреждений компилятора в Release
+и Debug (`NU1900` — сетевое предупреждение NuGet для offline-фида BepInEx).
 
 ---
 
