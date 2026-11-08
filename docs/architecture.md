@@ -16,6 +16,12 @@
 - `IGameplayActions` — narrow gameplay surface for sync managers (no god object).
 - `INetworkDiagnostics` — narrow diagnostics surface.
 - `ICoopLogger` (via `CoopLog`) — level-aware logging hook.
+- `StateFlagReader` (Core) — resolves and caches the game's controller-state flags
+  without reflection on the transform hot path.
+- `EnemySnapshotSendPolicy` (Core) — pure rule for first-seen/damaged/changed/dead
+  snapshot entries, testable without Unity.
+- `PeerRegistry` / `CoopSessionState.RemotePeerIds` — N-player peer foundation;
+  `VitalsSyncService` and clone storage are already per-peer.
 
 ## Service composition
 
@@ -33,12 +39,17 @@ All managers depend on interfaces, not on `SilksongCoopPlugin`. Gameplay actions
 - Player position: each player owns and replicates their own; remote values are validated.
 - Death/revive: `DeathLifecycleCoordinator`; a dead partner is never revived by transform traffic.
 - Shared progression (max HP, silk, needle): monotonic upgrades only.
-- Enemy HP: the host sends an authoritative snapshot roughly once per second; peers apply it after validation.
+- Enemy HP: the host sends an authoritative snapshot roughly once per second and
+  merges client hits against its own simulated HP. A client death claim is only a
+  damage claim until the combined damage is lethal. Snapshots cannot resurrect a
+  dead enemy and cannot raise HP before a newer local hit is acknowledged.
 - Pickups: claimed idempotently per item key.
 - World events / persistent values: `StateRevision` + `OriginPeerId`, idempotent per key (see `docs/protocol-v8.md`).
 
-There is **no** host-authoritative arbitration or vote-based conflict resolution.
-See `docs/state-authority.md` for the exact behaviour.
+There is **no** vote-based conflict resolution. Enemy HP and death use the host
+as the authority described in `docs/state-authority.md`; world objects use
+revision ordering. UDP still accepts exactly one remote peer in v8. Steam has an
+experimental full-mesh path; see `docs/multiplayer-3plus-analysis.md`.
 
 ## Reconnect / resync
 
