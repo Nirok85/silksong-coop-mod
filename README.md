@@ -1,16 +1,16 @@
-# Hollow Knight: Silksong — Co-op Multiplayer Mod
+﻿# Hollow Knight: Silksong — Co-op Multiplayer Mod
 
 ![Platform](https://img.shields.io/badge/Platform-PC%20%7C%20Steam-blue)
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
 ![Loader](https://img.shields.io/badge/ModLoader-BepInEx%205.4.x-purple)
 ![Tests](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)
-![Version](https://img.shields.io/badge/Version-3.3.2-success)
+![Version](https://img.shields.io/badge/Version-3.3.3-success)
 
 **[🇷🇺 Русская версия](README.ru.md)**
 
 A fully-featured cooperative mod for **Hollow Knight: Silksong**, allowing two players to explore the world of Pharloom together in real time. The release package is **fully self-contained** — BepInEx 5.4.21 and HarmonyX are bundled; no separate downloads are required.
 
-**Latest release:** [v3.3.2](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.2) (2026-11-08) — performance and reliability pass.
+**Latest release:** [v3.3.3](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.3) (2026-11-09) — performance and reliability pass.
 
 ---
 
@@ -83,7 +83,7 @@ No other downloads required.
 
 ### Method A — Release Package (Windows, Recommended)
 
-The `SilksongCoop_v3.3.2.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21 (Windows x64), HarmonyX and the mod DLLs. Linux and macOS users should use Method B with BepInEx for Unix.
+The `SilksongCoop_v3.3.3.zip` from the [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) page includes everything: BepInEx 5.4.21 (Windows x64), HarmonyX and the mod DLLs. Linux and macOS users should use Method B with BepInEx for Unix.
 
 1. Close the game if it is running.
 2. Open the Silksong install folder in Steam (Manage → Browse local files). Typical path:
@@ -101,7 +101,7 @@ The `SilksongCoop_v3.3.2.zip` from the [Releases](https://github.com/Nirok85/sil
 ### Method B — Manual Install (from source build)
 
 If you already have BepInEx 5.4.x installed (any OS, including Linux/macOS), grab
-`SilksongCoop_v3.3.2_plugin-only.zip` from the release page — it contains just the two DLLs,
+`SilksongCoop_v3.3.3_plugin-only.zip` from the release page — it contains just the two DLLs,
 a default config and these instructions.
 
 1. Install [BepInEx 5.4.x](https://github.com/BepInEx/BepInEx/releases) for your OS into the game root. On Windows use the x64 package (so that `BepInEx\` and `winhttp.dll` appear next to the game exe); on Linux/macOS use the Unix package and follow its loader instructions.
@@ -331,7 +331,7 @@ The mod is in active development. The following limitations are by design or are
 * **F11** — network diagnostics overlay (ping/loss/bandwidth graphs, top-right corner).
 * Keys are remappable in `BepInEx\config\com.silksong.coop.cfg`, section `[Keybinds]`.
 
-If keys don't respond: check that `BepInEx\LogOutput.log` shows the plugin loading (look for `Initializing Silksong Co-op Multiplayer v3.3.2...`). Ensure no other mod or OS utility (e.g. screen recorders, media players) binds F10/F11 globally.
+If keys don't respond: check that `BepInEx\LogOutput.log` shows the plugin loading (look for `Initializing Silksong Co-op Multiplayer v3.3.3...`). Ensure no other mod or OS utility (e.g. screen recorders, media players) binds F10/F11 globally.
 </details>
 
 <details>
@@ -439,3 +439,5 @@ and the [`LICENSES/`](LICENSES) directory.
 Developed for the Hollow Knight: Silksong community. Unofficial fan mod — contains no original game files or closed Team Cherry assets.
 
 Hollow Knight: Silksong © Team Cherry.
+
+

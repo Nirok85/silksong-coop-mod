@@ -435,13 +435,15 @@ namespace SilksongCoop.Mod.UI
 
             float hpFrac = peer.MaxHealth > 0 ? (float)peer.Health / peer.MaxHealth : 0f;
             Color hpColor = alive ? new Color(0.85f, 0.25f, 0.25f) : new Color(0.45f, 0.30f, 0.30f);
-            DrawStatusBar(barX, barY, barW, barH, hpFrac, hpColor, $"HP {peer.Health}/{peer.MaxHealth}");
+            DrawStatusBar(barX, barY, barW, barH, hpFrac, hpColor,
+                Loc.T("HP {0}/{1}", peer.Health, peer.MaxHealth));
 
             // Silk bar
             float silkY = y + 42f;
             float silkFrac = peer.MaxSilkSpools > 0 ? (float)peer.Silk / (peer.MaxSilkSpools * 9f) : 0f;
             Color silkColor = alive ? new Color(0.30f, 0.55f, 0.90f) : new Color(0.30f, 0.36f, 0.50f);
-            DrawStatusBar(barX, silkY, barW, barH, silkFrac, silkColor, $"Silk {peer.Silk}/{peer.MaxSilkSpools * 9}");
+            DrawStatusBar(barX, silkY, barW, barH, silkFrac, silkColor,
+                Loc.T("Silk {0}/{1}", peer.Silk, peer.MaxSilkSpools * 9));
 
             GUI.color = Color.white;
         }

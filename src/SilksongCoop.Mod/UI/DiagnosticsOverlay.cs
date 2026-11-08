@@ -206,9 +206,9 @@ namespace SilksongCoop.Mod.UI
 
                 // Bandwidth graph (cyan) — convert bytes to KB inside DrawGraph
                 int bandwidthCount = _diagnostics.CopyBandwidthHistory(_historyBuffer);
-                DrawGraph("BW", cursorY, x + Padding,
+                DrawGraph(Loc.T("BW"), cursorY, x + Padding,
                     _historyBuffer, bandwidthCount,
-                    (_diagnostics.BytesOutPerSecond + _diagnostics.BytesInPerSecond) / 1024f, "KB/s",
+                    (_diagnostics.BytesOutPerSecond + _diagnostics.BytesInPerSecond) / 1024f, Loc.T("KB/s"),
                     0f, 100f, new Color(0.4f, 0.9f, 1f), 1f / 1024f);
                 cursorY += GraphHeight + RowSpacing;
 
