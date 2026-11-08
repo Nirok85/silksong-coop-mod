@@ -16,8 +16,31 @@ Baseline: `652720b` (version 3.3.1, protocol v8)
 | M4b - world key/index/quest accessors | **Done** | `c073bdb` | 917/917 tests; Release/Debug 0 warnings; audit closed with medium performance residuals |
 | M5a - packet sender & limits | **Done** | `26514ae` | 917/917 tests; Release/Debug 0 warnings; audit closed |
 | M5b - lifecycle & unsubscribe | **Done** | `a28af15` | 917/917 tests; Release/Debug 0 warnings; audit clean |
-| M6 - release 3.3.2 & GitHub | **In progress** | - | preflight passed; smoke pending |
+| M6 - release 3.3.2 & GitHub | **Blocked** | `37871f9` | preflight/build/tests/archives green; local two-instance smoke unavailable; no tag/release |
 | M6 — release 3.3.2 & GitHub | Pending | — | — |
+
+## M6 - release 3.3.2 and GitHub
+
+**Prepared:** version 3.3.2 in both csproj files and `PluginVersion`;
+CHANGELOG/README/README.ru/ROADMAP updated. Clean-tree preflight passed:
+version consistency, build, 917/917 tests, DLL ProductVersion 3.3.2.
+
+**Archives:** `dist/3.3.2/SilksongCoop_v3.3.2.zip`
+(`D8094CF946F48252B7DFFD15CF25BCD5921DE18E6DCCB8D09F6C7091711FFF75`) and
+`SilksongCoop_v3.3.2_plugin-only.zip`
+(`AD639015D4CC289B88AD1582330CCB2E1BB1D0F82458D0BDF5AF195C36EAB20B`);
+both DLLs report `3.3.2+37871f9...`.
+
+**Live attempt:** single game instance loaded 3.3.2 successfully (BepInEx log:
+compatibility banner, 7 Harmony classes, 38 quest flags, no startup errors).
+A second local instance could not be started: Steam `-applaunch` did not spawn
+another process, direct launch exits with code 1 (Steam DRM/single-instance),
+and mouse injection into the IMGUI menu did not register (`mdown` access error);
+keyboard F10 worked. No two-client UDP/Steam smoke was completed.
+
+**Gate:** per the campaign spec, tag `v3.3.2` and the GitHub Release are
+deliberately **not** created until the user runs the two-client smoke or
+explicitly authorizes publishing without it.
 
 ## M5a - packet sender and backlog limits
 
