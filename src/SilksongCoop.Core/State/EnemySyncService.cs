@@ -114,11 +114,15 @@ namespace SilksongCoop.Core.State
 
             if (_enemies.Count >= MaxTrackedEnemies && _enemies.Count > 0)
             {
+                ulong keyToRemove = 0;
                 foreach (var key in _enemies.Keys)
                 {
-                    _enemies.Remove(key);
-                    return;
+                    keyToRemove = key;
+                    break;
                 }
+
+                if (keyToRemove != 0)
+                    _enemies.Remove(keyToRemove);
             }
         }
 

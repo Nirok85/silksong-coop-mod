@@ -222,6 +222,10 @@ namespace SilksongCoop.Mod.Services
 
             if (_lastSnapshot == null)
             {
+                // Do not seed the baseline with an empty snapshot captured before PlayerData
+                // has loaded. Otherwise the next poll would diff empty -> full and broadcast
+                // every tracked flag, potentially overwriting the partner's newer state.
+                if (PlayerData.instance == null) return;
                 _lastSnapshot = current;
                 return;
             }

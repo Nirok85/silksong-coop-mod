@@ -34,9 +34,13 @@ namespace SilksongCoop.Core.State
             if (profileId <= 0)
                 return false;
 
+            // A null -> non-null transition only means the save's PlayerData has finally
+            // loaded. It is not a scope change by itself; only a different non-null object
+            // (or a different profile id) replaces the known save.
+            bool playerDataChanged = _playerData != null && playerData != null &&
+                                     !ReferenceEquals(_playerData, playerData);
             bool changed = _initialized &&
-                           (_profileId != profileId ||
-                            (playerData != null && !ReferenceEquals(_playerData, playerData)));
+                           (_profileId != profileId || playerDataChanged);
 
             _initialized = true;
             _profileId = profileId;

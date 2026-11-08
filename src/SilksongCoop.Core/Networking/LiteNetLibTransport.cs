@@ -890,6 +890,8 @@ namespace SilksongCoop.Core.Networking
                         {
                             var peer = _remotePeerId ?? new NetworkPeerId(0);
                             _connectionAttemptStartMs = 0;
+                            _remoteEndPoint = null;
+                            _remotePeerId = null;
                             ResetSessionState();
                             CloseSocket();
                             _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerDisconnected, peer, DisconnectReason.Timeout, generation: _sessionGeneration));
