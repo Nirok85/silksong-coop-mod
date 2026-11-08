@@ -69,21 +69,18 @@ namespace SilksongCoop.Mod.UI
         public void Clear()
         {
             _entries.Clear();
-            if (!PersistEnabled)
-            {
-                try
-                {
-                    UnityEngine.PlayerPrefs.DeleteKey(PrefsKey);
-                    UnityEngine.PlayerPrefs.Save();
-                }
-                catch (Exception ex)
-                {
-                    SilksongCoopPlugin.LogWarn($"[ConnectionHistory] Failed to delete: {ex.Message}");
-                }
-                return;
-            }
 
-            Save();
+            // Always delete the persisted key, regardless of the current toggle, so the
+            // on-disk state matches the in-memory state.
+            try
+            {
+                UnityEngine.PlayerPrefs.DeleteKey(PrefsKey);
+                UnityEngine.PlayerPrefs.Save();
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[ConnectionHistory] Failed to delete: {ex.Message}");
+            }
         }
 
         private void EnsureLoaded()

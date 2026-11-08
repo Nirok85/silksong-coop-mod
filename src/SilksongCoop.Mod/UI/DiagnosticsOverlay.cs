@@ -133,6 +133,15 @@ namespace SilksongCoop.Mod.UI
             DestroyTexture(ref _gridTex);
         }
 
+        // Instance-level release of cached GUI styles. Called when the overlay is disposed.
+        public void ReleaseStyles()
+        {
+            _titleStyle = null;
+            _summaryStyle = null;
+            _labelStyle = null;
+            _valueStyle = null;
+        }
+
         private static void DestroyTexture(ref Texture2D? texture)
         {
             if (texture != null)
