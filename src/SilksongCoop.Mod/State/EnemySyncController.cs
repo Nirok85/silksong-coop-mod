@@ -23,6 +23,11 @@ namespace SilksongCoop.Mod.State
         private sealed class KeyHolder
         {
             public ulong Key;
+            // Full hierarchy fingerprint: a pooled/reparented/renamed object, or an object
+            // under a renamed ancestor, must not keep returning its old key.
+            public Transform[] Chain = Array.Empty<Transform>();
+            public int[] SiblingIndices = Array.Empty<int>();
+            public int SceneHandle = -1;
         }
 
         private const byte WorldChannel = NetworkChannels.World;
@@ -53,8 +58,25 @@ namespace SilksongCoop.Mod.State
         private SilksongCoopPlugin? _plugin;
         private readonly EnemySyncService _service = new EnemySyncService();
         private ConditionalWeakTable<HealthManager, KeyHolder> _keyCache = new ConditionalWeakTable<HealthManager, KeyHolder>();
-        private readonly Dictionary<ulong, int> _lastSnapshotHp = new Dictionary<ulong, int>();
-        private readonly Dictionary<ulong, bool> _lastSnapshotDead = new Dictionary<ulong, bool>();
+        private struct SnapshotState
+        {
+            public int Hp;
+            public bool Dead;
+        }
+
+        private readonly Dictionary<ulong, SnapshotState> _lastSnapshot = new Dictionary<ulong, SnapshotState>();
+        // Exact-key lookup index rebuilt on scene changes and at the start of each host
+        // snapshot. Proximity fallback still enumerates active enemies because a freshly
+        // spawned enemy may not be indexed yet.
+        private readonly Dictionary<ulong, HealthManager> _enemyIndex = new Dictionary<ulong, HealthManager>();
+        private bool _enemyIndexDirty = true;
+        private bool _enemyIndexFailureLogged;
+        private float _nextEnemyIndexRebuildAt;
+        // Full key recomputation every 30s catches ancestor renames without paying the
+        // string-getter cost on every hit.
+        private float _nextKeyCacheRefreshAt;
+        private readonly List<EnemySnapshotEntry> _snapshotBatch = new List<EnemySnapshotEntry>(EnemySnapshotPacket.MaxEntries);
+        private readonly EnemySnapshotEntry[] _snapshotEntryBuffer = new EnemySnapshotEntry[EnemySnapshotPacket.MaxEntries];
         private readonly DeadEnemyRegistry _deadRegistry = new DeadEnemyRegistry(MaxDeadRegistry);
         // Dead snapshot entries whose scene is not loaded yet. Applying them immediately
         // dropped bosses killed before a late joiner entered the room; retry after a load.
@@ -89,6 +111,7 @@ namespace SilksongCoop.Mod.State
         private float _pendingWorldRetryAt;
         private float _nextAmbiguousMatchLogAt;
         private int _suppressedAmbiguousMatchLogs;
+        private float _nextEnemyLookupFailureLogAt;
 
         // Persistent bool/int items are polled once per second. The SaveState hook covers
         // the common path; polling catches doors/chests/lifts that mutate their value
@@ -108,6 +131,7 @@ namespace SilksongCoop.Mod.State
         private bool _worldReplayPending;
 
         private string _sceneName = string.Empty;
+        private int _sceneHandle = -1;
         private float _snapshotTimer;
         private uint _packetSequence;
 
@@ -138,8 +162,9 @@ namespace SilksongCoop.Mod.State
         {
             _service.Reset();
             _keyCache = new ConditionalWeakTable<HealthManager, KeyHolder>();
-            _lastSnapshotHp.Clear();
-            _lastSnapshotDead.Clear();
+            _lastSnapshot.Clear();
+            _enemyIndex.Clear();
+            _enemyIndexDirty = true;
             _snapshotTimer = 0f;
             _snapshotReconcileAt = 0f;
             _forceSnapshotReconcile = false;
@@ -225,6 +250,7 @@ namespace SilksongCoop.Mod.State
 
             ulong key = GetKey(target);
             if (key == 0) return;
+            _enemyIndex[key] = target;
 
             // Keep the local HP baseline in the same bookkeeping as remote hits, so the
             // additive path knows the enemy was at 100 before this 10-damage hit.
@@ -255,8 +281,11 @@ namespace SilksongCoop.Mod.State
             var target = healthManager.SendDamageTo ?? healthManager;
             if (target == null) return;
 
-            ulong key = GetKey(target);
+            // Death records survive scene changes and reconnect, so use a freshly computed
+            // key rather than a cache entry that may predate an ancestor rename/pool reuse.
+            ulong key = GetFreshKey(target);
             if (key == 0) return;
+            _enemyIndex[key] = target;
 
             _service.NoteLocalEnemyState(key, 0, dead: true);
 
@@ -499,8 +528,7 @@ namespace SilksongCoop.Mod.State
         /// </summary>
         public void BeginCatchUpForNewPeer()
         {
-            _lastSnapshotHp.Clear();
-            _lastSnapshotDead.Clear();
+            _lastSnapshot.Clear();
             _worldReplayPending = true;
             _forceSnapshotReconcile = true;
         }
@@ -543,40 +571,29 @@ namespace SilksongCoop.Mod.State
 
         private void SendSnapshot(bool reconcile)
         {
-            List<HealthManager>? enemies;
-            try
-            {
-                enemies = new List<HealthManager>(HealthManager.EnumerateActiveEnemies());
-            }
-            catch (Exception ex)
-            {
-                SilksongCoopPlugin.LogWarn($"[EnemySync] Enemy enumeration failed: {ex.Message}");
-                return;
-            }
+            // The index is also our active-enemy enumeration, so one rebuild replaces the
+            // old "copy to List<HealthManager>" and every FindEnemy scan for this snapshot.
+            RebuildEnemyIndex();
+            _snapshotBatch.Clear();
 
-            var batch = new List<EnemySnapshotEntry>(EnemySnapshotPacket.MaxEntries);
-
-            for (int i = 0; i < enemies.Count; i++)
+            foreach (var pair in _enemyIndex)
             {
-                var hm = enemies[i];
+                var hm = pair.Value;
                 if (hm == null) continue;
 
-                ulong key = GetKey(hm);
-                if (key == 0) continue;
-
+                ulong key = pair.Key;
                 int hp = Math.Max(0, hm.hp);
                 bool dead = hm.GetIsDead();
                 int initHp = Math.Max(1, GetInitHp(hm));
 
-                bool knownHp = _lastSnapshotHp.TryGetValue(key, out int lastHp);
-                bool wasDead = _lastSnapshotDead.TryGetValue(key, out bool lastDead) && lastDead;
-
+                bool known = _lastSnapshot.TryGetValue(key, out var last);
+                bool wasDead = known && last.Dead;
                 bool newlyDead = dead && !wasDead;
                 // Send every enemy once so a client that joins mid-fight gets the host's
                 // authoritative HP even if initHp reflection is unavailable.
-                bool firstSeen = !knownHp;
+                bool firstSeen = !known;
                 bool damaged = hp < initHp || firstSeen;
-                bool changed = knownHp && lastHp != hp;
+                bool changed = known && last.Hp != hp;
 
                 if (!reconcile)
                 {
@@ -584,7 +601,7 @@ namespace SilksongCoop.Mod.State
                     if (!dead && !damaged && !changed) continue;
                 }
 
-                batch.Add(new EnemySnapshotEntry
+                _snapshotBatch.Add(new EnemySnapshotEntry
                 {
                     EnemyKey = key,
                     Hp = dead ? 0 : hp,
@@ -593,11 +610,8 @@ namespace SilksongCoop.Mod.State
                     PositionY = hm.transform.position.y
                 });
 
-                if (batch.Count >= EnemySnapshotPacket.MaxEntries)
-                {
-                    if (SendSnapshotBatch(batch)) MarkSnapshotBatchSent(batch);
-                    batch.Clear();
-                }
+                if (_snapshotBatch.Count >= EnemySnapshotPacket.MaxEntries)
+                    FlushSnapshotBatch();
             }
 
             // Enemies killed before the current client connected may already be gone from
@@ -607,12 +621,12 @@ namespace SilksongCoop.Mod.State
             foreach (var dead in _deadRegistry.Records)
             {
                 if (!reconcile &&
-                    _lastSnapshotDead.TryGetValue(dead.Key, out bool alreadySent) && alreadySent)
+                    _lastSnapshot.TryGetValue(dead.Key, out var alreadySent) && alreadySent.Dead)
                 {
                     continue;
                 }
 
-                batch.Add(new EnemySnapshotEntry
+                _snapshotBatch.Add(new EnemySnapshotEntry
                 {
                     EnemyKey = dead.Key,
                     Hp = 0,
@@ -621,17 +635,22 @@ namespace SilksongCoop.Mod.State
                     PositionY = dead.Value.Y
                 });
 
-                if (batch.Count >= EnemySnapshotPacket.MaxEntries)
-                {
-                    if (SendSnapshotBatch(batch)) MarkSnapshotBatchSent(batch);
-                    batch.Clear();
-                }
+                if (_snapshotBatch.Count >= EnemySnapshotPacket.MaxEntries)
+                    FlushSnapshotBatch();
             }
 
-            if (batch.Count > 0)
+            FlushSnapshotBatch();
+        }
+
+        private void FlushSnapshotBatch()
+        {
+            if (_snapshotBatch.Count == 0) return;
+
+            if (SendSnapshotBatch(_snapshotBatch))
             {
-                if (SendSnapshotBatch(batch)) MarkSnapshotBatchSent(batch);
+                MarkSnapshotBatchSent(_snapshotBatch);
             }
+            _snapshotBatch.Clear();
         }
 
         /// <summary>
@@ -644,18 +663,27 @@ namespace SilksongCoop.Mod.State
             for (int i = 0; i < batch.Count; i++)
             {
                 var entry = batch[i];
-                _lastSnapshotHp[entry.EnemyKey] = entry.Hp;
-                _lastSnapshotDead[entry.EnemyKey] = entry.IsDead;
+                _lastSnapshot[entry.EnemyKey] = new SnapshotState
+                {
+                    Hp = entry.Hp,
+                    Dead = entry.IsDead
+                };
             }
         }
 
         private bool SendSnapshotBatch(List<EnemySnapshotEntry> batch)
         {
+            int count = Math.Min(batch.Count, _snapshotEntryBuffer.Length);
+            for (int i = 0; i < count; i++)
+            {
+                _snapshotEntryBuffer[i] = batch[i];
+            }
+
             var packet = new EnemySnapshotPacket
             {
                 Header = new PacketHeader(PacketType.EnemySnapshot, WorldChannel, ++_packetSequence, NetworkClock.NowMs),
-                Entries = batch.ToArray(),
-                Count = batch.Count
+                Entries = _snapshotEntryBuffer,
+                Count = count
             };
 
             byte[] buffer = ArrayPool<byte>.Shared.Rent(1024);
@@ -673,6 +701,54 @@ namespace SilksongCoop.Mod.State
             finally
             {
                 ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+            }
+        }
+
+        /// <summary>
+        /// Rebuilds the exact-key enemy index for the active scene. Called at the start of
+        /// each host snapshot and lazily on a client when the scene changed.
+        /// </summary>
+        private void RebuildEnemyIndex()
+        {
+            RefreshKeyCacheIfNeeded();
+            _enemyIndex.Clear();
+            _enemyIndexDirty = true;
+            try
+            {
+                foreach (var hm in HealthManager.EnumerateActiveEnemies())
+                {
+                    if (hm == null) continue;
+                    ulong key = GetKey(hm);
+                    if (key != 0) _enemyIndex[key] = hm;
+                }
+                _enemyIndexDirty = false;
+                _enemyIndexFailureLogged = false;
+                _nextEnemyIndexRebuildAt = Time.unscaledTime + 5f;
+            }
+            catch (Exception ex)
+            {
+                // Keep the fallback scan working and avoid rebuilding on every hit; the
+                // next host snapshot retries. Log once per failure streak.
+                _enemyIndex.Clear();
+                _enemyIndexDirty = false;
+                _nextEnemyIndexRebuildAt = Time.unscaledTime + 5f;
+                if (!_enemyIndexFailureLogged)
+                {
+                    _enemyIndexFailureLogged = true;
+                    SilksongCoopPlugin.LogWarn($"[EnemySync] Enemy index rebuild failed: {ex.Message}");
+                }
+            }
+        }
+
+        private void EnsureEnemyIndex()
+        {
+            // Clients do not send snapshots, so periodically rebuild to drop dead/inactive
+            // entries and pick up dynamically spawned enemies. Hosts also rebuild every
+            // snapshot, which resets this deadline sooner.
+            RefreshKeyCacheIfNeeded();
+            if (_enemyIndexDirty || Time.unscaledTime >= _nextEnemyIndexRebuildAt)
+            {
+                RebuildEnemyIndex();
             }
         }
 
@@ -700,6 +776,7 @@ namespace SilksongCoop.Mod.State
             if (packet.Entries == null) return;
 
             bool sameScene = IsSenderInLocalScene(sender);
+            EnsureEnemyIndex();
             int count = Math.Min(packet.Count, packet.Entries.Length);
             for (int i = 0; i < count; i++)
             {
@@ -1579,14 +1656,21 @@ namespace SilksongCoop.Mod.State
 
         private void DetectSceneChange()
         {
-            string scene = SceneManager.GetActiveScene().name;
-            if (string.Equals(scene, _sceneName, StringComparison.Ordinal))
+            var activeScene = SceneManager.GetActiveScene();
+            string scene = activeScene.name;
+            int sceneHandle = activeScene.handle;
+            if (string.Equals(scene, _sceneName, StringComparison.Ordinal) &&
+                sceneHandle == _sceneHandle)
+            {
                 return;
+            }
 
             _sceneName = scene;
+            _sceneHandle = sceneHandle;
             _keyCache = new ConditionalWeakTable<HealthManager, KeyHolder>();
-            _lastSnapshotHp.Clear();
-            _lastSnapshotDead.Clear();
+            _lastSnapshot.Clear();
+            _enemyIndex.Clear();
+            _enemyIndexDirty = true;
             _service.Reset();
 
             // WorldEvent records are permanent (breakables/gates survive scene loads), so
@@ -1746,18 +1830,93 @@ namespace SilksongCoop.Mod.State
             return false;
         }
 
+        private static bool MatchesHierarchy(KeyHolder holder, Transform transform)
+        {
+            // References, sibling indices and the scene handle are allocation-free.
+            // Ancestor/name changes are caught by the 30s key-cache refresh.
+            if (holder.Chain.Length == 0 ||
+                holder.SceneHandle != transform.gameObject.scene.handle)
+            {
+                return false;
+            }
+
+            int index = 0;
+            for (var current = transform; current != null; current = current.parent)
+            {
+                if (index >= holder.Chain.Length ||
+                    holder.Chain[index] != current ||
+                    holder.SiblingIndices[index] != current.GetSiblingIndex())
+                {
+                    return false;
+                }
+                index++;
+            }
+
+            return index == holder.Chain.Length;
+        }
+
+        private void RefreshKeyCacheIfNeeded()
+        {
+            if (Time.unscaledTime < _nextKeyCacheRefreshAt) return;
+
+            _nextKeyCacheRefreshAt = Time.unscaledTime + 30f;
+            _keyCache = new ConditionalWeakTable<HealthManager, KeyHolder>();
+            _enemyIndexDirty = true;
+        }
+
         private ulong GetKey(HealthManager healthManager)
         {
             if (healthManager == null) return 0;
 
+            var transform = healthManager.transform;
             if (_keyCache.TryGetValue(healthManager, out var holder))
-                return holder.Key;
+            {
+                if (MatchesHierarchy(holder, transform))
+                {
+                    return holder.Key;
+                }
 
-            ulong key = WorldObjectKey.Compute(healthManager.transform);
+                // The object or one of its ancestors was pooled/reparented/renamed.
+                _keyCache.Remove(healthManager);
+            }
+
+            ulong key = WorldObjectKey.Compute(transform);
             if (key == 0) return 0;
 
-            _keyCache.Add(healthManager, new KeyHolder { Key = key });
+            CacheKey(healthManager, transform, key);
             return key;
+        }
+
+        private ulong GetFreshKey(HealthManager healthManager)
+        {
+            if (healthManager == null) return 0;
+
+            var transform = healthManager.transform;
+            ulong key = WorldObjectKey.Compute(transform);
+            if (key == 0) return 0;
+
+            _keyCache.Remove(healthManager);
+            CacheKey(healthManager, transform, key);
+            return key;
+        }
+
+        private void CacheKey(HealthManager healthManager, Transform transform, ulong key)
+        {
+            var chain = new List<Transform>();
+            var siblings = new List<int>();
+            for (var current = transform; current != null; current = current.parent)
+            {
+                chain.Add(current);
+                siblings.Add(current.GetSiblingIndex());
+            }
+
+            _keyCache.Add(healthManager, new KeyHolder
+            {
+                Key = key,
+                Chain = chain.ToArray(),
+                SiblingIndices = siblings.ToArray(),
+                SceneHandle = transform.gameObject.scene.handle
+            });
         }
 
         /// <summary>
@@ -1803,6 +1962,28 @@ namespace SilksongCoop.Mod.State
 
         private HealthManager? FindEnemy(ulong key, float x, float y, bool allowProximity = true)
         {
+            EnsureEnemyIndex();
+            if (_enemyIndex.TryGetValue(key, out var indexed))
+            {
+                if (indexed == null || !indexed.gameObject.activeInHierarchy)
+                {
+                    _enemyIndex.Remove(key);
+                }
+                else
+                {
+                    // An active object is not enough: it may have been reparented/reused.
+                    // Only return it if its current key still matches the requested key.
+                    ulong currentKey = GetKey(indexed);
+                    if (currentKey == key)
+                    {
+                        return indexed;
+                    }
+
+                    _enemyIndex.Remove(key);
+                    if (currentKey != 0) _enemyIndex[currentKey] = indexed;
+                }
+            }
+
             HealthManager? nearest = null;
             const float radiusSq = 2.5f * 2.5f;
             float nearestSq = radiusSq;
@@ -1815,7 +1996,10 @@ namespace SilksongCoop.Mod.State
                     if (hm == null) continue;
 
                     if (GetKey(hm) == key)
+                    {
+                        _enemyIndex[key] = hm;
                         return hm;
+                    }
 
                     if (!allowProximity) continue;
                     if (hm.GetIsDead()) continue;
@@ -1836,7 +2020,11 @@ namespace SilksongCoop.Mod.State
             }
             catch (Exception ex)
             {
-                SilksongCoopPlugin.LogWarn($"[EnemySync] Enemy lookup failed: {ex.Message}");
+                if (Time.unscaledTime >= _nextEnemyLookupFailureLogAt)
+                {
+                    _nextEnemyLookupFailureLogAt = Time.unscaledTime + 5f;
+                    SilksongCoopPlugin.LogWarn($"[EnemySync] Enemy lookup failed: {ex.Message}");
+                }
             }
 
             // Never guess between two enemies in the same radius: applying a hit to the
