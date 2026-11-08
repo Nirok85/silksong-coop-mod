@@ -5,6 +5,58 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/),
 и этот проект придерживается [Semantic Versioning](https://semver.org/).
 
+## [3.3.2] - 2026-11-08
+
+Патч производительности, связывания сервисов и наблюдаемости. Протокол остаётся
+**v8**: новых пакетов и полей нет; UDP-обмен совместим с 3.3.1, Steam сравнивает
+полную версию мода, поэтому оба игрока должны обновиться до 3.3.2.
+
+### Исправлено
+
+- **Единое состояние сессии.** `SessionService` теперь принимает существующий
+  `CoopSessionState` плагина вместо создания второго. UI, хуки и сетевые
+  менеджеры видят одно состояние `Connected`/`RemotePeerId`; исправлены
+  отсутствующие transform/vitals/inventory/death-пакеты.
+- **Согласованность транспорта.** `SessionService.StartHost`/`Connect` обновляют
+  и плагин, и `ITransportService`, а не только второй.
+- **Свежие ключи для постоянных записей.** Смертельные удары и world-события
+  используют `WorldObjectKey.ComputeFresh`, чтобы запись не расходилась с
+  обновлённым кэшем пира.
+- **Lifetime.** Менеджеры и `EventBus` отписываются при `OnDestroy`, транспорты
+  освобождаются через `Dispose`, а не только `Disconnect`.
+
+### Производительность
+
+- Кэшированы `RemotePeerIds`, `RemotePeers`, `ConnectedPeers` и снимки
+  `PeerRegistry`; steady-state чтения не аллоцируют.
+- UDP: кэшированный `HMACSHA256`, `TryComputeHash` в `stackalloc`,
+  `BinaryPrimitives` вместо `BitConverter.GetBytes`, pooled envelope/ACK/ping,
+  pooled payload для unreliable/sequenced, переиспользуемый drain-batch и
+  защита от reentrancy/потери событий.
+- UI: HUD, диагностика и тосты рисуются только на Repaint; буферы графиков,
+  watermark и rich-text тостов кэшированы.
+- Enforce: индексы врагов и Breakable/Gate, кэш ключей иерархии с 30-секундным
+  обновлением, объединённое snapshot-состояние и переиспользуемые буферы,
+  компилируемые quest-аксессоры.
+- Dash-ghost'ы прогреваются и возвращаются в пул без корутин; `RateLimiter`
+  кэширует фабрику; `NetworkOrchestrator` использует типизированные
+  state-flag-аксессоры.
+- Добавлен единый `PacketSender` и `NetworkLimits`; пороги reliable-backlog
+  больше не размазаны по файлам.
+
+### Тесты
+
+- 917/917 тестов, 0 пропущено; Release и Debug без ошибок и предупреждений
+  компилятора (только `NU1900`).
+- Новые файлы: `SessionStateWiringTests`, `PeerSnapshotAllocationTests`,
+  `PeerSnapshotRefreshTests`, `RateLimiterAllocationTests`.
+
+### Остаётся проверить вручную
+
+- Живой smoke двух клиентов (UDP/Steam) для 3.3.2.
+- Живой Steam 3+ (поздний вход, per-peer revive, promotion, длинная сессия).
+- Реальные потери/задержки, Harmony targets и прохождение квестов.
+
 ## [3.3.1] - 2026-11-06
 
 Протокол остаётся **v8**: новых пакетов и полей нет. Исправления затрагивают

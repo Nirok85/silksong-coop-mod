@@ -14,8 +14,26 @@ Baseline: `652720b` (version 3.3.1, protocol v8)
 | M3b - dash pool/rate limiter/state flags | **Done** | `43c7e88` | 917/917 tests; allocation test 0 B; Release/Debug 0 warnings; independent audit clean |
 | M4a - enemy index/snapshot buffers | **Done** | `f528219` | 917/917 tests; Release/Debug 0 warnings; audit closed with a documented 30s rename window |
 | M4b - world key/index/quest accessors | **Done** | `c073bdb` | 917/917 tests; Release/Debug 0 warnings; audit closed with medium performance residuals |
-| M5 — targeted architecture & lifecycle | Pending | — | — |
+| M5a - packet sender & limits | **Done** | `26514ae` | 917/917 tests; Release/Debug 0 warnings; audit closed |
+| M5b - lifecycle & unsubscribe | **Done** | `a28af15` | 917/917 tests; Release/Debug 0 warnings; audit clean |
+| M6 - release 3.3.2 & GitHub | **In progress** | - | preflight passed; smoke pending |
 | M6 — release 3.3.2 & GitHub | Pending | — | — |
+
+## M5a - packet sender and backlog limits
+
+**Changes:** added `IPacket` to all wire packet structs, a pooled
+`PacketSender.SendToAll/SendTo`, `NetworkLimits` constants, and migrated
+Vitals/Inventory/Death/Quest send paths. `INetworkTransport.Send` now documents
+that implementations must copy before returning. Checks: Release/Debug 0
+warnings; 917/917 tests; independent audit closed.
+
+## M5b - lifecycle cleanup
+
+**Changes:** `NetworkOrchestrator`, `VitalsSyncManager`, `InventorySyncManager`
+and `DeathSyncManager` now implement `IDisposable` and unsubscribe their exact
+event delegates. The plugin disposes orchestrators before transports and removes
+the desync EventBus handler. Checks: Release/Debug 0 warnings; 917/917 tests;
+independent audit clean.
 
 ## M4a - enemy index and snapshot buffers
 
