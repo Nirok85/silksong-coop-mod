@@ -6,10 +6,12 @@
 
 ## Артефакты
 
-| Файл | SHA-256 |
-|---|---|
-| `SilksongCoop_v3.3.3.zip` | `a3e91e5f1eb1958f1466f7ac78d8cea22c9bce93ff39c995fedf029e922d9ee5` |
-| `SilksongCoop_v3.3.3_plugin-only.zip` | `05d9f035d4c9abdd2f11d8c8cdcfb847d2aba3a20fb0d024415f34d2eb98060e` |
+SHA-256 и состав архивов фиксируются в
+`dist/3.3.3/SilksongCoop_v3.3.3_SHA256SUMS.txt`. Проверка перед публикацией:
+
+```powershell
+pwsh ./scripts/verify-artifacts.ps1 -Version 3.3.3
+```
 
 Для smoke в игру развёрнуты `SilksongCoop.Mod.dll` и `SilksongCoop.Core.dll` из
 Release-сборки 3.3.3. Предыдущая версия сохранена вне `BepInEx/plugins`, чтобы
