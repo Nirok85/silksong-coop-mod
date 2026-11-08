@@ -54,6 +54,15 @@ namespace SilksongCoop.Tests.State
         }
 
         [Fact]
+        public void LatePlayerDataLoad_DoesNotReportAScopeChange()
+        {
+            var tracker = new SaveScopeTracker();
+
+            Assert.False(tracker.Observe(1, null));
+            Assert.False(tracker.Observe(1, new object()));
+        }
+
+        [Fact]
         public void Reset_ForgetsTheScope()
         {
             var tracker = new SaveScopeTracker();
