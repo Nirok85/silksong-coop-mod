@@ -1,7 +1,5 @@
-using System;
 using SilksongCoop.Core.Events;
 using SilksongCoop.Core.Networking;
-using SilksongCoop.Core.Protocol;
 using SilksongCoop.Core.Protocol.Packets;
 using SilksongCoop.Core.State;
 using SilksongCoop.Mod.State;
@@ -68,40 +66,21 @@ namespace SilksongCoop.Mod.Services
 
         private void OnOutgoingVitals(VitalsSyncPacket packet)
         {
-            SendPacket(PacketType.VitalsSync, packet, DeliveryMethod.ReliableOrdered, NetworkChannels.Vitals);
+            SendPacket(packet, DeliveryMethod.ReliableOrdered, NetworkChannels.Vitals);
         }
 
         private void OnOutgoingCurrency(CurrencySyncPacket packet)
         {
-            SendPacket(PacketType.CurrencySync, packet, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency);
+            SendPacket(packet, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency);
         }
 
-        private void SendPacket<T>(PacketType type, T packet, DeliveryMethod method, byte channel) where T : struct
+        private void SendPacket<T>(T packet, DeliveryMethod method, byte channel) where T : struct, IPacket
         {
             var transport = _transportService.ActiveTransport;
             var session = _sessionService.SessionState;
             if (transport == null || session?.IsConnected != true) return;
 
-            try
-            {
-                byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(64);
-                try
-                {
-                    var writer = new PacketWriter(buffer);
-                    if (packet is VitalsSyncPacket v) v.Serialize(ref writer);
-                    else if (packet is CurrencySyncPacket c) c.Serialize(ref writer);
-                    transport.SendToAll(buffer, 0, writer.Position, method, channel);
-                    Diagnostics?.RecordSent(writer.Position);
-                }
-                finally
-                {
-                    System.Buffers.ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
-                }
-            }
-            catch (Exception ex)
-            {
-                SilksongCoop.Core.CoopLog.Warn($"[VitalsSyncManager] Failed sending {type}: {ex.Message}");
-            }
+            PacketSender.SendToAll(transport, packet, method, channel, 64, Diagnostics, "[VitalsSyncManager]");
         }
 
         private void OnSharedMaxHealthChanged(int newMax)

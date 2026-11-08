@@ -23,7 +23,7 @@ namespace SilksongCoop.Core.Protocol.Packets
     /// <summary>
     /// Network packet representing a death lifecycle event.
     /// </summary>
-    public struct DeathLifecyclePacket
+    public struct DeathLifecyclePacket : IPacket
     {
         public PacketHeader Header;
         public DeathEventType EventType;

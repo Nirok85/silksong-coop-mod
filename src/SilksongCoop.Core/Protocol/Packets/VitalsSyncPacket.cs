@@ -5,7 +5,7 @@ namespace SilksongCoop.Core.Protocol.Packets
     /// <summary>
     /// Network packet representing vitals synchronization (health, silk, upgrades).
     /// </summary>
-    public struct VitalsSyncPacket
+    public struct VitalsSyncPacket : IPacket
     {
         public PacketHeader Header;
         public byte CurrentHealth;

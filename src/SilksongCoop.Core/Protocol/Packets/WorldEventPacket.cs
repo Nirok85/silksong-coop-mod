@@ -18,7 +18,7 @@ namespace SilksongCoop.Core.Protocol.Packets
     /// Replicates a permanent world change (breakable wall / gate). The object is identified
     /// by the same stable scene-path hash used for enemies.
     /// </summary>
-    public struct WorldEventPacket
+    public struct WorldEventPacket : IPacket
     {
         public PacketHeader Header;
         public ulong ObjectKey;

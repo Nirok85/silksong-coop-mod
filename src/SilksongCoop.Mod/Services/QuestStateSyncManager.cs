@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq.Expressions;
@@ -155,7 +154,7 @@ namespace SilksongCoop.Mod.Services
             }
 
             TrackReliableDrops();
-            if (_resyncPending && _plugin.ActiveTransport!.ReliableBacklogCount <= 128)
+            if (_resyncPending && _plugin.ActiveTransport!.ReliableBacklogCount <= NetworkLimits.ResyncBacklogThreshold)
             {
                 _resyncPending = false;
                 SendFullSnapshot();
@@ -406,21 +405,9 @@ namespace SilksongCoop.Mod.Services
                 Entries = entries.ToArray()
             };
 
-            byte[] buffer = ArrayPool<byte>.Shared.Rent(QuestStatePacket.MaxEncodedBytes);
-            try
-            {
-                var writer = new PacketWriter(buffer);
-                packet.Serialize(ref writer);
-                transport.SendToAll(buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, NetworkChannels.World);
-            }
-            catch (Exception ex)
-            {
-                SilksongCoopPlugin.LogWarn($"[QuestSync] Failed sending quest flags: {ex.Message}");
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
-            }
+            PacketSender.SendToAll(
+                transport, packet, DeliveryMethod.ReliableOrdered, NetworkChannels.World,
+                QuestStatePacket.MaxEncodedBytes, diagnostics: null, logContext: "[QuestSync]");
         }
 
         private void CacheQuestFields()

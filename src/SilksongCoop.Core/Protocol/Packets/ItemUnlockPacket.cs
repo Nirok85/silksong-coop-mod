@@ -16,7 +16,7 @@ namespace SilksongCoop.Core.Protocol.Packets
     /// <summary>
     /// Network packet representing an item unlock event.
     /// </summary>
-    public struct ItemUnlockPacket
+    public struct ItemUnlockPacket : IPacket
     {
         public PacketHeader Header;
         public string ItemId;

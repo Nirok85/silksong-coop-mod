@@ -5,7 +5,7 @@ namespace SilksongCoop.Core.Protocol.Packets
     /// <summary>
     /// Network packet representing a scene transition event.
     /// </summary>
-    public struct SceneTransitionPacket
+    public struct SceneTransitionPacket : IPacket
     {
         public PacketHeader Header;
         public string TargetScene;

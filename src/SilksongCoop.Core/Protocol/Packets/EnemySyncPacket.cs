@@ -19,7 +19,7 @@ namespace SilksongCoop.Core.Protocol.Packets
     /// stable 64-bit hash of their scene hierarchy path, so both clients can find the same
     /// instance without exchanging Unity instance IDs.
     /// </summary>
-    public struct EnemySyncPacket
+    public struct EnemySyncPacket : IPacket
     {
         public PacketHeader Header;
 

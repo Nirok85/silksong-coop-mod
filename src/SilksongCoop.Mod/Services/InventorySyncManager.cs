@@ -1,4 +1,3 @@
-using System;
 using SilksongCoop.Core.Events;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol;
@@ -44,25 +43,9 @@ namespace SilksongCoop.Mod.Services
             var session = _sessionService.SessionState;
             if (transport == null || session?.IsConnected != true) return;
 
-            try
-            {
-                byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(512);
-                try
-                {
-                    var writer = new PacketWriter(buffer);
-                    packet.Serialize(ref writer);
-                    transport.SendToAll(buffer, 0, writer.Position, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency);
-                    Diagnostics?.RecordSent(writer.Position);
-                }
-                finally
-                {
-                    System.Buffers.ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
-                }
-            }
-            catch (Exception ex)
-            {
-                SilksongCoop.Core.CoopLog.Warn($"[InventorySyncManager] Failed sending item unlock: {ex.Message}");
-            }
+            PacketSender.SendToAll(
+                transport, packet, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency,
+                512, Diagnostics, "[InventorySyncManager]");
         }
     }
 }

@@ -173,7 +173,7 @@ namespace SilksongCoop.Core.Networking
         private readonly Dictionary<byte, SortedDictionary<uint, byte[]>> _pendingReliable = new();
         private readonly LinkedList<SentReliablePacket> _unacknowledged = new();
         private readonly Dictionary<(byte channel, DeliveryMethod method, uint sequence), LinkedListNode<SentReliablePacket>> _unacknowledgedIndex = new();
-        private const int MaxUnacknowledgedPackets = 512;
+        private const int MaxUnacknowledgedPackets = NetworkLimits.ReliableBacklogCap;
 
         private long _lastPingSentMs;
         private long _lastReceivedMs;

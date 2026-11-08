@@ -14,7 +14,7 @@ namespace SilksongCoop.Core.Protocol.Packets
     /// <summary>
     /// Network packet representing a currency synchronization event.
     /// </summary>
-    public struct CurrencySyncPacket
+    public struct CurrencySyncPacket : IPacket
     {
         public PacketHeader Header;
         public CurrencyType Currency;

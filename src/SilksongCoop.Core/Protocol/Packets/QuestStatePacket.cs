@@ -21,7 +21,7 @@ namespace SilksongCoop.Core.Protocol.Packets
     /// the packet cannot be used to overwrite arbitrary progression. Older peers drop this
     /// packet type and remain usable; both sides must run 3.2.0 for quest sync.
     /// </summary>
-    public struct QuestStatePacket
+    public struct QuestStatePacket : IPacket
     {
         public const int MaxEntries = 64;
 

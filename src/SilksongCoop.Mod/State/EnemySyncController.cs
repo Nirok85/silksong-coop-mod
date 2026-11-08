@@ -53,7 +53,7 @@ namespace SilksongCoop.Mod.State
         private const int MaxDeadRegistry = DeadEnemyRegistry.DefaultCapacity;
         private const int MaxPendingDeadEnemies = 256;
         private const int ReplayBatchSize = 16;
-        private const int ReplayBacklogThreshold = 192;
+        private const int ReplayBacklogThreshold = NetworkLimits.ReplayBacklogThreshold;
 
         private SilksongCoopPlugin? _plugin;
         private readonly EnemySyncService _service = new EnemySyncService();
@@ -579,7 +579,7 @@ namespace SilksongCoop.Mod.State
             if (!_resyncAfterBacklog) return;
 
             // Do not add more traffic while the reliable queue is still near its cap.
-            if (_plugin.ActiveTransport.ReliableBacklogCount > 128) return;
+            if (_plugin.ActiveTransport.ReliableBacklogCount > NetworkLimits.ResyncBacklogThreshold) return;
 
             _resyncAfterBacklog = false;
             if (_plugin.SessionState?.IsHost != true) return;
@@ -1808,7 +1808,7 @@ namespace SilksongCoop.Mod.State
             // SendToAll has no return value, and a full reliable window silently drops the
             // new packet. Avoid entering that state for snapshots so the batch is retried
             // instead of being marked as sent.
-            if (requireReliableCapacity && transport.ReliableBacklogCount >= 448) return false;
+            if (requireReliableCapacity && transport.ReliableBacklogCount >= NetworkLimits.SnapshotBacklogThreshold) return false;
 
             transport.SendToAll(buffer, 0, length, DeliveryMethod.ReliableOrdered, WorldChannel);
             return true;

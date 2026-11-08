@@ -16,7 +16,7 @@ namespace SilksongCoop.Core.Protocol.Packets
     /// chests, caches and other scripted world flags). The item is identified by a stable
     /// hash of its scene name and persistent id.
     /// </summary>
-    public struct PersistentStatePacket
+    public struct PersistentStatePacket : IPacket
     {
         public PacketHeader Header;
         public ulong ItemKey;

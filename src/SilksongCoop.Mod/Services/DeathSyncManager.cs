@@ -1,4 +1,3 @@
-using System;
 using SilksongCoop.Core.Events;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol;
@@ -52,25 +51,7 @@ namespace SilksongCoop.Mod.Services
             var session = _sessionService.SessionState;
             if (transport == null || session?.IsConnected != true) return;
 
-            try
-            {
-                byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(64);
-                try
-                {
-                    var writer = new PacketWriter(buffer);
-                    packet.Serialize(ref writer);
-                    transport.SendToAll(buffer, 0, writer.Position, method, channel);
-                    Diagnostics?.RecordSent(writer.Position);
-                }
-                finally
-                {
-                    System.Buffers.ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
-                }
-            }
-            catch (Exception ex)
-            {
-                SilksongCoop.Core.CoopLog.Warn($"[DeathSyncManager] Failed sending death packet: {ex.Message}");
-            }
+            PacketSender.SendToAll(transport, packet, method, channel, 64, Diagnostics, "[DeathSyncManager]");
         }
 
         private void OnReviveAtPartnerRequested(float x, float y)

@@ -51,6 +51,11 @@ namespace SilksongCoop.Core.Networking
         void Connect(string addressOrCode);
         void Disconnect();
         void PollEvents();
+        /// <summary>
+        /// Sends a payload. Implementations must copy or otherwise consume the bytes before
+        /// returning; callers may return <paramref name="data"/> to a pool immediately after
+        /// this call. Queued/async transports must make their own copy before queueing.
+        /// </summary>
         void Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel);
     }
 }

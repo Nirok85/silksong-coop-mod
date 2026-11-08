@@ -5,7 +5,7 @@ namespace SilksongCoop.Core.Protocol.Packets
     /// <summary>
     /// Network packet representing a transform synchronization event.
     /// </summary>
-    public struct TransformSyncPacket
+    public struct TransformSyncPacket : IPacket
     {
         public const ushort FlagGrounded = 1 << 0;
         public const ushort FlagDashing = 1 << 1;

@@ -5,7 +5,7 @@ namespace SilksongCoop.Core.Protocol.Packets
     /// <summary>
     /// Network packet representing a bench checkpoint synchronization.
     /// </summary>
-    public struct BenchCheckpointSyncPacket
+    public struct BenchCheckpointSyncPacket : IPacket
     {
         public PacketHeader Header;
         public string SceneName;

@@ -23,7 +23,7 @@ namespace SilksongCoop.Core.Protocol.Packets
     /// <summary>
     /// Network packet representing a player action trigger.
     /// </summary>
-    public struct ActionTriggerPacket
+    public struct ActionTriggerPacket : IPacket
     {
         public PacketHeader Header;
         public ActionType Action;

@@ -31,7 +31,7 @@ namespace SilksongCoop.Core.Protocol.Packets
     /// hits that were rejected locally (invincibility, phase transitions) and by enemies
     /// spawned dynamically on only one machine.
     /// </summary>
-    public struct EnemySnapshotPacket
+    public struct EnemySnapshotPacket : IPacket
     {
         /// <summary>Maximum entries a single packet may carry (keeps it inside one UDP datagram).</summary>
         public const int MaxEntries = 32;
