@@ -309,60 +309,87 @@ namespace SilksongCoop.Mod.Services
         // runtime state type and compile a direct getter; the fallback keeps the mod working
         // if the runtime rejects expression compilation (for example under a restrictive AOT
         // host), but still avoids the metadata lookup on every frame.
-        private static readonly string[] StateFlagNames =
-        {
-            "onGround",
-            "dashing", "airDashing", "shadowDashing", "superDashing",
-            "wallSliding",
-            "jumping", "doubleJumping", "wallJumping",
-            "falling",
-            "attacking",
-            "invulnerable",
-            "swimming"
-        };
-
-        private static readonly ConcurrentDictionary<Type, IReadOnlyDictionary<string, Func<object, bool>>> StateAccessors =
-            new ConcurrentDictionary<Type, IReadOnlyDictionary<string, Func<object, bool>>>();
+        //
+        // The accessor set is strongly typed so the hot path does not do a string-keyed
+        // dictionary lookup per flag. It is cached per runtime type (shared across all
+        // orchestrator instances) and additionally on this instance, so a stable state type
+        // costs one type comparison per tick instead of a ConcurrentDictionary lookup.
+        private static readonly ConcurrentDictionary<Type, StateFlagAccessors> StateAccessors =
+            new ConcurrentDictionary<Type, StateFlagAccessors>();
 
         // Cache the factory delegate once: a method-group conversion inside GetOrAdd could
         // allocate on every tick on runtimes that do not cache static method groups.
-        private static readonly Func<Type, IReadOnlyDictionary<string, Func<object, bool>>> BuildAccessorMapFactory =
-            BuildAccessorMap;
+        private static readonly Func<Type, StateFlagAccessors> BuildAccessorSetFactory =
+            BuildAccessorSet;
 
-        private static ushort BuildStateFlags(object state)
+        private StateFlagAccessors? _cachedStateAccessors;
+        private Type? _cachedStateType;
+
+        private ushort BuildStateFlags(object state)
         {
-            var accessors = StateAccessors.GetOrAdd(state.GetType(), BuildAccessorMapFactory);
+            var stateType = state.GetType();
+            var accessors = _cachedStateAccessors;
+            if (accessors == null || _cachedStateType != stateType)
+            {
+                accessors = StateAccessors.GetOrAdd(stateType, BuildAccessorSetFactory);
+                _cachedStateType = stateType;
+                _cachedStateAccessors = accessors;
+            }
+
             ushort flags = 0;
-            if (GetBool(accessors, state, "onGround")) flags |= TransformSyncPacket.FlagGrounded;
-            if (GetBool(accessors, state, "dashing") || GetBool(accessors, state, "airDashing") || GetBool(accessors, state, "shadowDashing") || GetBool(accessors, state, "superDashing"))
+            if (GetBool(accessors.OnGround, state)) flags |= TransformSyncPacket.FlagGrounded;
+            if (GetBool(accessors.Dashing, state) || GetBool(accessors.AirDashing, state) || GetBool(accessors.ShadowDashing, state) || GetBool(accessors.SuperDashing, state))
                 flags |= TransformSyncPacket.FlagDashing;
-            if (GetBool(accessors, state, "wallSliding")) flags |= TransformSyncPacket.FlagWallSliding;
-            if (GetBool(accessors, state, "jumping") || GetBool(accessors, state, "doubleJumping") || GetBool(accessors, state, "wallJumping"))
+            if (GetBool(accessors.WallSliding, state)) flags |= TransformSyncPacket.FlagWallSliding;
+            if (GetBool(accessors.Jumping, state) || GetBool(accessors.DoubleJumping, state) || GetBool(accessors.WallJumping, state))
                 flags |= TransformSyncPacket.FlagJumping;
-            if (GetBool(accessors, state, "falling")) flags |= TransformSyncPacket.FlagFalling;
-            if (GetBool(accessors, state, "attacking")) flags |= TransformSyncPacket.FlagAttacking;
-            if (GetBool(accessors, state, "invulnerable")) flags |= TransformSyncPacket.FlagInvulnerable;
-            if (GetBool(accessors, state, "swimming")) flags |= TransformSyncPacket.FlagSwimming;
+            if (GetBool(accessors.Falling, state)) flags |= TransformSyncPacket.FlagFalling;
+            if (GetBool(accessors.Attacking, state)) flags |= TransformSyncPacket.FlagAttacking;
+            if (GetBool(accessors.Invulnerable, state)) flags |= TransformSyncPacket.FlagInvulnerable;
+            if (GetBool(accessors.Swimming, state)) flags |= TransformSyncPacket.FlagSwimming;
             return flags;
         }
 
-        private static bool GetBool(IReadOnlyDictionary<string, Func<object, bool>> accessors, object instance, string name)
+        private static bool GetBool(Func<object, bool>? accessor, object instance)
         {
-            return accessors.TryGetValue(name, out var accessor) && accessor(instance);
+            return accessor != null && accessor(instance);
         }
 
-        private static IReadOnlyDictionary<string, Func<object, bool>> BuildAccessorMap(Type type)
+        private static StateFlagAccessors BuildAccessorSet(Type type)
         {
-            var accessors = new Dictionary<string, Func<object, bool>>(StateFlagNames.Length, StringComparer.Ordinal);
-
-            foreach (string name in StateFlagNames)
+            return new StateFlagAccessors
             {
-                var accessor = CreateBoolAccessor(type, name);
-                if (accessor != null)
-                    accessors[name] = accessor;
-            }
+                OnGround = CreateBoolAccessor(type, "onGround"),
+                Dashing = CreateBoolAccessor(type, "dashing"),
+                AirDashing = CreateBoolAccessor(type, "airDashing"),
+                ShadowDashing = CreateBoolAccessor(type, "shadowDashing"),
+                SuperDashing = CreateBoolAccessor(type, "superDashing"),
+                WallSliding = CreateBoolAccessor(type, "wallSliding"),
+                Jumping = CreateBoolAccessor(type, "jumping"),
+                DoubleJumping = CreateBoolAccessor(type, "doubleJumping"),
+                WallJumping = CreateBoolAccessor(type, "wallJumping"),
+                Falling = CreateBoolAccessor(type, "falling"),
+                Attacking = CreateBoolAccessor(type, "attacking"),
+                Invulnerable = CreateBoolAccessor(type, "invulnerable"),
+                Swimming = CreateBoolAccessor(type, "swimming")
+            };
+        }
 
-            return accessors;
+        private sealed class StateFlagAccessors
+        {
+            public Func<object, bool>? OnGround;
+            public Func<object, bool>? Dashing;
+            public Func<object, bool>? AirDashing;
+            public Func<object, bool>? ShadowDashing;
+            public Func<object, bool>? SuperDashing;
+            public Func<object, bool>? WallSliding;
+            public Func<object, bool>? Jumping;
+            public Func<object, bool>? DoubleJumping;
+            public Func<object, bool>? WallJumping;
+            public Func<object, bool>? Falling;
+            public Func<object, bool>? Attacking;
+            public Func<object, bool>? Invulnerable;
+            public Func<object, bool>? Swimming;
         }
 
         private static Func<object, bool>? CreateBoolAccessor(Type type, string name)

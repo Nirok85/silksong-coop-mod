@@ -17,6 +17,11 @@ namespace SilksongCoop.Core.Networking
         private readonly int _maxTokens;
         private readonly int _refillRate;
 
+        // GetOrAdd stores the factory only when it has to insert, but the lambda argument
+        // itself is still a delegate allocation on every call. Keep one cached delegate
+        // for the lifetime of the limiter so the steady-state path allocates nothing.
+        private readonly Func<NetworkPeerId, TokenBucket> _createBucket;
+
         /// <summary>
         /// Creates a rate limiter with specified capacity and refill rate.
         /// </summary>
@@ -26,6 +31,7 @@ namespace SilksongCoop.Core.Networking
         {
             _maxTokens = maxTokens;
             _refillRate = refillRatePerSecond;
+            _createBucket = _ => new TokenBucket(_maxTokens, _refillRate);
         }
 
         /// <summary>
@@ -34,7 +40,7 @@ namespace SilksongCoop.Core.Networking
         /// </summary>
         public bool TryConsume(NetworkPeerId peerId)
         {
-            var bucket = _buckets.GetOrAdd(peerId, _ => new TokenBucket(_maxTokens, _refillRate));
+            var bucket = _buckets.GetOrAdd(peerId, _createBucket);
             return bucket.TryConsume();
         }
 

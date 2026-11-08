@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using SilksongCoop.Core.Visuals;
 using UnityEngine;
@@ -18,11 +17,13 @@ namespace SilksongCoop.Mod.Visuals
 
         private const float GhostEmissionInterval = 0.04f;
         private const float GhostFadeDuration = 0.22f;
+        private const int GhostPrewarmCount = 8;
 
         private tk2dSprite? _sourceSprite;
         private DashTrailLifecycle _lifecycle = new DashTrailLifecycle();
         private bool _isPlayer2;
         private float _emissionTimer;
+        private bool _ghostPoolPrewarmed;
         private GameObject? _rimLightObject;
         private Light? _rimLight;
         private int _lastUpdateFrame = -1;
@@ -53,6 +54,7 @@ namespace SilksongCoop.Mod.Visuals
         public void Initialize(bool isPlayer2)
         {
             _isPlayer2 = isPlayer2;
+            PrewarmGhostPool();
             UpdateRimLightColor();
         }
 
@@ -98,6 +100,7 @@ namespace SilksongCoop.Mod.Visuals
             if (_lastUpdateFrame == Time.frameCount) return;
 
             _lastUpdateFrame = Time.frameCount;
+            ReapCompletedGhosts();
             _lifecycle.Update(deltaTime, isGrounded, isWallSliding);
 
             if (_lifecycle.CurrentPhase == DashTrailPhase.Active)
@@ -163,13 +166,13 @@ namespace SilksongCoop.Mod.Visuals
 
         private void EmitGhostAfterImage()
         {
+            DashGhostInstance? ghost = null;
+            GameObject? ghostGo = null;
             try
             {
                 if (_sourceSprite == null || _sourceSprite.Collection == null) return;
 
                 // Try to reuse a pooled ghost instance
-                DashGhostInstance ghost;
-                GameObject ghostGo;
 
                 if (_ghostPool.Count > 0)
                 {
@@ -181,6 +184,9 @@ namespace SilksongCoop.Mod.Visuals
                 else
                 {
                     ghostGo = new GameObject($"DashGhost_{_isPlayer2}_{Time.frameCount}");
+                    // Keep every ghost that can enter the pool alive across scene loads,
+                    // matching the prewarmed instances.
+                    UnityEngine.Object.DontDestroyOnLoad(ghostGo);
                     ghost = ghostGo.AddComponent<DashGhostInstance>();
                 }
                 _activeGhosts.Add(ghost);
@@ -218,41 +224,92 @@ namespace SilksongCoop.Mod.Visuals
                 }
 
                 ghost.Reset(ghostSprite, trailColor, GhostFadeDuration);
-
-                // Start coroutine to return ghost to pool after fade completes
-                if (this != null && gameObject != null)
-                {
-                    StartCoroutine(ReturnGhostToPool(ghost, GhostFadeDuration + 0.1f));
-                }
             }
             catch (Exception ex)
             {
+                // Do not leave a half-initialized ghost visible or return a partially
+                // initialized object to the pool: destroy it and let the next emission
+                // create a clean instance.
+                if (ghost != null) _activeGhosts.Remove(ghost);
+                if (ghostGo != null) Destroy(ghostGo);
+
                 SilksongCoopPlugin.LogWarn($"[DashTrailController] EmitGhostAfterImage error: {ex.Message}");
             }
         }
 
-        private IEnumerator ReturnGhostToPool(DashGhostInstance ghost, float delay)
+        private void RecycleGhost(DashGhostInstance? ghost)
         {
-            // Note: yield cannot be used in try-catch blocks, so we use null checks instead
-            // Realtime wait: WaitForSeconds is frozen while the game is paused, so a ghost
-            // emitted just before a pause would never return to the pool.
-            yield return new WaitForSecondsRealtime(delay);
-            
-            if (ghost == null || ghost.gameObject == null)
-            {
-                yield break;
-            }
+            if (ghost == null) return;
 
             _activeGhosts.Remove(ghost);
+            var ghostGo = ghost.gameObject;
+            if (ghostGo == null) return;
 
-            if (_ghostPool != null && _ghostPool.Count < MaxPoolSize)
+            ghostGo.SetActive(false);
+            if (_ghostPool.Count < MaxPoolSize)
             {
-                ghost.gameObject.SetActive(false);
                 _ghostPool.Enqueue(ghost);
             }
             else
             {
-                Destroy(ghost.gameObject);
+                Destroy(ghostGo);
+            }
+        }
+
+        private void PrewarmGhostPool()
+        {
+            if (_ghostPoolPrewarmed) return;
+            _ghostPoolPrewarmed = true;
+
+            int target = Math.Min(GhostPrewarmCount, MaxPoolSize);
+            while (_ghostPool.Count < target)
+            {
+                var ghost = CreateInactiveGhost();
+                if (ghost == null) break;
+                _ghostPool.Enqueue(ghost);
+            }
+        }
+
+        private static DashGhostInstance? CreateInactiveGhost()
+        {
+            var ghostGo = new GameObject("DashGhost_Pooled");
+            // Pooled ghosts are root objects and must survive a scene transition; otherwise
+            // the pool would hold destroyed references after the controller's scene unloads.
+            UnityEngine.Object.DontDestroyOnLoad(ghostGo);
+            try
+            {
+                var ghost = ghostGo.AddComponent<DashGhostInstance>();
+                ghostGo.SetActive(false);
+                return ghost;
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Object.Destroy(ghostGo);
+                SilksongCoopPlugin.LogWarn(
+                    $"[DashTrailController] Ghost prewarm failed: {ex.Message}");
+                return null;
+            }
+        }
+
+        private void ReapCompletedGhosts()
+        {
+            // Completed ghosts deactivate themselves in DashGhostInstance.Update; this
+            // once-per-frame pass is the single place that returns or destroys them, so a
+            // ghost can never be reaped twice (the old per-ghost coroutine did the same).
+            for (int i = _activeGhosts.Count - 1; i >= 0; i--)
+            {
+                var ghost = _activeGhosts[i];
+                if (ghost == null)
+                {
+                    _activeGhosts.RemoveAt(i);
+                    continue;
+                }
+
+                if (!ghost.IsComplete) continue;
+
+                // RecycleGhost removes from _activeGhosts and forces the object inactive;
+                // this also covers a ghost whose setup threw before Reset() armed the fade.
+                RecycleGhost(ghost);
             }
         }
 
@@ -321,6 +378,12 @@ namespace SilksongCoop.Mod.Visuals
             private float _duration;
             private float _elapsed;
             private bool _isActive;
+
+            /// <summary>
+            /// True once the fade has finished; the owning controller then returns the
+            /// instance to its pool (or destroys it) from its once-per-frame update.
+            /// </summary>
+            public bool IsComplete => !_isActive;
 
             /// <summary>
             /// Initializes the ghost instance with sprite and fade settings.
