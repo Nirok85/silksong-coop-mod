@@ -9,6 +9,13 @@ namespace SilksongCoop.Core.Networking
     {
         event Action<NetworkPeerId> OnPeerConnected;
         event Action<NetworkPeerId, DisconnectReason> OnPeerDisconnected;
+
+        /// <summary>
+        /// Raised for each received payload. The byte array and the (offset, length) window
+        /// are valid only for the duration of the callback; handlers that retain data must
+        /// copy it. The UDP transport may return this buffer to a pool immediately after the
+        /// callback returns.
+        /// </summary>
         event Action<NetworkPeerId, byte[], int, int> OnDataReceived;
 
         bool IsHost { get; }

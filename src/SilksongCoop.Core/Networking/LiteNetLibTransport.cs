@@ -1,10 +1,12 @@
 using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 
 namespace SilksongCoop.Core.Networking
 {
@@ -72,16 +74,29 @@ namespace SilksongCoop.Core.Networking
             public readonly NetworkPeerId Peer;
             public readonly DisconnectReason Reason;
             public readonly byte[]? Data;
+            public readonly int DataLength;
+            public readonly bool DataPooled;
             public readonly long Generation;
 
+            // Legacy five-parameter shape is used by existing reflection-based tests and
+            // by peer lifecycle events. Data-payload events use the overload below.
             public DeferredEvent(DeferredEventKind kind, NetworkPeerId peer,
                 DisconnectReason reason = DisconnectReason.None, byte[]? data = null,
                 long generation = 0)
+                : this(kind, peer, reason, data, data?.Length ?? 0, dataPooled: false, generation)
+            {
+            }
+
+            public DeferredEvent(DeferredEventKind kind, NetworkPeerId peer,
+                DisconnectReason reason, byte[]? data, int dataLength, bool dataPooled,
+                long generation)
             {
                 Kind = kind;
                 Peer = peer;
                 Reason = reason;
                 Data = data;
+                DataLength = dataLength >= 0 ? dataLength : data?.Length ?? 0;
+                DataPooled = dataPooled;
                 Generation = generation;
             }
         }
@@ -109,6 +124,15 @@ namespace SilksongCoop.Core.Networking
         private readonly Dictionary<IPEndPoint, PendingHandshake> _pendingHandshakes = new();
         private const int MaxPendingHandshakes = 8;
         private readonly object _lock = new();
+        // Serializes deferred-event drains across concurrent PollEvents callers. The same
+        // object is reentrant on one thread, which preserves the handler re-entrancy guard.
+        private readonly object _drainLock = new();
+        private bool _drainRequested;
+        private HMACSHA256? _hmac;
+        private const int HmacHashBytes = 32;
+        // Reused drain batch: ToArray() allocated once per PollEvents frame with events.
+        private readonly List<DeferredEvent> _drainBatch = new List<DeferredEvent>(64);
+        private bool _drainingEvents;
         private readonly RateLimiter _rateLimiter = new RateLimiter(maxTokens: 4096, refillRatePerSecond: 256);
         // Pre-authentication traffic cannot be keyed by a peer id yet. Buckets are keyed
         // by source endpoint so one flooding sender cannot starve a legitimate client's
@@ -187,6 +211,9 @@ namespace SilksongCoop.Core.Networking
 
         // Pre-allocated receive buffer to avoid per-poll GC pressure
         private readonly byte[] _recvBuffer = new byte[2048];
+        // Reused only while connected: handshake frames may store the endpoint as a
+        // dictionary key, so those paths keep a fresh IPEndPoint.
+        private readonly IPEndPoint _connectedSenderEndPoint = new IPEndPoint(IPAddress.Any, 0);
 
         // BUG-N2: heartbeat spoof protection — a packet from an unknown endpoint used to
         // refresh _lastReceivedMs before sender validation, letting an off-path attacker
@@ -319,7 +346,7 @@ namespace SilksongCoop.Core.Networking
             // Any event already queued belongs to the session being torn down. It must not
             // be delivered after a new StartHost/Connect (for example a stale disconnect
             // event tearing down a freshly started session).
-            _pendingEvents.Clear();
+            ClearPendingEvents();
             _sessionGeneration++;
 
             foreach (var node in _unacknowledged)
@@ -346,7 +373,7 @@ namespace SilksongCoop.Core.Networking
             _rttMs = 30;
             _connectionAttemptStartMs = 0;
             _pendingHandshakes.Clear();
-            _sessionKey = null;
+            ClearSessionKey();
             _authenticator.Reset();
         }
 
@@ -718,7 +745,7 @@ namespace SilksongCoop.Core.Networking
                     envelope[0] = (byte)UdpFrameType.Data;
                     envelope[1] = channel;
                     envelope[2] = (byte)method;
-                    Buffer.BlockCopy(BitConverter.GetBytes(seq), 0, envelope, 3, 4);
+                    BinaryPrimitives.WriteUInt32LittleEndian(envelope.AsSpan(3, 4), seq);
                     envelope[7] = includeMac ? FlagMacPresent : (byte)0;
                     data.AsSpan(offset, length).CopyTo(envelope.AsSpan(8));
                     if (includeMac)
@@ -795,7 +822,6 @@ namespace SilksongCoop.Core.Networking
                     // 1. Receive incoming datagrams - reuse pre-allocated buffer.
                     // Bound the work per frame: a flood must not stall the Unity main thread.
                     int processedDatagrams = 0;
-                    EndPoint senderEp = new IPEndPoint(IPAddress.Any, 0);
 
                     while (processedDatagrams < MaxDatagramsPerPoll)
                     {
@@ -818,8 +844,12 @@ namespace SilksongCoop.Core.Networking
 
                         if (available <= 0) break;
 
-                        // Fresh sender endpoint per iteration to avoid stale data
-                        senderEp = new IPEndPoint(IPAddress.Any, 0);
+                        // Connected data traffic only compares the endpoint, so one instance
+                        // can be reused. Handshake/disconnected paths keep a fresh object
+                        // because they may store it in _pendingHandshakes.
+                        EndPoint senderEp = IsConnected
+                            ? _connectedSenderEndPoint
+                            : new IPEndPoint(IPAddress.Any, 0);
 
                         try
                         {
@@ -955,7 +985,8 @@ namespace SilksongCoop.Core.Networking
                         if (now - _lastPingSentMs > 1000)
                         {
                             _lastPingSentMs = now;
-                            byte[] timestampPayload = BitConverter.GetBytes(now);
+                            Span<byte> timestampPayload = stackalloc byte[8];
+                            BinaryPrimitives.WriteInt64LittleEndian(timestampPayload, now);
                             SendEnvelope(UdpFrameType.Ping, 0, 0, DeliveryMethod.Unreliable, timestampPayload);
                         }
                     }
@@ -1204,7 +1235,7 @@ namespace SilksongCoop.Core.Networking
                                 // Both sides derive the same post-handshake MAC key from the
                                 // room code and the nonce. Set it before responding so the
                                 // first data frame after HandshakeAck is verifiable.
-                                _sessionKey = _authenticator.ComputeSessionKey(nonce, _roomCode);
+                                SetSessionKey(_authenticator.ComputeSessionKey(nonce, _roomCode));
                                 SendEnvelope(UdpFrameType.ChallengeResponse, 0, 0, DeliveryMethod.Unreliable, signature);
                             }
                         }
@@ -1221,7 +1252,7 @@ namespace SilksongCoop.Core.Networking
                             {
                                 // The HMAC proves the sender knows the shared secret; only now
                                 // does it own the slot and the endpoint is committed.
-                                _sessionKey = sessionKey;
+                                SetSessionKey(sessionKey);
                                 _remoteEndPoint = responseEndpoint;
                                 _remotePeerId = pending.Peer;
                                 _pendingHandshakes.Clear();
@@ -1307,9 +1338,9 @@ namespace SilksongCoop.Core.Networking
                         if ((method == DeliveryMethod.ReliableOrdered ||
                              method == DeliveryMethod.ReliableUnordered) && IsConnected && accepted)
                         {
-                            byte[] ackPayload = new byte[5];
+                            Span<byte> ackPayload = stackalloc byte[5];
                             ackPayload[0] = channel;
-                            Buffer.BlockCopy(BitConverter.GetBytes(sequence), 0, ackPayload, 1, 4);
+                            BinaryPrimitives.WriteUInt32LittleEndian(ackPayload.Slice(1, 4), sequence);
                             SendEnvelope(UdpFrameType.Ack, channel, sequence, method, ackPayload);
                         }
                         break;
@@ -1394,8 +1425,6 @@ namespace SilksongCoop.Core.Networking
         {
             try
             {
-                byte[] data = payload.ToArray();
-
                 if (method == DeliveryMethod.ReliableOrdered)
                 {
                     if (!_pendingReliable.TryGetValue(channel, out var pending))
@@ -1435,7 +1464,7 @@ namespace SilksongCoop.Core.Networking
 
                     if (sequence == expected)
                     {
-                        DispatchData(data);
+                        DispatchData(payload.ToArray());
                         if (!IsConnected) return true;
 
                         expected++;
@@ -1453,17 +1482,18 @@ namespace SilksongCoop.Core.Networking
                     }
                     else if (IsSequenceNewer(sequence, expected))
                     {
-                        pending[sequence] = data;
+                        pending[sequence] = payload.ToArray();
                     }
                     // If sequence < expected, it's a duplicate/old packet - drop silently
                     // but still ACK it so a sender that lost the original ACK can retire it.
                     return true;
                 }
-                else if (method == DeliveryMethod.ReliableUnordered)
+
+                if (method == DeliveryMethod.ReliableUnordered)
                 {
                     // No ordering window, but retransmissions may duplicate a packet.
-                    // Deliver once and remember the sequence so the duplicate can still
-                    // be ACKed without being applied twice.
+                    // Check the dedup set before copying the payload: duplicates should not
+                    // allocate a managed buffer just to be discarded.
                     var key = (channel, sequence);
                     if (!_receivedUnordered.Add(key))
                     {
@@ -1477,9 +1507,11 @@ namespace SilksongCoop.Core.Networking
                         _receivedUnordered.Remove(_receivedUnorderedOrder.Dequeue());
                     }
 
-                    DispatchData(data);
+                    DispatchData(payload.ToArray());
+                    return true;
                 }
-                else if (method == DeliveryMethod.Sequenced)
+
+                if (method == DeliveryMethod.Sequenced)
                 {
                     _latestSequencedReceived.TryGetValue(channel, out uint latest);
                     // BUG-N4: `latest == 0` made every sequence-0 packet look acceptable, so
@@ -1489,20 +1521,24 @@ namespace SilksongCoop.Core.Networking
                     {
                         _sequencedInitialized.Add(channel);
                         _latestSequencedReceived[channel] = sequence;
-                        DispatchData(data);
                     }
                     else if (IsSequenceNewer(sequence, latest))
                     {
                         _latestSequencedReceived[channel] = sequence;
-                        DispatchData(data);
                     }
-                }
-                else
-                {
-                    TrackUnreliableSequences(channel, sequence);
-                    DispatchData(data);
+                    else
+                    {
+                        return true;
+                    }
+
+                    byte[] pooled = RentAndCopy(payload);
+                    DispatchData(pooled, payload.Length, pooled: true);
+                    return true;
                 }
 
+                TrackUnreliableSequences(channel, sequence);
+                byte[] unreliable = RentAndCopy(payload);
+                DispatchData(unreliable, payload.Length, pooled: true);
                 return true;
             }
             catch (Exception ex)
@@ -1510,6 +1546,13 @@ namespace SilksongCoop.Core.Networking
                 CoopLog.Warn($"[LiteNetLibTransport] HandleIncomingData error: {ex.Message}");
                 return false;
             }
+        }
+
+        private static byte[] RentAndCopy(ReadOnlySpan<byte> payload)
+        {
+            byte[] buffer = ArrayPool<byte>.Shared.Rent(payload.Length);
+            payload.CopyTo(buffer);
+            return buffer;
         }
 
         /// <summary>
@@ -1576,24 +1619,33 @@ namespace SilksongCoop.Core.Networking
             _lossWindowStartMs = now;
         }
 
-        private void DispatchData(byte[] data)
+        private void DispatchData(byte[]? data, int length = -1, bool pooled = false)
         {
+            int actualLength = length >= 0 ? length : data?.Length ?? 0;
             try
             {
-                // Fix: Ensure we have a valid peer and connection before dispatching
-                if (!_remotePeerId.HasValue || !IsConnected)
+                // Ensure we have a valid peer and connection before dispatching.
+                if (!_remotePeerId.HasValue || !IsConnected || data == null || actualLength <= 0)
                 {
-                    // No remote peer established or not connected, drop the data
+                    if (pooled) ReturnPooledBuffer(data);
                     return;
                 }
-                if (data == null || data.Length == 0) return;
+
                 var peer = _remotePeerId.Value;
                 // BUG-03: defer dispatch - handlers call transport.Send() and must not
                 // execute while _lock is held.
-                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.DataReceived, peer, data: data, generation: _sessionGeneration));
+                _pendingEvents.Enqueue(new DeferredEvent(
+                    DeferredEventKind.DataReceived,
+                    peer,
+                    reason: DisconnectReason.None,
+                    data: data,
+                    dataLength: actualLength,
+                    dataPooled: pooled,
+                    generation: _sessionGeneration));
             }
             catch (Exception ex)
             {
+                if (pooled) ReturnPooledBuffer(data);
                 CoopLog.Warn($"[LiteNetLibTransport] DispatchData error: {ex.Message}");
             }
         }
@@ -1636,46 +1688,150 @@ namespace SilksongCoop.Core.Networking
         /// </summary>
         private void DrainPendingEvents()
         {
-            for (int guard = 0; guard < 1024; guard++)
+            // Claim the drain under a short lock, but never hold it while user handlers
+            // run: a handler may synchronously wait for another thread that calls
+            // PollEvents(), and that thread must be able to return instead of blocking.
+            lock (_drainLock)
             {
-                DeferredEvent[] batch;
-                lock (_lock)
+                if (_drainingEvents)
                 {
-                    if (_pendingEvents.Count == 0) return;
-                    batch = _pendingEvents.ToArray();
-                    _pendingEvents.Clear();
+                    // Do not wait: a handler may be waiting for this thread to return.
+                    // Ask the active drain to run one more pass after its current batch.
+                    _drainRequested = true;
+                    return;
                 }
+                _drainingEvents = true;
+            }
 
-                foreach (var e in batch)
+            const int MaxDrainPasses = 4;
+            try
+            {
+                for (int pass = 0; pass < MaxDrainPasses; pass++)
                 {
-                    // A handler in this batch may have started/stopped a session. Events
-                    // captured before that reset must never leak into the new session.
-                    if (e.Generation != _sessionGeneration) continue;
+                    DrainPendingEventsCore();
 
-                    switch (e.Kind)
+                    // Clear the active flag and inspect the request atomically. Releasing
+                    // _drainLock before clearing the flag would let a concurrent PollEvents
+                    // set _drainRequested in the gap; that request would then be dropped.
+                    lock (_drainLock)
                     {
-                        case DeferredEventKind.PeerConnected:
-                            OnPeerConnected?.Invoke(e.Peer);
-                            break;
-
-                        case DeferredEventKind.PeerDisconnected:
-                            OnPeerDisconnected?.Invoke(e.Peer, e.Reason);
-                            break;
-
-                        case DeferredEventKind.DataReceived:
-                            // The connection may have been dropped by an earlier handler in this
-                            // batch (e.g. Disconnect inside a data callback) - drop stale data.
-                            if (!_isConnected || e.Data == null) break;
-                            OnDataReceived?.Invoke(e.Peer, e.Data, 0, e.Data.Length);
-                            break;
+                        if (!_drainRequested)
+                        {
+                            _drainingEvents = false;
+                            return;
+                        }
+                        _drainRequested = false;
                     }
                 }
+            }
+            catch
+            {
+                lock (_drainLock)
+                {
+                    _drainingEvents = false;
+                    _drainRequested = false;
+                }
+                throw;
+            }
+
+            // Bounded feedback loop: leave any remaining queued events for the next poll.
+            lock (_drainLock)
+            {
+                _drainingEvents = false;
+                _drainRequested = false;
+            }
+        }
+
+        private void DrainPendingEventsCore()
+        {
+            for (int guard = 0; guard < 1024; guard++)
+            {
+                    _drainBatch.Clear();
+                    lock (_lock)
+                    {
+                        if (_pendingEvents.Count == 0) return;
+                        while (_pendingEvents.Count > 0)
+                        {
+                            _drainBatch.Add(_pendingEvents.Dequeue());
+                        }
+                    }
+
+                    int processedThrough = 0;
+                    try
+                    {
+                        for (int i = 0; i < _drainBatch.Count; i++)
+                        {
+                            var e = _drainBatch[i];
+                            try
+                            {
+                                ProcessDeferredEvent(e);
+                            }
+                            catch (Exception ex)
+                            {
+                                // A faulty game/plugin handler must not abort the transport
+                                // drain and strand every later event in the batch.
+                                CoopLog.Warn(
+                                    $"[LiteNetLibTransport] Deferred event handler failed: {ex.Message}");
+                            }
+                            finally
+                            {
+                                // Pooled payload buffers are owned by this event until the
+                                // handler has returned (or the event was discarded).
+                                if (e.DataPooled) ReturnPooledBuffer(e.Data);
+                                processedThrough = i + 1;
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        // If a handler threw, return buffers from the unprocessed tail too.
+                        for (int i = processedThrough; i < _drainBatch.Count; i++)
+                        {
+                            if (_drainBatch[i].DataPooled)
+                                ReturnPooledBuffer(_drainBatch[i].Data);
+                        }
+                        _drainBatch.Clear();
+                    }
+                }
+        }
+
+        private void ProcessDeferredEvent(in DeferredEvent e)
+        {
+            // A handler in this batch may have started/stopped a session. Events
+            // captured before that reset must never leak into the new session.
+            if (e.Generation != _sessionGeneration) return;
+
+            switch (e.Kind)
+            {
+                case DeferredEventKind.PeerConnected:
+                    OnPeerConnected?.Invoke(e.Peer);
+                    break;
+
+                case DeferredEventKind.PeerDisconnected:
+                    OnPeerDisconnected?.Invoke(e.Peer, e.Reason);
+                    break;
+
+                case DeferredEventKind.DataReceived:
+                    // The connection may have been dropped by an earlier handler in this
+                    // batch (e.g. Disconnect inside a data callback) - drop stale data.
+                    if (!_isConnected || e.Data == null) break;
+                    OnDataReceived?.Invoke(e.Peer, e.Data, 0, e.DataLength);
+                    break;
             }
         }
 
         #endregion
 
         #region Helper Methods
+
+        private void ClearPendingEvents()
+        {
+            while (_pendingEvents.Count > 0)
+            {
+                var e = _pendingEvents.Dequeue();
+                if (e.DataPooled) ReturnPooledBuffer(e.Data);
+            }
+        }
 
         private static void ReturnPooledBuffer(byte[]? buffer)
         {
@@ -1739,31 +1895,42 @@ namespace SilksongCoop.Core.Networking
         {
             if (_socket == null || target == null) return;
 
-            byte[] envelope = BuildEnvelope(type, channel, sequence, method, payload);
+            bool includeMac = _sessionKey != null && NeedsMac(type);
+            int envelopeLength = 8 + payload.Length + (includeMac ? MacSizeBytes : 0);
+            byte[] envelope = ArrayPool<byte>.Shared.Rent(envelopeLength);
             try
             {
-                _socket.SendTo(envelope, target);
+                WriteEnvelope(envelope, type, channel, sequence, method, payload, includeMac);
+                _socket.SendTo(envelope, 0, envelopeLength, SocketFlags.None, target);
             }
             catch (SocketException ex) { CoopLog.Warn($"Socket error: {ex.Message}"); }
             catch (ObjectDisposedException ex) { CoopLog.Warn($"Socket disposed: {ex.Message}"); }
             catch (Exception ex) { CoopLog.Warn($"SendEnvelope error: {ex.Message}"); }
+            finally
+            {
+                ReturnPooledBuffer(envelope);
+            }
         }
 
-        private byte[] BuildEnvelope(UdpFrameType type, byte channel, uint sequence, DeliveryMethod method, ReadOnlySpan<byte> payload)
+        private void WriteEnvelope(
+            byte[] buffer,
+            UdpFrameType type,
+            byte channel,
+            uint sequence,
+            DeliveryMethod method,
+            ReadOnlySpan<byte> payload,
+            bool includeMac)
         {
-            bool includeMac = _sessionKey != null && NeedsMac(type);
-            byte[] buffer = new byte[8 + payload.Length + (includeMac ? MacSizeBytes : 0)];
             buffer[0] = (byte)type;
             buffer[1] = channel;
             buffer[2] = (byte)method;
-            Buffer.BlockCopy(BitConverter.GetBytes(sequence), 0, buffer, 3, 4);
+            BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(3, 4), sequence);
             buffer[7] = includeMac ? FlagMacPresent : (byte)0;
             payload.CopyTo(buffer.AsSpan(8));
             if (includeMac)
             {
                 AppendMac(buffer, 8 + payload.Length);
             }
-            return buffer;
         }
 
         /// <summary>
@@ -1785,19 +1952,45 @@ namespace SilksongCoop.Core.Networking
             RequiresMac(type) ||
             (type == UdpFrameType.HandshakeAck && _sessionKey != null);
 
+        private void SetSessionKey(byte[]? key)
+        {
+            _hmac?.Dispose();
+            _sessionKey = key;
+            _hmac = key == null || key.Length == 0 ? null : new HMACSHA256(key);
+        }
+
+        private void ClearSessionKey() => SetSessionKey(null);
+
         private void AppendMac(byte[] buffer, int headerAndPayloadLength)
         {
-            using var hmac = new System.Security.Cryptography.HMACSHA256(_sessionKey!);
-            byte[] hash = hmac.ComputeHash(buffer, 0, headerAndPayloadLength);
-            Buffer.BlockCopy(hash, 0, buffer, headerAndPayloadLength, MacSizeBytes);
+            if (_hmac == null)
+            {
+                throw new InvalidOperationException("Cannot append a MAC without a session key");
+            }
+
+            Span<byte> hash = stackalloc byte[HmacHashBytes];
+            if (!_hmac.TryComputeHash(
+                    buffer.AsSpan(0, headerAndPayloadLength),
+                    hash,
+                    out int written) ||
+                written < MacSizeBytes)
+            {
+                throw new InvalidOperationException("HMAC computation failed");
+            }
+
+            hash.Slice(0, MacSizeBytes).CopyTo(buffer.AsSpan(headerAndPayloadLength, MacSizeBytes));
         }
 
         private bool ValidateMac(ReadOnlySpan<byte> headerAndPayload, ReadOnlySpan<byte> receivedMac)
         {
-            if (_sessionKey == null || receivedMac.Length < MacSizeBytes) return false;
+            if (_hmac == null || receivedMac.Length < MacSizeBytes) return false;
 
-            using var hmac = new System.Security.Cryptography.HMACSHA256(_sessionKey);
-            byte[] hash = hmac.ComputeHash(headerAndPayload.ToArray());
+            Span<byte> hash = stackalloc byte[HmacHashBytes];
+            if (!_hmac.TryComputeHash(headerAndPayload, hash, out int written) ||
+                written < MacSizeBytes)
+            {
+                return false;
+            }
 
             int diff = 0;
             for (int i = 0; i < MacSizeBytes; i++)
