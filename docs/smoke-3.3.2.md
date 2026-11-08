@@ -1,6 +1,6 @@
 # Smoke test 3.3.2
 
-Release candidate: `37871f9` (version 3.3.2, protocol v8)
+Release: [v3.3.2](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.2), commit `37871f9` (version 3.3.2, protocol v8)
 Archives:
 
 - `SilksongCoop_v3.3.2.zip` — SHA-256 `D8094CF946F48252B7DFFD15CF25BCD5921DE18E6DCCB8D09F6C7091711FFF75`

@@ -16,8 +16,7 @@ Baseline: `652720b` (version 3.3.1, protocol v8)
 | M4b - world key/index/quest accessors | **Done** | `c073bdb` | 917/917 tests; Release/Debug 0 warnings; audit closed with medium performance residuals |
 | M5a - packet sender & limits | **Done** | `26514ae` | 917/917 tests; Release/Debug 0 warnings; audit closed |
 | M5b - lifecycle & unsubscribe | **Done** | `a28af15` | 917/917 tests; Release/Debug 0 warnings; audit clean |
-| M6 - release 3.3.2 & GitHub | **Blocked** | `37871f9` | preflight/build/tests/archives green; local two-instance smoke unavailable; no tag/release |
-| M6 — release 3.3.2 & GitHub | Pending | — | — |
+| M6 - release 3.3.2 & GitHub | **Done** | `37871f9` | tag `v3.3.2` and GitHub Release published; both archives + SHA256SUMS uploaded and digest-verified |
 
 ## M6 - release 3.3.2 and GitHub
 
@@ -36,11 +35,20 @@ compatibility banner, 7 Harmony classes, 38 quest flags, no startup errors).
 A second local instance could not be started: Steam `-applaunch` did not spawn
 another process, direct launch exits with code 1 (Steam DRM/single-instance),
 and mouse injection into the IMGUI menu did not register (`mdown` access error);
-keyboard F10 worked. No two-client UDP/Steam smoke was completed.
+keyboard F10 worked. No two-client UDP/Steam smoke was completed locally.
 
-**Gate:** per the campaign spec, tag `v3.3.2` and the GitHub Release are
-deliberately **not** created until the user runs the two-client smoke or
-explicitly authorizes publishing without it.
+**Published (2026-11-08):** the user explicitly requested the GitHub update, so
+tag `v3.3.2` (annotated, target `37871f9`) and the release were published:
+https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.2
+
+Uploaded assets (GitHub digest-verified):
+
+- `SilksongCoop_v3.3.2.zip` — `d8094cf946f48252b7dffd15cf25bcd5921de18e6dccb8d09f6c7091711fff75`
+- `SilksongCoop_v3.3.2_plugin-only.zip` — `ad639015d4cc289b88ad1582330ccb2e1bb1d0f82458d0bdf5af195c36eab20b`
+- `SilksongCoop_v3.3.2_SHA256SUMS.txt` — `09b2fa61ea1d2b619092b474ae35e1d4d8cb73eedeef92391397dca1a244be28`
+
+The release notes state that a two-client UDP/Steam smoke and Steam 3+ remain
+to be checked; this is a documented residual risk, not a code blocker.
 
 ## M5a - packet sender and backlog limits
 
