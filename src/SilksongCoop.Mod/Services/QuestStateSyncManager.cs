@@ -95,9 +95,53 @@ namespace SilksongCoop.Mod.Services
         {
             if (!CanSync) return;
 
+            // A flag can change after the last 1 Hz poll but before this dialogue starts.
+            // It is present in the new "before" baseline, so the dialogue diff would never
+            // contain it. Flush that window first; the dialogue baseline is captured next.
+            FlushPollChangesBeforeDialogue();
+
             // Do not invalidate a flush queued by the previous dialogue: rapid
             // dialogue-to-dialogue transitions must still send the earlier changes.
             _before = Capture();
+        }
+
+        /// <summary>
+        /// Sends changes accumulated since the last poll before a dialogue baseline replaces
+        /// the poll snapshot. Seed-only on the first observation after connecting, so joining
+        /// still cannot overwrite the partner's existing progress.
+        /// </summary>
+        private void FlushPollChangesBeforeDialogue()
+        {
+            QuestFlagSnapshot current;
+            try
+            {
+                current = Capture();
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[QuestSync] Pre-dialogue capture failed: {ex.Message}");
+                return;
+            }
+
+            if (_lastSnapshot == null)
+            {
+                _lastSnapshot = current;
+                return;
+            }
+
+            List<QuestFlagChange> changes;
+            try
+            {
+                changes = QuestFlagDiff.Compute(_lastSnapshot, current);
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[QuestSync] Pre-dialogue diff failed: {ex.Message}");
+                return;
+            }
+
+            _lastSnapshot = current;
+            SendChanges(changes);
         }
 
         /// <summary>

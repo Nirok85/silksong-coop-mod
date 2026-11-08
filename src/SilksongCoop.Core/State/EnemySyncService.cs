@@ -195,6 +195,33 @@ namespace SilksongCoop.Core.State
         }
 
         /// <summary>
+        /// Seeds the host's current authoritative HP for an enemy before a client hit is
+        /// merged. Unlike <see cref="NoteLocalEnemyState"/> this is not a hit: it must not
+        /// advance the local-hit ordering or turn a client's packet into a local event.
+        /// </summary>
+        public void NoteCurrentEnemyState(ulong enemyKey, int hp, bool dead)
+        {
+            if (enemyKey == 0) return;
+
+            lock (_lock)
+            {
+                if (!_enemies.TryGetValue(enemyKey, out var entry))
+                {
+                    EnsureCapacity();
+                    _enemyOrder.Enqueue(enemyKey);
+                    entry = new Entry();
+                }
+
+                if (entry.Dead) return;
+
+                entry.HasState = true;
+                entry.LastHp = dead ? 0 : Math.Max(1, hp);
+                entry.Dead = dead;
+                _enemies[enemyKey] = entry;
+            }
+        }
+
+        /// <summary>
         /// True when a recent host snapshot/hit proves the host is simulating this enemy.
         /// In that case clients defer to the host instead of applying client hits additively
         /// (the snapshot may already contain those hits, which would double-count them).
@@ -247,7 +274,8 @@ namespace SilksongCoop.Core.State
         {
             return AcceptRemoteHitCore(
                 enemyKey, hp, dead, damage, senderId, sequence,
-                additive: true, allowLethal: allowLethal, out resultingHp);
+                additive: true, allowLethal: allowLethal, confirmRemoteDeaths: false,
+                out resultingHp);
         }
 
         /// <summary>
@@ -272,10 +300,14 @@ namespace SilksongCoop.Core.State
                 return false;
             }
 
+            // The local host never lets a client declare a kill on its own. The packet is
+            // merged against the host's current HP and only combined lethal damage confirms
+            // the death; an unconfirmed claim is clamped and waits for the host snapshot.
             return AcceptRemoteHitCore(
                 enemyKey, hp, dead, damage, senderId, sequence,
                 additive: policy != RemoteHitPolicy.Authoritative,
                 allowLethal: true,
+                confirmRemoteDeaths: policy == RemoteHitPolicy.LocalHost,
                 out resultingHp);
         }
 
@@ -288,6 +320,7 @@ namespace SilksongCoop.Core.State
             uint sequence,
             bool additive,
             bool allowLethal,
+            bool confirmRemoteDeaths,
             out int resultingHp)
         {
             resultingHp = hp;
@@ -326,6 +359,40 @@ namespace SilksongCoop.Core.State
                         entry.LastSequenceBySender.Clear();
                     }
                     entry.LastSequenceBySender[senderId] = sequence;
+                }
+
+                if (dead && confirmRemoteDeaths)
+                {
+                    // LocalHost: a client's Death event is a damage claim, not proof that
+                    // the host's enemy died. Merge the killing hit into the host's own HP
+                    // and only accept the death when combined damage is actually lethal.
+                    if (!entry.HasState)
+                    {
+                        // No host baseline yet: keep the enemy alive and let the next
+                        // host snapshot provide the authoritative value.
+                        entry.HasState = true;
+                        entry.Dead = false;
+                        entry.LastHp = 1;
+                        resultingHp = 1;
+                        _enemies[enemyKey] = entry;
+                        return true;
+                    }
+
+                    int combinedHp = entry.LastHp - Math.Max(0, (int)damage);
+                    entry.HasState = true;
+                    if (combinedHp <= 0)
+                    {
+                        entry.Dead = true;
+                        entry.LastHp = 0;
+                        resultingHp = 0;
+                    }
+                    else
+                    {
+                        entry.LastHp = Math.Max(1, combinedHp);
+                        resultingHp = entry.LastHp;
+                    }
+                    _enemies[enemyKey] = entry;
+                    return true;
                 }
 
                 if (dead)
@@ -369,11 +436,16 @@ namespace SilksongCoop.Core.State
                 }
 
                 // An authoritative packet is absolute unless the local player hit after the
-                // last applied snapshot: that snapshot cannot contain the local hit, so the
-                // host's damage is combined exactly like the additive path. If the host did
-                // receive the local hit, its lower absolute HP still wins through Min().
+                // last applied snapshot AND the host's HP is still at or above ours: only
+                // then the host cannot have incorporated the local hit yet. If the host HP
+                // is already lower, it supersedes the local hit and must replace our value;
+                // subtracting again would double-count the same damage.
                 bool localHitSinceSnapshot = entry.LastLocalHitOrder > entry.LastSnapshotOrder;
-                if (!additive && !localHitSinceSnapshot)
+                bool combineLocalHit = !additive &&
+                                       localHitSinceSnapshot &&
+                                       damage > 0 &&
+                                       hp >= entry.LastHp;
+                if (!additive && !combineLocalHit)
                 {
                     // The authoritative peer's absolute HP replaces the local value. An
                     // equal or higher value is a duplicate or a stale packet: while that
@@ -389,6 +461,10 @@ namespace SilksongCoop.Core.State
 
                 if (damage <= 0)
                 {
+                    // A host merges client hits through its own simulation; a packet with
+                    // no damage carries no authoritative host value to apply.
+                    if (confirmRemoteDeaths) return false;
+
                     if (hp >= entry.LastHp) return false;
 
                     if (hp <= 0 && !allowLethal)
@@ -418,8 +494,10 @@ namespace SilksongCoop.Core.State
                 // sender may already have seen our hit). This is symmetric:
                 //   local 70 + remote 10 (packet hp 90) -> 60
                 //   local 90 + remote 30 (packet hp 70) -> 60
+                // LocalHost ignores the client's absolute HP entirely: only the host's
+                // own HP and the claimed damage decide the result.
                 int additiveHp = entry.LastHp - damage;
-                int nextHp = Math.Min(hp, additiveHp);
+                int nextHp = confirmRemoteDeaths ? additiveHp : Math.Min(hp, additiveHp);
                 if (nextHp <= 0)
                 {
                     entry.HasState = true;
@@ -473,15 +551,25 @@ namespace SilksongCoop.Core.State
                     if (diff <= 0) return false;
                 }
 
+                // A snapshot generated before the local player's last hit cannot contain
+                // that hit. Applying its higher HP would visually resurrect the enemy until
+                // the host receives the hit; never raise HP in that window. Snapshots may
+                // still lower HP (the host saw other damage) or confirm a death.
+                bool localHitSinceSnapshot = entry.LastLocalHitOrder > entry.LastSnapshotOrder;
+                int previousHp = entry.HasState ? entry.LastHp : int.MaxValue;
+                int acceptedHp = dead ? 0 : hp;
+                if (!dead && localHitSinceSnapshot)
+                    acceptedHp = Math.Min(entry.LastHp, Math.Max(0, hp));
+
                 entry.HasState = true;
                 entry.LastSnapshotTimestamp = timestamp;
                 entry.HostAuthoritative = true;
                 entry.LastHostAuthorityTick = Environment.TickCount;
                 entry.LastSnapshotOrder = ++_stateOrder;
                 entry.Dead = dead;
-                entry.LastHp = dead ? 0 : hp;
+                entry.LastHp = acceptedHp;
                 _enemies[enemyKey] = entry;
-                return true;
+                return dead || !localHitSinceSnapshot || acceptedHp < previousHp;
             }
         }
     }

@@ -95,6 +95,9 @@ namespace SilksongCoop.Mod.State
         private readonly List<EnemySnapshotEntry> _snapshotBatch = new List<EnemySnapshotEntry>(EnemySnapshotPacket.MaxEntries);
         private readonly EnemySnapshotEntry[] _snapshotEntryBuffer = new EnemySnapshotEntry[EnemySnapshotPacket.MaxEntries];
         private readonly DeadEnemyRegistry _deadRegistry = new DeadEnemyRegistry(MaxDeadRegistry);
+        // Replay registries survive a reconnect but must not leak across save slots or a
+        // save reload. The tracker is seeded by the game's profile id/save singleton.
+        private readonly SaveScopeTracker _saveScope = new SaveScopeTracker();
         // Dead snapshot entries whose scene is not loaded yet. Applying them immediately
         // dropped bosses killed before a late joiner entered the room; retry after a load.
         private readonly Dictionary<ulong, PendingDeadEnemy> _pendingDeadEnemies =
@@ -177,6 +180,7 @@ namespace SilksongCoop.Mod.State
         /// </summary>
         public void ResetSession()
         {
+            RefreshSaveScope();
             _service.Reset();
             _keyCache = new ConditionalWeakTable<HealthManager, KeyHolder>();
             _lastSnapshot.Clear();
@@ -211,8 +215,77 @@ namespace SilksongCoop.Mod.State
             _appliedPersistentRevisions.Clear();
         }
 
+        /// <summary>
+        /// Clears replay registries when the game moved to a different save. Called on the
+        /// cadence of Update and before any catch-up replay, so a switched save can never
+        /// send the previous playthrough's doors, gates or boss deaths to a partner.
+        /// </summary>
+        private void RefreshSaveScope()
+        {
+            int profileId = 0;
+            PlayerData? playerData = null;
+            try
+            {
+                var gameManager = GameManager.instance;
+                if (gameManager != null)
+                    profileId = gameManager.profileID;
+
+                // Only touch the PlayerData getter once a save is loaded. At the menu the
+                // getter would create a default singleton as a side effect.
+                if (profileId > 0)
+                    playerData = PlayerData.instance;
+            }
+            catch
+            {
+                // Game singletons can disappear during teardown; keep the previous scope.
+                return;
+            }
+
+            if (_saveScope.Observe(profileId, playerData))
+            {
+                ClearSaveScopedReplayState();
+                SilksongCoopPlugin.LogInfo(
+                    "[EnemySync] Save scope changed; cleared replay registries for the new playthrough");
+            }
+        }
+
+        private void ClearSaveScopedReplayState()
+        {
+            _service.Reset();
+            _lastSnapshot.Clear();
+            _enemyIndex.Clear();
+            _enemyIndexDirty = true;
+            _deadRegistry.Clear();
+            _worldEvents.Clear();
+            _worldEventOrder.Clear();
+            _persistentStates.Clear();
+            _persistentStateOrder.Clear();
+            _persistentLastValue.Clear();
+            _pendingPersistentStates.Clear();
+            _pendingPersistentOrder.Clear();
+            _pendingWorldEvents.Clear();
+            _pendingWorldEventSenders.Clear();
+            _pendingWorldEventOrder.Clear();
+            _pendingDeadEnemies.Clear();
+            _pendingDeadOrder.Clear();
+            _replayQueue.Clear();
+            _appliedWorldRevisions.Clear();
+            _appliedPersistentRevisions.Clear();
+            ClearWorldObjectCaches();
+            _boolItems = null;
+            _intItems = null;
+            _persistentIndexScene = string.Empty;
+            _persistentIndexDirty = true;
+            _worldReplayPending = true;
+            _forceSnapshotReconcile = true;
+        }
+
         private void Update()
         {
+            // A save switch/reload invalidates every replay registry before it can be sent
+            // to a new partner.
+            RefreshSaveScope();
+
             // Track scene changes even while disconnected. Otherwise the first connection
             // looked like a scene change (empty _sceneName) and cleared dead enemies that
             // were recorded while playing solo, just before their catch-up replay.
@@ -410,6 +483,12 @@ namespace SilksongCoop.Mod.State
 
             bool wasDead = target.GetIsDead();
 
+            // The host merges every client claim into its own live HP. Seed the service
+            // with the value it is actually simulating so a divergent client cannot lower
+            // or kill the enemy on its own; this is not a local hit event.
+            if (localHost && !wasDead)
+                _service.NoteCurrentEnemyState(packet.EnemyKey, target.hp, dead: false);
+
             // Only mark the packet as applied once the target was found. Otherwise the
             // service would reject every retry even though nothing was applied locally.
             if (!_service.TryAcceptRemoteHit(
@@ -425,14 +504,20 @@ namespace SilksongCoop.Mod.State
                 return;
             }
 
-            bool appliedDeath = dead || appliedHp <= 0;
-            ApplyEnemyState(target, appliedHp, appliedDeath, authoritative: false);
+            // The service already decided whether the death is confirmed. A host that
+            // downgraded a client's Death claim to ordinary damage returns HP > 0 here,
+            // so `dead` must not be used directly or the host would kill itself.
+            bool appliedDeath = appliedHp <= 0;
+            ulong appliedKey = ApplyEnemyState(
+                packet.EnemyKey, target, appliedHp, appliedDeath, authoritative: false);
 
             // The host resolved combined lethal damage: broadcast the death so clients that
-            // clamped to 1 HP do not leave a zero-health enemy alive.
+            // clamped to 1 HP do not leave a zero-health enemy alive. Use the key of the
+            // object that actually died, not a proximity-match packet key.
             if (localHost && appliedDeath && !wasDead)
             {
                 var deathPacket = packet;
+                if (appliedKey != 0) deathPacket.EnemyKey = appliedKey;
                 deathPacket.Header = new PacketHeader(
                     PacketType.EnemySync,
                     WorldChannel,
@@ -445,9 +530,13 @@ namespace SilksongCoop.Mod.State
             }
         }
 
-        private void ApplyEnemyState(HealthManager target, int hp, bool dead, bool authoritative)
+        /// <returns>
+        /// The key of the object that died, or 0 when the target is still alive. The host
+        /// uses it to broadcast a death for the object it actually resolved.
+        /// </returns>
+        private ulong ApplyEnemyState(ulong enemyKey, HealthManager target, int hp, bool dead, bool authoritative)
         {
-            if (target == null || target.GetIsDead()) return;
+            if (target == null || target.GetIsDead()) return 0;
 
             using (RemoteApplyScope.Begin())
             {
@@ -455,9 +544,20 @@ namespace SilksongCoop.Mod.State
                 {
                     if (dead || hp <= 0)
                     {
+                        // Record the kill even when it came from a remote packet. The host
+                        // that resolves a client's lethal hit must keep the death for late
+                        // joiners after the enemy object disappears from the active index.
+                        // Prefer the target's own key over a proximity-match packet key.
+                        ulong actualKey = GetFreshKey(target);
+                        if (actualKey != 0) enemyKey = actualKey;
+                        _deadRegistry.Register(
+                            enemyKey,
+                            target.transform.position.x,
+                            target.transform.position.y,
+                            IsBoss(target));
                         target.hp = 0;
                         target.Die(null, AttackTypes.Nail, ignoreEvasion: true);
-                        return;
+                        return enemyKey;
                     }
 
                     int next = authoritative ? hp : Math.Min(target.hp, hp);
@@ -480,6 +580,8 @@ namespace SilksongCoop.Mod.State
                     SilksongCoopPlugin.LogWarn($"[EnemySync] Failed applying enemy state: {ex.Message}");
                 }
             }
+
+            return 0;
         }
 
         /// <summary>
@@ -548,6 +650,7 @@ namespace SilksongCoop.Mod.State
         /// </summary>
         public void BeginCatchUpForNewPeer()
         {
+            RefreshSaveScope();
             _lastSnapshot.Clear();
             _worldReplayPending = true;
             _forceSnapshotReconcile = true;
@@ -826,7 +929,7 @@ namespace SilksongCoop.Mod.State
                 if (!_service.TryAcceptSnapshot(entry.EnemyKey, entry.Hp, entry.IsDead, packet.Header.Timestamp))
                     continue;
 
-                ApplyEnemyState(target, entry.Hp, entry.IsDead, authoritative: true);
+                ApplyEnemyState(entry.EnemyKey, target, entry.Hp, entry.IsDead, authoritative: true);
             }
 
             if (_pendingDeadEnemies.Count > 0)
@@ -1945,7 +2048,7 @@ namespace SilksongCoop.Mod.State
                         pending.Entry.IsDead,
                         pending.Timestamp))
                 {
-                    ApplyEnemyState(target, pending.Entry.Hp, pending.Entry.IsDead, authoritative: true);
+                    ApplyEnemyState(pending.Entry.EnemyKey, target, pending.Entry.Hp, pending.Entry.IsDead, authoritative: true);
                 }
 
                 (resolved ??= new List<ulong>()).Add(pair.Key);

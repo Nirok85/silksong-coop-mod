@@ -5,7 +5,7 @@ receiver resolves conflicts, and which failures are accepted by design. When cod
 and this document disagree, the code is wrong unless the document is updated in
 the same change.
 
-## Current state (3.3.1)
+## Current state (3.3.2 + audit fixes)
 
 | State | Writer(s) | Receiver rule | Conflict resolution |
 |---|---|---|---|
@@ -34,6 +34,11 @@ the same peer whose `EnemySnapshotPacket` is accepted. The rules are:
    replaces the local HP with the packet's absolute value. It is never subtracted
    from the local value, because the host snapshot may already contain the same
    hit. Equal or higher HP is treated as a duplicate/stale packet and ignored.
+   The one exception is a local hit made after the last applied snapshot *and* a
+   host HP that is still at or above the local value: only then the host cannot
+   have incorporated that hit, so the two simultaneous hits are combined. If the
+   host HP is already lower it supersedes the local hit; subtracting again would
+   double-count the same damage.
 2. **Other peer, fresh authority: deferred.** While the host has sent a snapshot
    for that enemy in the last 3 seconds, hits and deaths reported by other clients
    are ignored. The host already received those hits; applying them again would
@@ -41,17 +46,34 @@ the same peer whose `EnemySnapshotPacket` is accepted. The rules are:
    host snapshot/death packet converges the state.
 3. **No fresh authority: additive.** When the host is in another room (no recent
    snapshot for that enemy), clients combine simultaneous damage additively and
-   may kill the enemy themselves. The local host uses the same additive path for
-   remote client hits.
+   may kill the enemy themselves.
 4. **Sequence dedup first.** A packet whose sender+sequence was already applied is
    dropped before the death branch, so a delayed death cannot override a newer hit.
-5. **Host confirms kills.** When the host resolves combined lethal damage it
-   broadcasts a death packet; clients that clamped to 1 HP then apply it.
+5. **The host confirms kills on its own state.** The local host treats a client's
+   `Death` event as a damage claim, not as proof. It seeds the merge with the HP it
+   is currently simulating, subtracts the claimed damage, and only dies when that
+   combined value is zero or below. A divergent client therefore cannot kill an
+   enemy the host still has alive. The host broadcasts the confirmed death; clients
+   apply the host death packet/snapshot. A client's claim that is not lethal is
+   corrected by the next host snapshot.
+6. **Snapshots never resurrect a newer local hit.** A snapshot generated before the
+   local player's last hit may lower HP or confirm a death, but may not raise HP.
+   This avoids the visible "enemy heals" window while the host is still receiving
+   the hit. A later snapshot (after host authority has caught up) may correct the
+   value normally.
 
 The host is not authoritative for player position, death lifecycle, wallet,
 inventory or world-progress state, and there is no vote-based arbitration. Do not
 describe this mod as generally "host-authoritative": the authority is scoped to
 enemy damage and only while the host simulates that scene.
+
+## Save scope
+
+World-event, persistent-state and dead-boss replay registries are scoped to one
+save, not merely to the process. They deliberately survive a reconnect within the
+same playthrough, but a change of the game's profile id or a reload/new game that
+replaces `PlayerData.instance` clears them. A partner can therefore never receive
+doors, gates or boss deaths from a different save.
 
 ## Transport trust boundary
 
@@ -61,6 +83,15 @@ registered session peer (the first `RemotePeerId` or an entry in
 parsed. This keeps a queued packet from a previous connection (or a second
 endpoint) from mutating the new session. Rejected packets are counted in the
 diagnostics rather than logged one by one.
+
+Inside the UDP transport, source-endpoint validation runs before authentication.
+Once a room-code session key exists, every post-handshake frame must carry a
+valid MAC; an invalid MAC is rejected before the peer's token bucket is charged,
+so spoofed invalid-MAC traffic cannot exhaust the real peer's budget. An unsigned
+duplicate `Handshake` remains accepted only for the lost-ack retry path, is
+charged to a separate per-endpoint pre-auth budget, and never refreshes the
+heartbeat. A duplicate handshake cannot change the peer id that owns an
+unanswered challenge.
 
 Within that boundary, packets are still untrusted: every payload is range-checked
 by `PacketValidator` and then applied under the rules in the table above.

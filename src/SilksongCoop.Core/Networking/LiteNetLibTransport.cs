@@ -1064,12 +1064,17 @@ namespace SilksongCoop.Core.Networking
                 if (!IsConnected && !IsPreAuthAllowed(sender))
                     return;
 
-                // Post-handshake frames must carry a valid MAC. This blocks spoofed
-                // Disconnect/Ack/Data datagrams from a forged source endpoint. The final
-                // handshake ack is also authenticated once the client has derived the key
-                // from the challenge; otherwise a spoofed ack could pin a false peer id.
-                bool macRequired = _sessionKey != null &&
-                                   (RequiresMac(frameType) || frameType == UdpFrameType.HandshakeAck);
+                // Once a session key exists, every frame except the still-relevant
+                // pre-connection handshake frames must be authenticated. Challenge and
+                // ChallengeResponse are only pre-auth while the session is not connected:
+                // accepting them later would let spoofed datagrams spend peer tokens, and
+                // the switch ignores them anyway. Handshake stays unsigned for the lost-ack
+                // retry path, but it never refreshes the heartbeat below.
+                bool preAuthFrame = frameType == UdpFrameType.Handshake ||
+                                    ((frameType == UdpFrameType.Challenge ||
+                                      frameType == UdpFrameType.ChallengeResponse) &&
+                                     !IsConnected);
+                bool macRequired = _sessionKey != null && !preAuthFrame;
 
                 // Sender validation FIRST: when connected, only accept from the known remote
                 // endpoint. BUG-N2: this must run before the rate limiter and before
@@ -1084,14 +1089,10 @@ namespace SilksongCoop.Core.Networking
                     }
                 }
 
-                // Rate limiting before MAC: an invalid-MAC flood from the known endpoint
-                // must not force an HMAC computation for every datagram.
-                if (_remotePeerId.HasValue && !_rateLimiter.TryConsume(_remotePeerId.Value))
-                {
-                    CoopLog.Warn($"[LiteNetLibTransport] Rate limit exceeded for peer {_remotePeerId.Value}");
-                    return;
-                }
-
+                // Authenticate before spending the peer's token bucket. Consuming tokens
+                // first let a spoofed invalid-MAC flood drain the real peer's budget and
+                // block its legitimate traffic. Handshake frames without a key (legacy
+                // direct-IP sessions) still pass through the rate limiter below.
                 if (hasMac)
                 {
                     if (!ValidateMac(datagram.Slice(0, macOffset), datagram.Slice(macOffset, MacSizeBytes)))
@@ -1102,8 +1103,28 @@ namespace SilksongCoop.Core.Networking
                     return;
                 }
 
-                // Track last received time for heartbeat timeout (validated sender only)
-                _lastReceivedMs = GetTimestampMs();
+                // An unsigned duplicate handshake is unauthenticated even in a room-code
+                // session, so it must not spend the live peer's tokens. Charge it to the
+                // per-endpoint pre-auth budget instead.
+                bool useEndpointBudget = !hasMac &&
+                                         frameType == UdpFrameType.Handshake &&
+                                         _remotePeerId.HasValue;
+                if (useEndpointBudget)
+                {
+                    if (!IsPreAuthAllowed(sender))
+                        return;
+                }
+                else if (_remotePeerId.HasValue && !_rateLimiter.TryConsume(_remotePeerId.Value))
+                {
+                    CoopLog.Warn($"[LiteNetLibTransport] Rate limit exceeded for peer {_remotePeerId.Value}");
+                    return;
+                }
+
+                // An unsigned duplicate handshake is allowed for the lost-ack retry path,
+                // but it must not refresh the heartbeat: only authenticated post-handshake
+                // traffic proves the peer is still alive.
+                if (frameType != UdpFrameType.Handshake)
+                    _lastReceivedMs = GetTimestampMs();
 
                 switch (frameType)
                 {
@@ -1175,11 +1196,21 @@ namespace SilksongCoop.Core.Networking
                                     if (_pendingHandshakes.Count >= MaxPendingHandshakes)
                                         EvictOldestPendingHandshake();
 
-                                    pending = new PendingHandshake { CreatedMs = GetTimestampMs() };
+                                    pending = new PendingHandshake
+                                    {
+                                        Peer = candidatePeer,
+                                        CreatedMs = GetTimestampMs()
+                                    };
                                     _pendingHandshakes[handshakeEndpoint] = pending;
                                 }
-
-                                pending.Peer = candidatePeer;
+                                else if (pending.Peer.Value != candidatePeer.Value)
+                                {
+                                    // The endpoint already owns an unanswered challenge.
+                                    // Replacing its peer id while keeping the nonce would let
+                                    // a spoofed duplicate make the legitimate response adopt
+                                    // an attacker-selected identity.
+                                    break;
+                                }
 
                                 byte[] nonce;
                                 if (pending.Auth.TryGetPendingNonce(out byte[]? pendingNonce) && pendingNonce != null)
