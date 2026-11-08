@@ -10,12 +10,41 @@ Baseline: `652720b` (version 3.3.1, protocol v8)
 | M1 — shared session state | **Done** | `3ced065` | Release/Debug build 0 warnings; 908/908 tests; independent audit clean |
 | M2a — cached peer snapshots | **Done** | `aed9176` | 916/916 tests; allocation tests 0 B/read; independent audit clean |
 | M2b — UDP/HMAC allocation pass | **Done** | `54bec12` | 916/916 tests; Release/Debug 0 warnings; independent audit clean |
-| M3 — UI and small hot paths | Pending | — | — |
+| M3a - UI per-OnGUI allocations | **Done** | `1c53f16` | 916/916 tests; Release/Debug 0 warnings; independent audit clean |
+| M3b - dash pool/rate limiter/state flags | **Done** | `43c7e88` | 917/917 tests; allocation test 0 B; Release/Debug 0 warnings; independent audit clean |
 | M4 — enemy/world indexing | Pending | — | — |
 | M5 — targeted architecture & lifecycle | Pending | — | — |
 | M6 — release 3.3.2 & GitHub | Pending | — | — |
 
-## M2b — UDP/HMAC allocation pass
+## M3a - UI per-OnGUI allocations
+
+**Changes:**
+
+- Fixed-rect HUD, watermark, spectator overlay, diagnostics and toasts draw only
+  on Repaint; the main window/GUILayout still runs on Layout and Repaint.
+- Watermark text/color cached and refreshed at most 4 Hz or on identity changes.
+- DiagnosticsOverlay reuses `Vector2[61]` and `float[61]` buffers; history copies
+  are allocation-free; bandwidth scaling moved into DrawGraph.
+- ToastNotifier builds the escaped rich-text label once at Show time.
+
+**Checks:** Release/Debug 0 warnings; 916/916 tests; independent audit clean.
+
+## M3b - dash pool, rate limiter and state flags
+
+**Changes:**
+
+- Dash ghosts are prewarmed (8), persist across scene loads, and are reaped by a
+  once-per-frame controller pass instead of a per-ghost coroutine. Setup failures
+  destroy the half-initialized ghost and prewarm failures destroy the orphan
+  GameObject.
+- RateLimiter caches its bucket factory delegate; the new allocation test shows
+  0 managed bytes over 1000 steady-state TryConsume calls.
+- NetworkOrchestrator uses a typed `StateFlagAccessors` set plus an instance-level
+  last-type cache instead of 13 string-keyed dictionary lookups per transform tick.
+
+**Checks:** Release/Debug 0 warnings; 917/917 tests; independent audit clean.
+
+## M2b - UDP/HMAC allocation pass
 
 **Changes:**
 
