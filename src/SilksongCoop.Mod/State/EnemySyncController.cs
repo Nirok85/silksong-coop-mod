@@ -72,6 +72,23 @@ namespace SilksongCoop.Mod.State
         private bool _enemyIndexDirty = true;
         private bool _enemyIndexFailureLogged;
         private float _nextEnemyIndexRebuildAt;
+        // World events are rare compared with enemy traffic, so these indexes are built
+        // lazily on the first breakable/gate event of a scene. Scene name + handle guard
+        // against a reload reusing names.
+        private readonly Dictionary<ulong, Breakable> _breakableIndex = new Dictionary<ulong, Breakable>();
+        private readonly Dictionary<ulong, Gate> _gateIndex = new Dictionary<ulong, Gate>();
+        private string _worldIndexScene = string.Empty;
+        private int _worldIndexSceneHandle = -1;
+        private bool _worldIndexDirty = true;
+        // Remote pickup claims usually arrive in a burst when several drops are collected
+        // together. Reuse one scene enumeration for a short window instead of rescanning
+        // every CurrencyObjectBase for each claim.
+        private CurrencyObjectBase[]? _pickupCache;
+        private string _pickupCacheScene = string.Empty;
+        private int _pickupCacheSceneHandle = -1;
+        private float _pickupCacheExpiresAt;
+        private bool _pickupCacheDirty = true;
+        private const float PickupCacheTtl = 0.5f;
         // Full key recomputation every 30s catches ancestor renames without paying the
         // string-getter cost on every hit.
         private float _nextKeyCacheRefreshAt;
@@ -165,6 +182,7 @@ namespace SilksongCoop.Mod.State
             _lastSnapshot.Clear();
             _enemyIndex.Clear();
             _enemyIndexDirty = true;
+            ClearWorldObjectCaches();
             _snapshotTimer = 0f;
             _snapshotReconcileAt = 0f;
             _forceSnapshotReconcile = false;
@@ -248,7 +266,9 @@ namespace SilksongCoop.Mod.State
             if (target == null) return;
             if (_plugin?.SessionState?.IsConnected != true) return;
 
-            ulong key = GetKey(target);
+            // A lethal hit is also a death record; use a fresh key so it cannot disagree
+            // with OnLocalEnemyDeath (which must bypass the fingerprint cache).
+            ulong key = dead ? GetFreshKey(target) : GetKey(target);
             if (key == 0) return;
             _enemyIndex[key] = target;
 
@@ -824,7 +844,9 @@ namespace SilksongCoop.Mod.State
         {
             if (transform == null) return;
 
-            ulong key = WorldObjectKey.Compute(transform);
+            // World events are permanent replay records; use a fresh key so a rename within
+            // the cache window cannot create a key that peers can never resolve.
+            ulong key = WorldObjectKey.ComputeFresh(transform);
             if (key == 0) return;
 
             var packet = new WorldEventPacket
@@ -1002,20 +1024,34 @@ namespace SilksongCoop.Mod.State
         {
             try
             {
+                EnsureWorldIndexes();
+
                 using (RemoteApplyScope.Begin())
                 {
                     switch (packet.EventType)
                     {
                         case WorldEventType.BreakableBroken:
-                            var breakable = FindObjectByKey<Breakable>(
-                                packet.ObjectKey, packet.PositionX, packet.PositionY, allowProximity);
+                            var breakable = FindIndexedWorldObject(_breakableIndex, packet.ObjectKey);
+                            if (breakable == null)
+                            {
+                                // Index miss: preserve the full exact-key/proximity/ambiguity
+                                // behavior by running the original scan, then remember the hit.
+                                breakable = FindObjectByKey<Breakable>(
+                                    packet.ObjectKey, packet.PositionX, packet.PositionY, allowProximity);
+                                if (breakable != null) _breakableIndex[packet.ObjectKey] = breakable;
+                            }
                             if (breakable == null) return false;
                             breakable.BreakSelf();
                             return true;
 
                         case WorldEventType.GateOpened:
-                            var gate = FindObjectByKey<Gate>(
-                                packet.ObjectKey, packet.PositionX, packet.PositionY, allowProximity);
+                            var gate = FindIndexedWorldObject(_gateIndex, packet.ObjectKey);
+                            if (gate == null)
+                            {
+                                gate = FindObjectByKey<Gate>(
+                                    packet.ObjectKey, packet.PositionX, packet.PositionY, allowProximity);
+                                if (gate != null) _gateIndex[packet.ObjectKey] = gate;
+                            }
                             if (gate == null) return false;
                             gate.Open();
                             return true;
@@ -1561,9 +1597,107 @@ namespace SilksongCoop.Mod.State
             return nearby == 1 ? nearest : null;
         }
 
+        /// <summary>
+        /// Rebuilds the Breakable/Gate exact-key indexes when the active scene changed. The
+        /// scans use the default active-only semantics, matching the previous per-event
+        /// FindObjectByKey scan.
+        /// </summary>
+        private void EnsureWorldIndexes()
+        {
+            var activeScene = SceneManager.GetActiveScene();
+            if (!_worldIndexDirty &&
+                _worldIndexSceneHandle == activeScene.handle &&
+                string.Equals(_worldIndexScene, activeScene.name, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _breakableIndex.Clear();
+            _gateIndex.Clear();
+
+            var breakables = UnityEngine.Object.FindObjectsByType<Breakable>(FindObjectsSortMode.None);
+            for (int i = 0; i < breakables.Length; i++)
+            {
+                var breakable = breakables[i];
+                if (breakable == null) continue;
+                ulong key = WorldObjectKey.Compute(breakable.transform);
+                if (key != 0) _breakableIndex[key] = breakable;
+            }
+
+            var gates = UnityEngine.Object.FindObjectsByType<Gate>(FindObjectsSortMode.None);
+            for (int i = 0; i < gates.Length; i++)
+            {
+                var gate = gates[i];
+                if (gate == null) continue;
+                ulong key = WorldObjectKey.Compute(gate.transform);
+                if (key != 0) _gateIndex[key] = gate;
+            }
+
+            _worldIndexScene = activeScene.name;
+            _worldIndexSceneHandle = activeScene.handle;
+            _worldIndexDirty = false;
+        }
+
+        /// <summary>
+        /// Exact-key index lookup. The active check mirrors FindObjectsByType's default
+        /// active-only filter and the recompute catches objects recycled since the build.
+        /// </summary>
+        private static T? FindIndexedWorldObject<T>(Dictionary<ulong, T> index, ulong key)
+            where T : Component
+        {
+            if (key == 0 || !index.TryGetValue(key, out var component)) return null;
+
+            if (component == null || !component.gameObject.activeInHierarchy)
+            {
+                index.Remove(key);
+                return null;
+            }
+
+            ulong currentKey = WorldObjectKey.Compute(component.transform);
+            if (currentKey == key) return component;
+
+            index.Remove(key);
+            if (currentKey != 0) index[currentKey] = component;
+            return null;
+        }
+
         #endregion
 
         #region Pickups
+
+        /// <summary>
+        /// Returns the active-scene currency drops, reusing a recent enumeration so a burst
+        /// of remote claims does not scan every CurrencyObjectBase each time. The cached
+        /// array is refreshed after <see cref="PickupCacheTtl"/> or when the scene changed.
+        /// </summary>
+        private CurrencyObjectBase[] GetCachedPickups(out bool scannedNow)
+        {
+            var activeScene = SceneManager.GetActiveScene();
+            float now = Time.unscaledTime;
+            if (!_pickupCacheDirty &&
+                _pickupCache != null &&
+                now < _pickupCacheExpiresAt &&
+                _pickupCacheSceneHandle == activeScene.handle &&
+                string.Equals(_pickupCacheScene, activeScene.name, StringComparison.Ordinal))
+            {
+                scannedNow = false;
+                return _pickupCache;
+            }
+
+            scannedNow = true;
+            return ScanPickups();
+        }
+
+        private CurrencyObjectBase[] ScanPickups()
+        {
+            var activeScene = SceneManager.GetActiveScene();
+            _pickupCache = UnityEngine.Object.FindObjectsByType<CurrencyObjectBase>(FindObjectsSortMode.None);
+            _pickupCacheScene = activeScene.name;
+            _pickupCacheSceneHandle = activeScene.handle;
+            _pickupCacheExpiresAt = Time.unscaledTime + PickupCacheTtl;
+            _pickupCacheDirty = false;
+            return _pickupCache;
+        }
 
         /// <summary>
         /// Destroys the local copy of a drop that the peer collected. Uses the stable key first
@@ -1582,28 +1716,63 @@ namespace SilksongCoop.Mod.State
             float y,
             NetworkPeerId sender)
         {
-            var pickups = UnityEngine.Object.FindObjectsByType<CurrencyObjectBase>(FindObjectsSortMode.None);
-            if (pickups == null || pickups.Length == 0) return;
-
             bool sameScene = IsSenderInLocalScene(sender);
-            bool wantShards = currency == SilksongCoop.Core.Protocol.Packets.CurrencyType.ShellShards;
+            var pickups = GetCachedPickups(out bool scannedNow);
+            var target = FindPickup(
+                pickups, currency, key, x, y, sameScene, out int nearby, out bool exactMatch);
+
+            // The cache exists to coalesce a burst, not to hide a drop that spawned or
+            // moved after the last scan. A proximity-only hit is never trusted from a
+            // reused cache: rescan live once before disabling a drop.
+            if (!exactMatch && !scannedNow)
+            {
+                pickups = ScanPickups();
+                target = FindPickup(
+                    pickups, currency, key, x, y, sameScene, out nearby, out exactMatch);
+            }
+
+            if (nearby > 1)
+            {
+                LogAmbiguousMatch($"Pickup: {nearby} candidates within 2.5 units");
+                return;
+            }
+
+            if (target != null)
+            {
+                target.Disable(0f);
+            }
+        }
+
+        private static CurrencyObjectBase? FindPickup(
+            CurrencyObjectBase[] pickups,
+            SilksongCoop.Core.Protocol.Packets.CurrencyType currency,
+            ulong key,
+            float x,
+            float y,
+            bool sameScene,
+            out int nearby,
+            out bool exactMatch)
+        {
             CurrencyObjectBase? nearest = null;
             const float radiusSq = 2.5f * 2.5f;
             float nearestSq = radiusSq;
-            int nearby = 0;
+            nearby = 0;
+            exactMatch = false;
+            bool wantShards = currency == SilksongCoop.Core.Protocol.Packets.CurrencyType.ShellShards;
 
             for (int i = 0; i < pickups.Length; i++)
             {
                 var pickup = pickups[i];
-                if (pickup == null) continue;
+                if (pickup == null || !pickup.gameObject.activeInHierarchy) continue;
 
                 bool isShard = pickup is ShellShard;
                 if (isShard != wantShards) continue;
 
                 if (key != 0 && WorldObjectKey.ComputePickup(pickup) == key)
                 {
-                    pickup.Disable(0f);
-                    return;
+                    nearby = 1;
+                    exactMatch = true;
+                    return pickup;
                 }
 
                 // A drop claimed in another room must not remove a local drop that happens
@@ -1624,16 +1793,7 @@ namespace SilksongCoop.Mod.State
                 }
             }
 
-            if (nearby > 1)
-            {
-                LogAmbiguousMatch($"Pickup: {nearby} candidates within 2.5 units");
-                return;
-            }
-
-            if (nearby == 1 && nearest != null)
-            {
-                nearest.Disable(0f);
-            }
+            return nearby == 1 ? nearest : null;
         }
 
         #endregion
@@ -1654,6 +1814,27 @@ namespace SilksongCoop.Mod.State
             return true;
         }
 
+        /// <summary>
+        /// Drops every scene-scoped world lookup cache. Called on scene changes and when a
+        /// new session starts; both invalidate transform keys and object references.
+        /// </summary>
+        private void ClearWorldObjectCaches()
+        {
+            WorldObjectKey.ClearCache();
+
+            _breakableIndex.Clear();
+            _gateIndex.Clear();
+            _worldIndexScene = string.Empty;
+            _worldIndexSceneHandle = -1;
+            _worldIndexDirty = true;
+
+            _pickupCache = null;
+            _pickupCacheScene = string.Empty;
+            _pickupCacheSceneHandle = -1;
+            _pickupCacheExpiresAt = 0f;
+            _pickupCacheDirty = true;
+        }
+
         private void DetectSceneChange()
         {
             var activeScene = SceneManager.GetActiveScene();
@@ -1671,6 +1852,7 @@ namespace SilksongCoop.Mod.State
             _lastSnapshot.Clear();
             _enemyIndex.Clear();
             _enemyIndexDirty = true;
+            ClearWorldObjectCaches();
             _service.Reset();
 
             // WorldEvent records are permanent (breakables/gates survive scene loads), so
@@ -1861,6 +2043,9 @@ namespace SilksongCoop.Mod.State
 
             _nextKeyCacheRefreshAt = Time.unscaledTime + 30f;
             _keyCache = new ConditionalWeakTable<HealthManager, KeyHolder>();
+            // The hierarchy fingerprint intentionally skips names, so drop the shared key
+            // cache here to keep the periodic full recompute able to catch ancestor renames.
+            WorldObjectKey.ClearCache();
             _enemyIndexDirty = true;
         }
 
@@ -1892,7 +2077,7 @@ namespace SilksongCoop.Mod.State
             if (healthManager == null) return 0;
 
             var transform = healthManager.transform;
-            ulong key = WorldObjectKey.Compute(transform);
+            ulong key = WorldObjectKey.ComputeFresh(transform);
             if (key == 0) return 0;
 
             _keyCache.Remove(healthManager);

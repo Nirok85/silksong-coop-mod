@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Text;
 using HarmonyLib;
 using SilksongCoop.Core.State;
@@ -15,16 +16,113 @@ namespace SilksongCoop.Mod.State
     /// </summary>
     public static class WorldObjectKey
     {
+        /// <summary>
+        /// Cached key plus the allocation-free hierarchy fingerprint it was computed from.
+        /// Names are only read while recomputing; a hit compares transform references,
+        /// sibling indices and the scene handle.
+        /// </summary>
+        private sealed class CachedKey
+        {
+            public ulong Key;
+            public Transform[] Chain = Array.Empty<Transform>();
+            public int[] SiblingIndices = Array.Empty<int>();
+            public int SceneHandle = -1;
+        }
+
+        private static ConditionalWeakTable<Transform, CachedKey> _cache =
+            new ConditionalWeakTable<Transform, CachedKey>();
+        private static float _cacheRefreshedAt;
+        private const float CacheRefreshSeconds = 30f;
+
         private static System.Reflection.FieldInfo? _pickupPersistentField;
         private static bool _pickupPersistentFieldResolved;
 
         /// <summary>
-        /// Computes the scene + hierarchy-path hash for an object.
+        /// Computes the scene + hierarchy-path hash for an object, reusing a cached key while
+        /// the transform chain, sibling indices and scene handle are unchanged.
         /// </summary>
         public static ulong Compute(Transform transform)
         {
             if (transform == null) return 0;
+            RefreshCacheIfStale();
 
+            if (_cache.TryGetValue(transform, out var cached))
+            {
+                if (MatchesFingerprint(cached, transform))
+                {
+                    return cached.Key;
+                }
+
+                ulong refreshed = ComputeUncached(transform);
+                if (refreshed == 0)
+                {
+                    _cache.Remove(transform);
+                    return 0;
+                }
+
+                FillFingerprint(cached, transform, refreshed);
+                return refreshed;
+            }
+
+            ulong key = ComputeUncached(transform);
+            if (key == 0) return 0;
+
+            var entry = new CachedKey();
+            FillFingerprint(entry, transform, key);
+            _cache.Remove(transform);
+            _cache.Add(transform, entry);
+            return key;
+        }
+
+        /// <summary>
+        /// Drops every cached hierarchy key. Call on scene changes so destroyed/reloaded
+        /// transforms cannot keep stale keys alive through the weak table.
+        /// </summary>
+        public static void ClearCache()
+        {
+            _cache = new ConditionalWeakTable<Transform, CachedKey>();
+            _cacheRefreshedAt = Time.unscaledTime;
+        }
+
+        /// <summary>
+        /// The fingerprint omits names, so periodically drop the whole cache to catch
+        /// ancestor renames even on paths that never trigger an enemy-index rebuild.
+        /// </summary>
+        private static void RefreshCacheIfStale()
+        {
+            float now = Time.unscaledTime;
+            if (now - _cacheRefreshedAt < CacheRefreshSeconds) return;
+
+            _cache = new ConditionalWeakTable<Transform, CachedKey>();
+            _cacheRefreshedAt = now;
+        }
+
+        /// <summary>
+        /// Computes a key without consulting the cache and refreshes the cached fingerprint.
+        /// Used for persistent death records, where a stale pre-rename key would never be
+        /// resolvable by a peer with a fresh cache.
+        /// </summary>
+        public static ulong ComputeFresh(Transform transform)
+        {
+            if (transform == null) return 0;
+            RefreshCacheIfStale();
+
+            ulong key = ComputeUncached(transform);
+            if (key == 0)
+            {
+                _cache.Remove(transform);
+                return 0;
+            }
+
+            var entry = new CachedKey();
+            FillFingerprint(entry, transform, key);
+            _cache.Remove(transform);
+            _cache.Add(transform, entry);
+            return key;
+        }
+
+        private static ulong ComputeUncached(Transform transform)
+        {
             var path = new StringBuilder(192);
             path.Append(transform.gameObject.scene.name);
 
@@ -43,6 +141,53 @@ namespace SilksongCoop.Mod.State
             }
 
             return HashString(path.ToString());
+        }
+
+        private static bool MatchesFingerprint(CachedKey cached, Transform transform)
+        {
+            if (cached.Chain.Length == 0 ||
+                cached.SceneHandle != transform.gameObject.scene.handle)
+            {
+                return false;
+            }
+
+            int index = 0;
+            for (var current = transform; current != null; current = current.parent)
+            {
+                if (index >= cached.Chain.Length ||
+                    cached.Chain[index] != current ||
+                    cached.SiblingIndices[index] != current.GetSiblingIndex())
+                {
+                    return false;
+                }
+                index++;
+            }
+
+            return index == cached.Chain.Length;
+        }
+
+        private static void FillFingerprint(CachedKey cached, Transform transform, ulong key)
+        {
+            int depth = 0;
+            for (var current = transform; current != null; current = current.parent)
+            {
+                depth++;
+            }
+
+            var chain = new Transform[depth];
+            var siblings = new int[depth];
+            int index = 0;
+            for (var current = transform; current != null; current = current.parent)
+            {
+                chain[index] = current;
+                siblings[index] = current.GetSiblingIndex();
+                index++;
+            }
+
+            cached.Key = key;
+            cached.Chain = chain;
+            cached.SiblingIndices = siblings;
+            cached.SceneHandle = transform.gameObject.scene.handle;
         }
 
         /// <summary>

@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq.Expressions;
 using System.Reflection;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Progression;
@@ -26,9 +27,33 @@ namespace SilksongCoop.Mod.Services
 
         private static readonly float FlushDelaySeconds = 0.5f;
 
+        private readonly struct BoolAccessor
+        {
+            public readonly Func<PlayerData, bool> Get;
+            public readonly Action<PlayerData, bool> Set;
+
+            public BoolAccessor(Func<PlayerData, bool> get, Action<PlayerData, bool> set)
+            {
+                Get = get;
+                Set = set;
+            }
+        }
+
+        private readonly struct IntAccessor
+        {
+            public readonly Func<PlayerData, int> Get;
+            public readonly Action<PlayerData, int> Set;
+
+            public IntAccessor(Func<PlayerData, int> get, Action<PlayerData, int> set)
+            {
+                Get = get;
+                Set = set;
+            }
+        }
+
         private readonly SilksongCoopPlugin _plugin;
-        private readonly Dictionary<string, FieldInfo> _boolFields = new Dictionary<string, FieldInfo>(StringComparer.Ordinal);
-        private readonly Dictionary<string, FieldInfo> _intFields = new Dictionary<string, FieldInfo>(StringComparer.Ordinal);
+        private readonly Dictionary<string, BoolAccessor> _boolFields = new Dictionary<string, BoolAccessor>(StringComparer.Ordinal);
+        private readonly Dictionary<string, IntAccessor> _intFields = new Dictionary<string, IntAccessor>(StringComparer.Ordinal);
 
         private QuestFlagSnapshot? _before;
         // Every dialogue that ended but has not flushed yet. A list (not a single field) is
@@ -225,9 +250,9 @@ namespace SilksongCoop.Mod.Services
                     {
                         var entry = packet.Entries[i];
                         if (entry.Kind == QuestFlagKind.Bool &&
-                            _boolFields.TryGetValue(entry.Key, out var boolField))
+                            _boolFields.TryGetValue(entry.Key, out var boolAccessor))
                         {
-                            boolField.SetValue(playerData, entry.BoolValue);
+                            boolAccessor.Set(playerData, entry.BoolValue);
                             _before?.SetBool(entry.Key, entry.BoolValue);
                             for (int p = 0; p < _pendingFlushes.Count; p++)
                                 _pendingFlushes[p].SetBool(entry.Key, entry.BoolValue);
@@ -235,9 +260,9 @@ namespace SilksongCoop.Mod.Services
                             applied++;
                         }
                         else if (entry.Kind == QuestFlagKind.Int &&
-                                 _intFields.TryGetValue(entry.Key, out var intField))
+                                 _intFields.TryGetValue(entry.Key, out var intAccessor))
                         {
-                            intField.SetValue(playerData, entry.IntValue);
+                            intAccessor.Set(playerData, entry.IntValue);
                             _before?.SetInt(entry.Key, entry.IntValue);
                             for (int p = 0; p < _pendingFlushes.Count; p++)
                                 _pendingFlushes[p].SetInt(entry.Key, entry.IntValue);
@@ -307,18 +332,12 @@ namespace SilksongCoop.Mod.Services
 
             foreach (var pair in _boolFields)
             {
-                if (pair.Value.GetValue(playerData) is bool value)
-                {
-                    snapshot.SetBool(pair.Key, value);
-                }
+                snapshot.SetBool(pair.Key, pair.Value.Get(playerData));
             }
 
             foreach (var pair in _intFields)
             {
-                if (pair.Value.GetValue(playerData) is int value)
-                {
-                    snapshot.SetInt(pair.Key, value);
-                }
+                snapshot.SetInt(pair.Key, pair.Value.Get(playerData));
             }
 
             return snapshot;
@@ -415,11 +434,11 @@ namespace SilksongCoop.Mod.Services
 
                     if (field.FieldType == typeof(bool))
                     {
-                        _boolFields[field.Name] = field;
+                        _boolFields[field.Name] = CreateBoolAccessor(field);
                     }
                     else if (field.FieldType == typeof(int))
                     {
-                        _intFields[field.Name] = field;
+                        _intFields[field.Name] = CreateIntAccessor(field);
                     }
                 }
 
@@ -429,6 +448,57 @@ namespace SilksongCoop.Mod.Services
             catch (Exception ex)
             {
                 SilksongCoopPlugin.LogWarn($"[QuestSync] Failed caching PlayerData fields: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Builds a typed bool accessor pair once. Compilation failures (for example a field
+        /// declared on an unexpected base type) fall back to reflection so quest sync keeps
+        /// working instead of dropping the flag.
+        /// </summary>
+        private static BoolAccessor CreateBoolAccessor(FieldInfo field)
+        {
+            try
+            {
+                var instance = Expression.Parameter(typeof(PlayerData), "data");
+                var value = Expression.Parameter(typeof(bool), "value");
+                var fieldAccess = Expression.Field(instance, field);
+
+                var getter = Expression.Lambda<Func<PlayerData, bool>>(fieldAccess, instance).Compile();
+                var setter = Expression.Lambda<Action<PlayerData, bool>>(
+                    Expression.Assign(fieldAccess, value), instance, value).Compile();
+                return new BoolAccessor(getter, setter);
+            }
+            catch
+            {
+                return new BoolAccessor(
+                    data => field.GetValue(data) is bool current && current,
+                    (data, current) => field.SetValue(data, current));
+            }
+        }
+
+        /// <summary>
+        /// Builds a typed int accessor pair once, with the same reflection fallback as the
+        /// bool path.
+        /// </summary>
+        private static IntAccessor CreateIntAccessor(FieldInfo field)
+        {
+            try
+            {
+                var instance = Expression.Parameter(typeof(PlayerData), "data");
+                var value = Expression.Parameter(typeof(int), "value");
+                var fieldAccess = Expression.Field(instance, field);
+
+                var getter = Expression.Lambda<Func<PlayerData, int>>(fieldAccess, instance).Compile();
+                var setter = Expression.Lambda<Action<PlayerData, int>>(
+                    Expression.Assign(fieldAccess, value), instance, value).Compile();
+                return new IntAccessor(getter, setter);
+            }
+            catch
+            {
+                return new IntAccessor(
+                    data => field.GetValue(data) is int current ? current : 0,
+                    (data, current) => field.SetValue(data, current));
             }
         }
     }
