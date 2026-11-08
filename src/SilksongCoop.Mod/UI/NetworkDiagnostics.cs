@@ -212,9 +212,50 @@ namespace SilksongCoop.Mod.UI
                 yield return value;
         }
 
+        /// <summary>
+        /// Copies ping samples (oldest to newest) into <paramref name="destination"/>.
+        /// Returns the number of samples written; performs no managed allocation.
+        /// </summary>
+        public int CopyPingHistory(float[] destination)
+        {
+            if (destination == null) throw new ArgumentNullException(nameof(destination));
+            return CopyHistory(_pingHistory, destination);
+        }
+
+        /// <summary>
+        /// Copies packet-loss samples (oldest to newest) into <paramref name="destination"/>.
+        /// Returns the number of samples written; performs no managed allocation.
+        /// </summary>
+        public int CopyPacketLossHistory(float[] destination)
+        {
+            if (destination == null) throw new ArgumentNullException(nameof(destination));
+            return CopyHistory(_packetLossHistory, destination);
+        }
+
+        /// <summary>
+        /// Copies bandwidth samples (oldest to newest) into <paramref name="destination"/>.
+        /// Values are bytes per second; returns the number written and allocates nothing.
+        /// </summary>
+        public int CopyBandwidthHistory(float[] destination)
+        {
+            if (destination == null) throw new ArgumentNullException(nameof(destination));
+            return CopyHistory(_bandwidthHistory, destination);
+        }
+
         #endregion
 
         #region Private Methods
+
+        private static int CopyHistory(Queue<(float timestamp, float value)> source, float[] destination)
+        {
+            int count = 0;
+            foreach (var (_, value) in source)
+            {
+                if (count >= destination.Length) break;
+                destination[count++] = value;
+            }
+            return count;
+        }
 
         /// <summary>
         /// Update rolling averages. Call once per frame from Update().

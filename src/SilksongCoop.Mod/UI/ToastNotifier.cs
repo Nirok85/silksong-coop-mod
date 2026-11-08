@@ -27,7 +27,8 @@ namespace SilksongCoop.Mod.UI
 
         private struct Toast
         {
-            public string Message;
+            // Full rich-text label built once in Show (icon + escaped message).
+            public string RichMessage;
             public ToastKind Kind;
             public float CreatedAt;
             public float HoldDuration;
@@ -67,7 +68,7 @@ namespace SilksongCoop.Mod.UI
 
             var toast = new Toast
             {
-                Message = message,
+                RichMessage = BuildRichMessage(kind, message),
                 Kind = kind,
                 CreatedAt = Time.unscaledTime,
                 HoldDuration = holdSeconds,
@@ -114,6 +115,8 @@ namespace SilksongCoop.Mod.UI
         /// </summary>
         public void Draw()
         {
+            if (Event.current.type != EventType.Repaint) return;
+
             float now = Time.unscaledTime;
 
             // Promote pending toasts into active slots
@@ -168,7 +171,7 @@ namespace SilksongCoop.Mod.UI
                     slide = (1f - Mathf.SmoothStep(0f, 1f, progress)) * 60f;
                 }
 
-                (Color bg, Color border, Color text, string icon) = GetKindColors(t.Kind);
+                (Color bg, Color border, Color text, _) = GetKindColors(t.Kind);
                 bg.a *= alpha;
                 border.a *= alpha;
                 text.a *= alpha;
@@ -198,7 +201,7 @@ namespace SilksongCoop.Mod.UI
                     richText = true,
                 };
                 var textRect = new Rect(x + 4f, y, ToastWidth - 8f, ToastHeight);
-                GUI.Label(textRect, $"<b>{icon}</b>  {EscapeRichText(t.Message)}", style);
+                GUI.Label(textRect, t.RichMessage, style);
             }
 
             GUI.color = Color.white;
@@ -207,6 +210,16 @@ namespace SilksongCoop.Mod.UI
         #endregion
 
         #region Private Methods
+
+        /// <summary>
+        /// Builds the final rich-text label once, when the toast is queued, so Draw only
+        /// assigns a cached string to GUI.Label.
+        /// </summary>
+        private static string BuildRichMessage(ToastKind kind, string message)
+        {
+            string icon = GetKindColors(kind).icon;
+            return $"<b>{icon}</b>  {EscapeRichText(message)}";
+        }
 
         private static (Color bg, Color border, Color text, string icon) GetKindColors(ToastKind kind)
         {

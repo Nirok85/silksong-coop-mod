@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using SilksongCoop.Core.Localization;
 using UnityEngine;
 
@@ -36,6 +35,9 @@ namespace SilksongCoop.Mod.UI
         // Three graphs, a summary line and a partner/scene line.
         private const float TotalHeight = 20f + (GraphHeight + RowSpacing) * 3 + 44f + Padding * 2;
 
+        // One point per position across the 60-sample history.
+        private const int MaxGraphSamples = 61;
+
         #endregion
 
         #region Fields
@@ -56,6 +58,10 @@ namespace SilksongCoop.Mod.UI
         private GUIStyle? _summaryStyle;
         private GUIStyle? _labelStyle;
         private GUIStyle? _valueStyle;
+
+        // Reusable graph buffers; no List<Vector2> or iterator allocations per pass.
+        private readonly Vector2[] _graphPoints = new Vector2[MaxGraphSamples];
+        private readonly float[] _historyBuffer = new float[MaxGraphSamples];
 
         private GUIStyle CreateOverlayStyle(int fontSize, FontStyle style, Color textColor)
         {
@@ -146,6 +152,7 @@ namespace SilksongCoop.Mod.UI
         public void OnGUI()
         {
             if (!_isVisible) return;
+            if (Event.current.type != EventType.Repaint) return;
 
             EnsureTextures();
             if (_bgTex == null || _whiteTex == null) return;
@@ -173,24 +180,27 @@ namespace SilksongCoop.Mod.UI
                 float cursorY = y + 24f;
 
                 // Ping graph (yellow)
+                int pingCount = _diagnostics.CopyPingHistory(_historyBuffer);
                 DrawGraph(Loc.T("Ping"), cursorY, x + Padding,
-                    _diagnostics.GetPingHistory(),
+                    _historyBuffer, pingCount,
                     _diagnostics.CurrentPing, "ms",
                     0f, 200f, new Color(1f, 0.9f, 0.3f));
                 cursorY += GraphHeight + RowSpacing;
 
                 // Packet loss graph (red)
+                int lossCount = _diagnostics.CopyPacketLossHistory(_historyBuffer);
                 DrawGraph(Loc.T("Loss"), cursorY, x + Padding,
-                    _diagnostics.GetPacketLossHistory(),
+                    _historyBuffer, lossCount,
                     _diagnostics.PacketLossPercent, "%",
                     0f, 20f, new Color(1f, 0.4f, 0.4f));
                 cursorY += GraphHeight + RowSpacing;
 
-                // Bandwidth graph (cyan) — convert bytes to KB
+                // Bandwidth graph (cyan) — convert bytes to KB inside DrawGraph
+                int bandwidthCount = _diagnostics.CopyBandwidthHistory(_historyBuffer);
                 DrawGraph("BW", cursorY, x + Padding,
-                    ScaleToKB(_diagnostics.GetBandwidthHistory()),
+                    _historyBuffer, bandwidthCount,
                     (_diagnostics.BytesOutPerSecond + _diagnostics.BytesInPerSecond) / 1024f, "KB/s",
-                    0f, 100f, new Color(0.4f, 0.9f, 1f));
+                    0f, 100f, new Color(0.4f, 0.9f, 1f), 1f / 1024f);
                 cursorY += GraphHeight + RowSpacing;
 
                 // Summary line
@@ -243,8 +253,8 @@ namespace SilksongCoop.Mod.UI
         #region Private Methods
 
         private void DrawGraph(string label, float y, float x,
-            IEnumerable<float> data, float currentValue, string unit,
-            float minValue, float maxValue, Color lineColor)
+            float[] data, int count, float currentValue, string unit,
+            float minValue, float maxValue, Color lineColor, float dataScale = 1f)
         {
             if (_whiteTex == null || _gridTex == null) return;
 
@@ -282,30 +292,27 @@ namespace SilksongCoop.Mod.UI
             DrawRectOutline(x, graphY, GraphWidth, graphHeight, new Color(0.6f, 0.6f, 0.6f, 0.8f));
 
             // Data line
-            if (data != null)
+            if (data != null && count > 0)
             {
                 var savedMatrix = GUI.matrix;
-                var points = new List<Vector2>();
-                int index = 0;
-                foreach (float value in data)
+                int pointCount = Mathf.Min(count, _graphPoints.Length);
+                for (int index = 0; index < pointCount; index++)
                 {
-                    float clamped = Mathf.Clamp(value, minValue, maxValue);
+                    float clamped = Mathf.Clamp(data[index] * dataScale, minValue, maxValue);
                     float normalized = Mathf.InverseLerp(minValue, maxValue, clamped);
                     float px = x + (index / 60f) * GraphWidth;
                     float py = graphY + graphHeight - normalized * graphHeight;
-                    points.Add(new Vector2(px, py));
-                    index++;
-                    if (index > 60) break;
+                    _graphPoints[index] = new Vector2(px, py);
                 }
 
-                if (points.Count > 1)
+                if (pointCount > 1)
                 {
                     // Draw connected line segments using DrawTexture with small rectangles.
                     // Avoids GUIUtility.RotateAroundPivot which corrupts GUI state.
                     GUI.color = lineColor;
-                    for (int i = 0; i < points.Count - 1; i++)
+                    for (int i = 0; i < pointCount - 1; i++)
                     {
-                        DrawLineSegment(points[i], points[i + 1], 2f);
+                        DrawLineSegment(_graphPoints[i], _graphPoints[i + 1], 2f);
                     }
                     GUI.color = savedColor;
                 }
@@ -349,12 +356,6 @@ namespace SilksongCoop.Mod.UI
             GUI.DrawTexture(new Rect(x, y, 1, h), _whiteTex);             // left
             GUI.DrawTexture(new Rect(x + w - 1, y, 1, h), _whiteTex);     // right
             GUI.color = saved;
-        }
-
-        private static IEnumerable<float> ScaleToKB(IEnumerable<float> bytesPerSecond)
-        {
-            foreach (float bps in bytesPerSecond)
-                yield return bps / 1024f;
         }
 
         #endregion

@@ -50,6 +50,18 @@ namespace SilksongCoop.Mod.UI
         private float _copyFlashUntil = 0f;
         private string _copyFlashText = "";
 
+        // Watermark cache: the text/color are rebuilt in Update at most four times per
+        // second (or when the connection identity changes), never on every OnGUI event.
+        private const float WatermarkRefreshInterval = 0.25f;
+        private string _watermarkText = "[F10] Silksong Co-op";
+        private Color _watermarkColor = SilksongSkin.TextCream;
+        private float _nextWatermarkRefreshTime;
+        private bool _watermarkInitialized;
+        private bool _watermarkConnected;
+        private SessionStatus _watermarkStatus;
+        private NetworkPeerId? _watermarkPeerId;
+        private string _watermarkRoomCode = "";
+
         // Disconnect confirmation
         private bool _showDisconnectConfirm = false;
 
@@ -201,6 +213,7 @@ namespace SilksongCoop.Mod.UI
 
             // Update diagnostics
             _diagnostics.Update(Time.unscaledDeltaTime);
+            RefreshWatermarkIfNeeded();
 
             // Auto-switch to Status tab when connection state changes
             if (_sessionState != null && _sessionState.IsConnected && _activeTab == Tab.Host)
@@ -211,6 +224,8 @@ namespace SilksongCoop.Mod.UI
 
         private void OnGUI()
         {
+            bool isRepaint = Event.current.type == EventType.Repaint;
+
             // GUI.skin is process-global; restore the previous skin so other mods' OnGUI
             // passes are not rendered with the co-op skin.
             var previousSkin = GUI.skin;
@@ -233,29 +248,34 @@ namespace SilksongCoop.Mod.UI
             GUI.skin = _skin;
             EnsureHudStyles();
 
-            // ── Watermark ──────────────────────────────────────────────────────
-            DrawWatermark();
-
-            // ── Partner vitals HUD ─────────────────────────────────────────────
-            if (_sessionState != null && _sessionState.IsConnected)
+            // Fixed-rect HUD elements, overlays and toasts only need to draw on Repaint.
+            // The main window below still runs on Layout so GUILayout can measure it.
+            if (isRepaint)
             {
-                DrawPartnerVitalsHud();
-            }
+                // ── Watermark ──────────────────────────────────────────────────
+                DrawWatermark();
 
-            // ── Spectator overlay (death state) ────────────────────────────────
-            if (_sessionState != null && _sessionState.IsConnected)
-            {
-                DrawSpectatorOverlay();
-            }
+                // ── Partner vitals HUD ─────────────────────────────────────────
+                if (_sessionState != null && _sessionState.IsConnected)
+                {
+                    DrawPartnerVitalsHud();
+                }
 
-            // ── Diagnostics overlay (F11 toggle) ────────────────────────────────
-            if (_diagnosticsOverlay != null)
-            {
-                _diagnosticsOverlay.OnGUI();
-            }
+                // ── Spectator overlay (death state) ────────────────────────────
+                if (_sessionState != null && _sessionState.IsConnected)
+                {
+                    DrawSpectatorOverlay();
+                }
 
-            // ── Toast notifications (always on top) ────────────────────────────
-            _toasts.Draw();
+                // ── Diagnostics overlay (F11 toggle) ───────────────────────────
+                if (_diagnosticsOverlay != null)
+                {
+                    _diagnosticsOverlay.OnGUI();
+                }
+
+                // ── Toast notifications (always on top) ────────────────────────
+                _toasts.Draw();
+            }
 
             // ── Main window ────────────────────────────────────────────────────
             if (!IsVisible) return;
@@ -275,40 +295,66 @@ namespace SilksongCoop.Mod.UI
         // ─── Watermark ────────────────────────────────────────────────────────
         private void DrawWatermark()
         {
-            string watermark;
-            Color watermarkColor;
+            GUI.color = _watermarkColor;
+            GUI.Label(new Rect(10, 10, 400, 25), _watermarkText, _styleTitle ?? Skin.label);
+            GUI.color = Color.white;
+        }
 
-            if (_sessionState != null && _sessionState.IsConnected)
+        /// <summary>
+        /// Rebuilds the cached watermark at most four times per second, or immediately
+        /// when the connection state/peer/room changes. RTT changes are picked up by the
+        /// timer so a jittering value cannot rebuild the string on every frame.
+        /// </summary>
+        private void RefreshWatermarkIfNeeded()
+        {
+            float now = Time.unscaledTime;
+            bool connected = _sessionState != null && _sessionState.IsConnected;
+            SessionStatus status = _sessionState?.Status ?? SessionStatus.Disconnected;
+            NetworkPeerId? peerId = _sessionState?.RemotePeerId;
+            string roomCode = _currentRoomCode ?? string.Empty;
+
+            bool identityChanged = !_watermarkInitialized ||
+                                   connected != _watermarkConnected ||
+                                   status != _watermarkStatus ||
+                                   peerId != _watermarkPeerId ||
+                                   !string.Equals(roomCode, _watermarkRoomCode, StringComparison.Ordinal);
+
+            if (!identityChanged && now < _nextWatermarkRefreshTime) return;
+
+            _watermarkInitialized = true;
+            _watermarkConnected = connected;
+            _watermarkStatus = status;
+            _watermarkPeerId = peerId;
+            _watermarkRoomCode = roomCode;
+            _nextWatermarkRefreshTime = now + WatermarkRefreshInterval;
+
+            if (connected)
             {
-                string peerName = _sessionState.RemotePeerId.HasValue
-                    ? _sessionState.RemotePeerId.Value.DisplayName
+                string peerName = peerId.HasValue
+                    ? peerId.Value.DisplayName
                     : Loc.T("Partner");
-                int rtt = _sessionState.RoundTripTimeMs;
+                int rtt = _sessionState?.RoundTripTimeMs ?? 0;
                 string quality = rtt <= 0 ? "–" : rtt < 50 ? "●" : rtt < 150 ? "◐" : "○";
-                watermark = $"[F10] Co-op  {quality} {peerName}  {(rtt > 0 ? $"{rtt}ms" : Loc.T("n/a"))}";
-                watermarkColor = rtt <= 0 ? SilksongSkin.TextCream : rtt < 50 ? SilksongSkin.GreenOk : rtt < 150 ? SilksongSkin.YellowWarn : SilksongSkin.RedError;
+                _watermarkText = $"[F10] Co-op  {quality} {peerName}  {(rtt > 0 ? $"{rtt}ms" : Loc.T("n/a"))}";
+                _watermarkColor = rtt <= 0 ? SilksongSkin.TextCream : rtt < 50 ? SilksongSkin.GreenOk : rtt < 150 ? SilksongSkin.YellowWarn : SilksongSkin.RedError;
             }
-            else if (_sessionState != null && _sessionState.Status == SessionStatus.Hosting)
+            else if (status == SessionStatus.Hosting)
             {
-                watermark = !string.IsNullOrEmpty(_currentRoomCode)
-                    ? Loc.T("Hosting: {0}", _currentRoomCode)
+                _watermarkText = !string.IsNullOrEmpty(roomCode)
+                    ? Loc.T("Hosting: {0}", roomCode)
                     : Loc.T("Hosting (waiting for partner...)");
-                watermarkColor = SilksongSkin.Gold;
+                _watermarkColor = SilksongSkin.Gold;
             }
-            else if (_sessionState != null && _sessionState.Status == SessionStatus.Connecting)
+            else if (status == SessionStatus.Connecting)
             {
-                watermark = $"[F10] {Loc.T("Connecting...")}";
-                watermarkColor = SilksongSkin.BlueInfo;
+                _watermarkText = $"[F10] {Loc.T("Connecting...")}";
+                _watermarkColor = SilksongSkin.BlueInfo;
             }
             else
             {
-                watermark = "[F10] Silksong Co-op";
-                watermarkColor = SilksongSkin.TextCream;
+                _watermarkText = "[F10] Silksong Co-op";
+                _watermarkColor = SilksongSkin.TextCream;
             }
-
-            GUI.color = watermarkColor;
-            GUI.Label(new Rect(10, 10, 400, 25), watermark, _styleTitle ?? Skin.label);
-            GUI.color = Color.white;
         }
 
         // ─── Partner vitals HUD (top-right) ───────────────────────────────────
