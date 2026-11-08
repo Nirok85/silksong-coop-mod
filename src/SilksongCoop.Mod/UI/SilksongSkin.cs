@@ -57,7 +57,7 @@ namespace SilksongCoop.Mod.UI
         /// <summary>
         /// Muted color for captions and secondary text.
         /// </summary>
-        public static readonly Color TextMuted   = new Color(0.620f, 0.600f, 0.560f, 1.00f); // captions
+        public static readonly Color TextMuted   = new Color(0.720f, 0.700f, 0.660f, 1.00f); // captions (brighter for readability)
         
         /// <summary>
         /// Title color for section headers.
@@ -318,7 +318,7 @@ namespace SilksongCoop.Mod.UI
             var subtitleStyle = new GUIStyle(skin.label)
             {
                 normal = { textColor = TextMuted },
-                fontSize = 11,
+                fontSize = 12,
                 fontStyle = FontStyle.Italic,
                 alignment = TextAnchor.MiddleLeft,
                 padding = new RectOffset(4, 2, 0, 4),

@@ -110,9 +110,9 @@ namespace SilksongCoop.Mod.UI
         private static Texture2D GetSolidTexture(Color color)
         {
             var tex = new Texture2D(1, 1, TextureFormat.ARGB32, false);
-            tex.SetPixel(0, 0, color);
-            tex.Apply();
             tex.hideFlags = HideFlags.DontSave;
+            tex.SetPixel(0, 0, color);
+            tex.Apply(false);
             return tex;
         }
 
