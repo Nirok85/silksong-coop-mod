@@ -66,7 +66,7 @@ namespace SilksongCoop.Mod.UI
         private bool _showDisconnectConfirm = false;
 
         // First-run guide; persisted through the [UI] OnboardingCompleted config.
-        private bool _showOnboarding;
+        private bool _showOnboarding = true;
 
         // Independent scroll positions so a long Settings tab does not push the
         // Disconnect button out of the fixed-size window.
@@ -284,6 +284,14 @@ namespace SilksongCoop.Mod.UI
             if (!IsVisible) return;
 
             _windowRect = GUI.Window(_windowId, _windowRect, DrawWindowContents, "");
+
+            // Keep the window fully on-screen so the close button stays reachable.
+            if (_windowRect.x < 0) _windowRect.x = 0;
+            if (_windowRect.y < 0) _windowRect.y = 0;
+            if (_windowRect.x + _windowRect.width > Screen.width)
+                _windowRect.x = Mathf.Max(0, Screen.width - _windowRect.width);
+            if (_windowRect.y + _windowRect.height > Screen.height)
+                _windowRect.y = Mathf.Max(0, Screen.height - _windowRect.height);
             }
             finally
             {

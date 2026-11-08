@@ -54,6 +54,7 @@ namespace SilksongCoop.Mod.UI
         // a fresh GUIStyle per visible toast on every call — the same GC churn class as
         // BUG-P2 in DiagnosticsOverlay. Build it once and reuse it.
         private GUIStyle? _toastStyle;
+        private GUISkin? _cachedSkin;
 
         #endregion
 
@@ -146,6 +147,11 @@ namespace SilksongCoop.Mod.UI
             if (_active.Count == 0) return;
 
             var skin = SilksongSkin.GetSkin();
+            if (!ReferenceEquals(_cachedSkin, skin))
+            {
+                _toastStyle = null;
+                _cachedSkin = skin;
+            }
 
             // Draw bottom-to-top (newest at the top)
             for (int i = 0; i < _active.Count; i++)
