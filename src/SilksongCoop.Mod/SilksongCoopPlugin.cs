@@ -284,7 +284,12 @@ namespace SilksongCoop.Mod
             {
                 var transportService = new TransportService(UdpTransport, SteamTransport);
                 Container.RegisterSingleton<ITransportService>(_ => transportService);
-                var sessionService = new SessionService(EventBus, transportService, this);
+                var sessionService = new SessionService(EventBus, transportService, this, SessionState);
+                if (!ReferenceEquals(SessionState, sessionService.SessionState))
+                {
+                    Logger.LogError("[Coop] Composition error: SessionService.SessionState is not the plugin's SessionState. " +
+                        "The UI and network managers would observe different session state (Connected/RemotePeerId).");
+                }
                 Container.RegisterSingleton<ISessionService>(_ => sessionService);
             }
 

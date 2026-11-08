@@ -15,19 +15,23 @@ namespace SilksongCoop.Mod.Services
 
         public CoopSessionState SessionState { get; }
 
-        public SessionService(IEventBus eventBus, ITransportService transportService, SilksongCoopPlugin plugin)
+        public SessionService(IEventBus eventBus, ITransportService transportService, SilksongCoopPlugin plugin, CoopSessionState sessionState)
         {
             _eventBus = eventBus;
             _transportService = transportService;
-            _plugin = plugin;
-            SessionState = new CoopSessionState();
+            _plugin = plugin ?? throw new ArgumentNullException(nameof(plugin));
+            // Share the plugin's single CoopSessionState instead of creating a second one:
+            // UI/hooks use the plugin property while the sync managers use ISessionService.
+            SessionState = sessionState ?? throw new ArgumentNullException(nameof(sessionState));
         }
 
         public void StartHost(int port)
         {
             var udp = _transportService.UdpTransport;
             if (udp == null) return;
-            _transportService.SetActiveTransport(udp);
+            // Keep the plugin and the injected transport service on the same active
+            // transport; switching only the service left callbacks and managers apart.
+            _plugin.SetActiveTransport(udp);
             PrepareNewSession();
             udp.StartHost(port);
             SessionState.SetHosting(udp.LocalPeerId, $"UDP:{port}");
@@ -38,7 +42,7 @@ namespace SilksongCoop.Mod.Services
         {
             var steam = _transportService.SteamTransport;
             if (steam == null) return;
-            _transportService.SetActiveTransport(steam);
+            _plugin.SetActiveTransport(steam);
             PrepareNewSession();
             steam.StartHost();
             SessionState.SetHosting(steam.LocalPeerId, steam.CurrentLobbyId.m_SteamID.ToString());
@@ -49,7 +53,7 @@ namespace SilksongCoop.Mod.Services
         {
             var udp = _transportService.UdpTransport;
             if (udp == null) return;
-            _transportService.SetActiveTransport(udp);
+            _plugin.SetActiveTransport(udp);
             PrepareNewSession();
             udp.Connect(address);
             SessionState.SetConnecting(udp.LocalPeerId, address);
@@ -59,7 +63,7 @@ namespace SilksongCoop.Mod.Services
         {
             var steam = _transportService.SteamTransport;
             if (steam == null) return;
-            _transportService.SetActiveTransport(steam);
+            _plugin.SetActiveTransport(steam);
             PrepareNewSession();
             steam.Connect(lobbyId);
             SessionState.SetConnecting(steam.LocalPeerId, lobbyId);
