@@ -1,3 +1,4 @@
+using System;
 using SilksongCoop.Core.Events;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol;
@@ -10,7 +11,7 @@ namespace SilksongCoop.Mod.Services
     /// <summary>
     /// Bridges InventorySyncService with transport, replacing inline callbacks in the plugin.
     /// </summary>
-    public class InventorySyncManager : ISyncOrchestrator
+    public class InventorySyncManager : ISyncOrchestrator, IDisposable
     {
         private readonly ISessionService _sessionService;
         private readonly ITransportService _transportService;
@@ -29,8 +30,17 @@ namespace SilksongCoop.Mod.Services
             _inventorySync.OnOutgoingItemUnlockPacket += OnOutgoingItemUnlock;
 
             // Fires for unlocks received from the partner and must be applied locally.
-            _inventorySync.OnRemoteItemUnlocked += (itemId, category) => _gameplay.ApplyRemoteItemUnlock(itemId, category);
+            _inventorySync.OnRemoteItemUnlocked += OnRemoteItemUnlocked;
         }
+
+        public void Dispose()
+        {
+            _inventorySync.OnOutgoingItemUnlockPacket -= OnOutgoingItemUnlock;
+            _inventorySync.OnRemoteItemUnlocked -= OnRemoteItemUnlocked;
+        }
+
+        private void OnRemoteItemUnlocked(string itemId, ItemCategory category)
+            => _gameplay.ApplyRemoteItemUnlock(itemId, category);
 
         public void Initialize() { }
         public void Update() { }

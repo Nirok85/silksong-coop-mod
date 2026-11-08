@@ -18,7 +18,7 @@ namespace SilksongCoop.Mod.Services
     /// Orchestrates network broadcasting, adaptive tick rate and interest management.
     /// This extracts the transform/network hot-path from the main plugin.
     /// </summary>
-    public class NetworkOrchestrator : ISyncOrchestrator
+    public class NetworkOrchestrator : ISyncOrchestrator, IDisposable
     {
         private readonly ISessionService _sessionService;
         private readonly ITransportService _transportService;
@@ -41,6 +41,8 @@ namespace SilksongCoop.Mod.Services
         private Rigidbody2D? _cachedHeroBody;
         private GameObject? _cachedHeroBodyOwner;
         private readonly System.Collections.Generic.Dictionary<string, int> _clipHashCache = new System.Collections.Generic.Dictionary<string, int>(64);
+        private readonly Action<PeerConnectedEvent> _peerConnectedHandler;
+        private readonly Action<SessionEndedEvent> _sessionEndedHandler;
 
         // Reused fallback recipient list for transports that report no connected peers.
         private readonly NetworkPeerId[] _singleRecipient = new NetworkPeerId[1];
@@ -60,8 +62,16 @@ namespace SilksongCoop.Mod.Services
             _tickRate = new Core.Networking.AdaptiveTickRate(defaultTickHz);
             _interestManager = new InterestManager { DefaultRadius = 50f, Hysteresis = 8f };
 
-            _eventBus.Subscribe<PeerConnectedEvent>(_ => OnPeerConnected());
-            _eventBus.Subscribe<SessionEndedEvent>(_ => OnSessionEnded());
+            _peerConnectedHandler = _ => OnPeerConnected();
+            _sessionEndedHandler = _ => OnSessionEnded();
+            _eventBus.Subscribe(_peerConnectedHandler);
+            _eventBus.Subscribe(_sessionEndedHandler);
+        }
+
+        public void Dispose()
+        {
+            _eventBus.Unsubscribe(_peerConnectedHandler);
+            _eventBus.Unsubscribe(_sessionEndedHandler);
         }
 
         public void Initialize()

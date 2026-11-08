@@ -1,3 +1,4 @@
+using System;
 using SilksongCoop.Core.Events;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol.Packets;
@@ -10,7 +11,7 @@ namespace SilksongCoop.Mod.Services
     /// <summary>
     /// Bridges VitalsSyncService with transport and game state, replacing inline callbacks.
     /// </summary>
-    public class VitalsSyncManager : ISyncOrchestrator
+    public class VitalsSyncManager : ISyncOrchestrator, IDisposable
     {
         private readonly ISessionService _sessionService;
         private readonly ITransportService _transportService;
@@ -43,6 +44,17 @@ namespace SilksongCoop.Mod.Services
             _vitalsSync.OnSharedMaxSilkChanged += OnSharedMaxSilkChanged;
             _vitalsSync.OnSharedCurrencyChanged += OnSharedCurrencyChanged;
             _vitalsSync.OnRemotePickupClaimed += OnRemotePickupClaimed;
+        }
+
+        public void Dispose()
+        {
+            _vitalsSync.OnOutgoingVitalsBroadcast -= OnOutgoingVitals;
+            _vitalsSync.OnOutgoingCurrencyBroadcast -= OnOutgoingCurrency;
+            _vitalsSync.OnSharedMaxHealthChanged -= OnSharedMaxHealthChanged;
+            _vitalsSync.OnSharedNeedleUpgradeChanged -= OnSharedNeedleUpgradeChanged;
+            _vitalsSync.OnSharedMaxSilkChanged -= OnSharedMaxSilkChanged;
+            _vitalsSync.OnSharedCurrencyChanged -= OnSharedCurrencyChanged;
+            _vitalsSync.OnRemotePickupClaimed -= OnRemotePickupClaimed;
         }
 
         public void Initialize() { }

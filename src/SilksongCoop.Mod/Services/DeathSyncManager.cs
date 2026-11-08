@@ -1,3 +1,4 @@
+using System;
 using SilksongCoop.Core.Events;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol;
@@ -10,7 +11,7 @@ namespace SilksongCoop.Mod.Services
     /// <summary>
     /// Bridges DeathLifecycleCoordinator with transport and game state.
     /// </summary>
-    public class DeathSyncManager : ISyncOrchestrator
+    public class DeathSyncManager : ISyncOrchestrator, IDisposable
     {
         private readonly ISessionService _sessionService;
         private readonly ITransportService _transportService;
@@ -33,6 +34,13 @@ namespace SilksongCoop.Mod.Services
             deathCoordinator.OnOutgoingDeathPacket += OnOutgoingDeathPacket;
             deathCoordinator.OnReviveAtPartnerRequested += OnReviveAtPartnerRequested;
             deathCoordinator.OnTeamWipeTriggered += OnTeamWipeTriggered;
+        }
+
+        public void Dispose()
+        {
+            _deathCoordinator.OnOutgoingDeathPacket -= OnOutgoingDeathPacket;
+            _deathCoordinator.OnReviveAtPartnerRequested -= OnReviveAtPartnerRequested;
+            _deathCoordinator.OnTeamWipeTriggered -= OnTeamWipeTriggered;
         }
 
         public void Initialize() { }

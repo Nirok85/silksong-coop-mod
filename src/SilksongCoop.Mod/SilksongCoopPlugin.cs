@@ -154,6 +154,7 @@ namespace SilksongCoop.Mod
         private int _lastSilkPartsBroadcast = -1;
 
         private Core.State.DesyncDetector? _desyncDetector;
+        private Action<Core.State.DesyncDetector.DesyncDetectedEvent>? _desyncHandler;
         private uint? _desyncRound;
         #endregion
 
@@ -381,8 +382,9 @@ namespace SilksongCoop.Mod
                     _inventorySyncManager = new InventorySyncManager(sessionService, transportService, this, InventorySync);
                     _deathSyncManager = new DeathSyncManager(sessionService, transportService, this, DeathCoordinator);
                     _desyncDetector = new Core.State.DesyncDetector(EventBus!);
-                    EventBus!.Subscribe<Core.State.DesyncDetector.DesyncDetectedEvent>(e =>
-                        Logger.LogWarning($"[Coop] Desync detected ({e.Context}): local={e.LocalChecksum} remote={e.RemoteChecksum}"));
+                    _desyncHandler = e =>
+                        Logger.LogWarning($"[Coop] Desync detected ({e.Context}): local={e.LocalChecksum} remote={e.RemoteChecksum}");
+                    EventBus!.Subscribe(_desyncHandler);
 
                     _orchestrators.Add(_networkOrchestrator);
                     _orchestrators.Add(_vitalsSyncManager);
@@ -1886,14 +1888,34 @@ namespace SilksongCoop.Mod
             try
             {
                 StopAllCoroutines();
-                // BUG-C3: disconnect BOTH transports — previously only the active one was
+
+                // Unsubscribe managers before disposing transports so no callback can run
+                // against a half-torn-down session.
+                foreach (var orchestrator in _orchestrators)
+                {
+                    if (orchestrator is IDisposable disposable)
+                        disposable.Dispose();
+                }
+                _orchestrators.Clear();
+                if (_desyncHandler != null)
+                {
+                    EventBus?.Unsubscribe(_desyncHandler);
+                    _desyncHandler = null;
+                }
+
+                // BUG-C3: dispose BOTH transports — previously only the active one was
                 // disconnected, so a Steam session leaked the UDP socket and held port
                 // 7777 until the game process exited.
-                UdpTransport?.Disconnect();
-                SteamTransport?.Disconnect();
-                ActiveTransport?.Disconnect();
+                UdpTransport?.Dispose();
+                SteamTransport?.Dispose();
+                if (ActiveTransport != null &&
+                    !ReferenceEquals(ActiveTransport, UdpTransport) &&
+                    !ReferenceEquals(ActiveTransport, SteamTransport))
+                {
+                    ActiveTransport.Dispose();
+                }
                 CancelReconnect();
-                
+
                 _harmony?.UnpatchSelf();
 
                 // Release static GUI resources (textures are HideFlags.DontSave and are not
