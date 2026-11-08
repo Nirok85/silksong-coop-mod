@@ -8,11 +8,45 @@ Baseline: `652720b` (version 3.3.1, protocol v8)
 | Milestone | Status | Commit | Checks |
 |---|---|---|---|
 | M1 — shared session state | **Done** | `3ced065` | Release/Debug build 0 warnings; 908/908 tests; independent audit clean |
-| M2 — network & session allocation pass | Pending | — | — |
+| M2a — cached peer snapshots | **Done** | `aed9176` | 916/916 tests; allocation tests 0 B/read; independent audit clean |
+| M2b — UDP/HMAC allocation pass | Pending | — | — |
 | M3 — UI and small hot paths | Pending | — | — |
 | M4 — enemy/world indexing | Pending | — | — |
 | M5 — targeted architecture & lifecycle | Pending | — | — |
 | M6 — release 3.3.2 & GitHub | Pending | — | — |
+
+## M2a — cached peer snapshots
+
+**Changes:**
+
+- `CoopSessionState.RemotePeerIds` returns a cached `Array.AsReadOnly` view over a
+  private copy; rebuilt on peer add/remove/display-name refresh.
+- `VitalsSyncService.RemotePeers` returns a cached read-only view; rebuilt
+  under `_stateLock` on vitals add/remove/clear.
+- `PeerRegistry.Peers` / `ReadyPeers` return cached read-only views; registry
+  keys are replaced when the numeric peer id is unchanged but the display name
+  changes.
+- `LiteNetLibTransport.ConnectedPeers` caches its single-peer view under
+  `_lock`; `Broadcast` sends directly without materializing a list.
+- `SteamP2PTransport.ConnectedPeers` uses a dirty-flag snapshot rebuilt on
+  primary/additional peer changes, promotion and clear; `Broadcast` iterates
+  peers directly.
+- `NetworkOrchestrator` reuses one fallback recipient buffer and compares both
+  peer value and display name.
+- New tests: `tests/SilksongCoop.Tests/Performance/PeerSnapshotAllocationTests.cs`
+  and `tests/SilksongCoop.Tests/State/PeerSnapshotRefreshTests.cs`.
+
+**Checks:**
+
+- Release build: 0 errors, 0 warnings.
+- Debug build: 0 errors, 0 warnings.
+- `dotnet test -c Release --no-build`: 916 passed, 0 failed, 0 skipped.
+- Allocation tests: 0 managed bytes over 1000 reads after warm-up for all four
+  snapshot paths (including connected UDP).
+- Independent audit: no remaining issues; M2a closed after build/test
+  verification.
+- Residual risk: Steam 3+ cache invalidations are compile-verified only; live
+  Steam smoke remains M6.
 
 ## M1 — shared session state
 
