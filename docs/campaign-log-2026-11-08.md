@@ -12,9 +12,49 @@ Baseline: `652720b` (version 3.3.1, protocol v8)
 | M2b — UDP/HMAC allocation pass | **Done** | `54bec12` | 916/916 tests; Release/Debug 0 warnings; independent audit clean |
 | M3a - UI per-OnGUI allocations | **Done** | `1c53f16` | 916/916 tests; Release/Debug 0 warnings; independent audit clean |
 | M3b - dash pool/rate limiter/state flags | **Done** | `43c7e88` | 917/917 tests; allocation test 0 B; Release/Debug 0 warnings; independent audit clean |
-| M4 — enemy/world indexing | Pending | — | — |
+| M4a - enemy index/snapshot buffers | **Done** | `f528219` | 917/917 tests; Release/Debug 0 warnings; audit closed with a documented 30s rename window |
+| M4b - world key/index/quest accessors | **Done** | `c073bdb` | 917/917 tests; Release/Debug 0 warnings; audit closed with medium performance residuals |
 | M5 — targeted architecture & lifecycle | Pending | — | — |
 | M6 — release 3.3.2 & GitHub | Pending | — | — |
+
+## M4a - enemy index and snapshot buffers
+
+**Changes:**
+
+- Replaced the two snapshot dictionaries with one `Dictionary<ulong, SnapshotState>`.
+- Added an exact-key `Dictionary<ulong, HealthManager>` index rebuilt at each host
+  snapshot, every 5s on clients, and on scene/session changes; inactive/destroyed
+  entries are pruned and re-keyed through hierarchy validation.
+- Host snapshots reuse one `List<EnemySnapshotEntry>` and one entry array instead
+  of allocating a list and `batch.ToArray()` per packet.
+- Snapshot state is pruned by the dead registry during reconcile (no unbounded
+  key growth from re-keying).
+- Exact index lookups verify the current hierarchy key before returning an object.
+
+**Checks:** Release/Debug 0 warnings; 917/917 tests; independent audit closed.
+**Residual:** ancestor renames are detected within 30s; per-hit hierarchy checks
+are allocation-free; pending death/world-event retries can still scan scenes.
+
+## M4b - world-key cache, world indexes and quest accessors
+
+**Changes:**
+
+- `WorldObjectKey` caches hierarchy keys with an allocation-free fingerprint
+  (transform chain, sibling indices, scene handle) and refreshes the whole cache
+  every 30s. `ComputeFresh` bypasses/refreshes a single key for permanent records.
+- `EnemySyncController` lazily indexes Breakable/Gate per scene and caches pickup
+  enumerations for 0.5s; exact-key claims use the cache, proximity-only hits
+  trigger one live rescan. Scene/session changes clear all caches.
+- `QuestStateSyncManager` uses compiled typed getters/setters instead of
+  boxed `FieldInfo.GetValue`/`SetValue`, with a reflection fallback.
+- Lethal local hits and permanent world events use fresh keys, so death/world
+  replay records cannot disagree with a peer's refreshed cache.
+
+**Checks:** Release/Debug 0 warnings; 917/917 tests; independent audit closed.
+**Residual medium:** pending world/death retries can cause periodic scene scans;
+enemy respawn via `EnemySyncService` snapshot rejection is a pre-existing edge;
+3+ pickup sender attribution still uses the primary peer; persistent-value cache
+growth is pre-existing. No protocol change.
 
 ## M3a - UI per-OnGUI allocations
 
