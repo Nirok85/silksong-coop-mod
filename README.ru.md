@@ -385,6 +385,9 @@ dotnet build SilksongCoop.sln -c Release
 
 # Полный набор тестов
 dotnet test SilksongCoop.sln -c Release
+
+# Бенчмарки горячих путей Core (dry — быстрая проверка API)
+dotnet run --project tools/SilksongCoop.Benchmarks -c Release -- --job short
 ```
 
 Путь `ManagedDir` в `src/SilksongCoop.Mod/SilksongCoop.Mod.csproj` указывает на локальную установку Silksong (переопределяется через `-p:ManagedDir=...`).
@@ -414,8 +417,17 @@ pwsh ./scripts/preflight-release.ps1 -AllowDirty
 Она сверяет версии Mod csproj, Core csproj и `PluginVersion`, наличие версии в
 `CHANGELOG.md`/`README.md`, затем собирает проект и прогоняет тесты.
 
+Перед публикацией проверьте архивы и сгенерируйте текст релиза:
+
+```powershell
+pwsh ./scripts/verify-artifacts.ps1 -Version 3.3.3
+pwsh ./scripts/release-notes.ps1 -Version 3.3.3 -OutputPath dist/3.3.3/release-notes.md
+```
+
 Полный чек-лист публикации (подъём версии, проверка, `gh release create`) —
-в [docs/RELEASING.md](docs/RELEASING.md).
+в [docs/RELEASING.md](docs/RELEASING.md). Инварианты сессии —
+[docs/coop-invariants.md](docs/coop-invariants.md), baseline производительности —
+[docs/perf-baseline-2026-11.md](docs/perf-baseline-2026-11.md).
 
 История версий — в [CHANGELOG.md](CHANGELOG.md), план улучшений — в [ROADMAP.md](ROADMAP.md).
 

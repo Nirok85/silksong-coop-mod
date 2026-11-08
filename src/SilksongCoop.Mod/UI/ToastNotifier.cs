@@ -182,12 +182,15 @@ namespace SilksongCoop.Mod.UI
                 border.a *= alpha;
                 text.a *= alpha;
 
-                // Position: right side, stacked from top
-                float x = Screen.width - ToastWidth - RightMargin + slide;
+                // Position: right side, stacked from top. Shrink on narrow screens so the
+                // toast never starts off-screen; the text wraps inside the reduced width.
+                float availableWidth = Mathf.Max(160f, Screen.width - RightMargin * 2f);
+                float toastWidth = Mathf.Min(ToastWidth, availableWidth);
+                float x = Mathf.Max(RightMargin, Screen.width - toastWidth - RightMargin + slide);
                 float y = TopMargin + i * (ToastHeight + ToastSpacing);
 
                 // Background
-                var bgRect = new Rect(x, y, ToastWidth, ToastHeight);
+                var bgRect = new Rect(x, y, toastWidth, ToastHeight);
                 GUI.color = bg;
                 GUI.DrawTexture(bgRect, SilksongSkin.WhitePixel);
 
@@ -206,7 +209,7 @@ namespace SilksongCoop.Mod.UI
                     padding = new RectOffset(14, 8, 0, 0),
                     richText = true,
                 };
-                var textRect = new Rect(x + 4f, y, ToastWidth - 8f, ToastHeight);
+                var textRect = new Rect(x + 4f, y, toastWidth - 8f, ToastHeight);
                 GUI.Label(textRect, t.RichMessage, style);
             }
 

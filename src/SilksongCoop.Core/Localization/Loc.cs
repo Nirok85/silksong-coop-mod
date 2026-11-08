@@ -233,6 +233,10 @@ namespace SilksongCoop.Core.Localization
             ["Copy"] = "Копировать",
             ["✓ Copied"] = "✓ Скопировано",
             ["Copied to clipboard!"] = "Скопировано в буфер обмена!",
+            ["Auto"] = "Авто",
+            ["English"] = "English",
+            ["Russian"] = "Русский",
+            ["192.168.1.5:7777 or SK-..."] = "192.168.1.5:7777 или SK-...",
 
             // ── Session actions ───────────────────────────────────────────────
             ["Plugin not initialized"] = "Плагин не инициализирован",

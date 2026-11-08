@@ -125,6 +125,15 @@ built-in SHA-256 pin. The plugin-only build now writes its own
 `SilksongCoop_vX.Y.Z_SHA256SUMS.txt` too. Check that ZIP entry names use `/` so the
 plugin-only archive extracts correctly on Unix. Do not publish without the hashes.
 
+Verify the produced files before tagging:
+
+```powershell
+pwsh ./scripts/verify-artifacts.ps1 -Version X.Y.Z
+```
+
+The script checks both hashes, both DLLs, the BepInEx injector files and rejects
+archives that accidentally contain proprietary game assemblies.
+
 ## 4. Commit, tag, push
 
 Tag the commit that contains the release, not an earlier one:
@@ -147,6 +156,9 @@ The release body is the `CHANGELOG` section for this version:
 V=X.Y.Z
 awk -v v="$V" 'index($0,"## [" v "]")==1 {f=1} f && /^## \[/ && index($0,"## [" v "]")!=1 {exit} f' \
   CHANGELOG.md > /tmp/notes.md
+
+# PowerShell alternative (same section, written to dist/<version>/release-notes.md):
+pwsh ./scripts/release-notes.ps1 -Version X.Y.Z -OutputPath dist/X.Y.Z/release-notes.md
 
 gh release create vX.Y.Z \
   dist/SilksongCoop_vX.Y.Z.zip \

@@ -173,7 +173,9 @@ namespace SilksongCoop.Mod.UI
 
             try
             {
-                float x = Screen.width - TotalWidth - Padding;
+                // Keep the panel on-screen on unusually narrow displays; prefer the
+                // left edge over drawing the title and graphs off-screen.
+                float x = Mathf.Max(Padding, Screen.width - TotalWidth - Padding);
                 float y = Padding;
 
                 // Dark semi-transparent background panel

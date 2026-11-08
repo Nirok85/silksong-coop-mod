@@ -20,10 +20,13 @@
 
 - [ ] Clean checkout build (`dotnet build` from scratch).
 - [ ] `pwsh ./scripts/package-release.ps1 -ManagedDir <path> -BepInExSha256 <pinned-hash>` (or the bash script) produced both archives plus `SilksongCoop_v<version>_SHA256SUMS.txt`.
+- [ ] `pwsh ./scripts/verify-artifacts.ps1 -Version <version>` passes: hashes match, both DLLs are present, and no proprietary game assemblies leaked.
+- [ ] `pwsh ./scripts/release-notes.ps1 -Version <version> -OutputPath dist/<version>/release-notes.md` produces the GitHub release body from CHANGELOG.md.
 - [ ] Run the packager twice and confirm the second run does not keep files removed from staging (no stale ZIP entries).
 - [ ] Extract both archives on Windows and Unix and confirm entry names use `/`, required docs/licenses are present, and no `bin/`/`obj/` or secrets are included.
 - [ ] Verify the DLL `ProductVersion` inside each archive starts with the release version.
 - [ ] Re-download the published assets and compare their SHA256 with the manifest.
+- [ ] Optional: `dotnet run --project tools/SilksongCoop.Benchmarks -c Release -- --filter "*" --job dry` succeeds.
 
 ## CI
 

@@ -1,0 +1,101 @@
+name: Nightly reliability
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
+
+jobs:
+  reliability:
+    name: Long fuzz + full test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-nightly-${{ hashFiles('**/*.csproj', 'nuget.config') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj
+
+      - name: Build Core (warnings as errors)
+        run: dotnet build src/SilksongCoop.Core/SilksongCoop.Core.csproj -c Release -p:TreatWarningsAsErrors=true
+
+      - name: Run tests with extended fuzz campaign
+        env:
+          SILKSONG_FUZZ_ITERATIONS: '200000'
+        run: >-
+          dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj
+          -c Release
+          --logger "trx;LogFileName=nightly.trx"
+          --blame-hang --blame-hang-timeout 10m
+
+      - name: Verify test results
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          trx=$(find . -name nightly.trx -print -quit)
+          if [ -z "$trx" ]; then
+            echo "::error::nightly.trx was not produced"
+            exit 1
+          fi
+          if grep -q 'outcome="NotExecuted"' "$trx"; then
+            echo "::error::tests were reported as NotExecuted"
+            exit 1
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-test-results
+          path: '**/nightly.trx'
+          if-no-files-found: error
+
+  benchmark-smoke:
+    name: BenchmarkDotNet dry run
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-bench-${{ hashFiles('**/*.csproj', 'nuget.config') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore benchmark project
+        run: dotnet restore tools/SilksongCoop.Benchmarks/SilksongCoop.Benchmarks.csproj
+
+      - name: Run dry benchmarks
+        run: >-
+          dotnet run --project tools/SilksongCoop.Benchmarks -c Release --no-restore --
+          --filter "*" --job dry

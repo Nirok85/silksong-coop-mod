@@ -391,6 +391,9 @@ dotnet build SilksongCoop.sln -c Release
 
 # Run the full test suite
 dotnet test SilksongCoop.sln -c Release
+
+# Core hot-path benchmarks (dry = quick API smoke)
+dotnet run --project tools/SilksongCoop.Benchmarks -c Release -- --job short
 ```
 
 The `ManagedDir` in `src/SilksongCoop.Mod/SilksongCoop.Mod.csproj` points to your local Silksong install (overridable via `-p:ManagedDir=...`).
@@ -420,8 +423,17 @@ pwsh ./scripts/preflight-release.ps1 -AllowDirty
 It verifies that the Mod csproj, Core csproj and `PluginVersion` agree, that
 `CHANGELOG.md` and `README.md` mention the version, then builds and runs the tests.
 
+Before publishing, verify the archives and generate the release body:
+
+```powershell
+pwsh ./scripts/verify-artifacts.ps1 -Version 3.3.3
+pwsh ./scripts/release-notes.ps1 -Version 3.3.3 -OutputPath dist/3.3.3/release-notes.md
+```
+
 The full tag-and-publish checklist (version bump, verification, `gh release create`) is in
-[docs/RELEASING.md](docs/RELEASING.md).
+[docs/RELEASING.md](docs/RELEASING.md). Session invariants are listed in
+[docs/coop-invariants.md](docs/coop-invariants.md); the performance baseline is in
+[docs/perf-baseline-2026-11.md](docs/perf-baseline-2026-11.md).
 
 See [CHANGELOG.md](CHANGELOG.md) for version history and [ROADMAP.md](ROADMAP.md) for the improvement plan.
 

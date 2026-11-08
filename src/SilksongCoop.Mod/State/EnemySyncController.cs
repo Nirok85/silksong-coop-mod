@@ -711,26 +711,24 @@ namespace SilksongCoop.Mod.State
 
                 bool known = _lastSnapshot.TryGetValue(key, out var last);
                 bool wasDead = known && last.Dead;
-                bool newlyDead = dead && !wasDead;
-                // Send every enemy once so a client that joins mid-fight gets the host's
-                // authoritative HP even if initHp reflection is unavailable.
-                bool firstSeen = !known;
-                bool damaged = hp < initHp || firstSeen;
-                bool changed = known && last.Hp != hp;
 
-                if (!reconcile)
+                // The policy is shared with Core tests: first-seen, damaged, changed and
+                // newly-dead enemies are sent; a reconciliation pass sends everything.
+                if (!EnemySnapshotSendPolicy.ShouldSend(
+                        reconcile, known, last.Hp, hp, initHp, dead, wasDead))
                 {
-                    if (dead && !newlyDead) continue;
-                    if (!dead && !damaged && !changed) continue;
+                    continue;
                 }
 
+                // One transform read per emitted enemy instead of two property accesses.
+                Vector3 position = hm.transform.position;
                 _snapshotBatch.Add(new EnemySnapshotEntry
                 {
                     EnemyKey = key,
                     Hp = dead ? 0 : hp,
                     Flags = dead ? EnemySnapshotEntry.FlagDead : (byte)0,
-                    PositionX = hm.transform.position.x,
-                    PositionY = hm.transform.position.y
+                    PositionX = position.x,
+                    PositionY = position.y
                 });
 
                 if (_snapshotBatch.Count >= EnemySnapshotPacket.MaxEntries)

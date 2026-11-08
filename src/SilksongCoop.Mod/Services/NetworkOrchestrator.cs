@@ -1,9 +1,6 @@
 using System;
 using System.Buffers;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Linq.Expressions;
-using System.Reflection;
 using SilksongCoop.Core.Clones;
 using SilksongCoop.Core.Events;
 using SilksongCoop.Core.Networking;
@@ -26,6 +23,7 @@ namespace SilksongCoop.Mod.Services
         private readonly IPlayerCloneManager _cloneManager;
         private readonly AdaptiveTickRate _tickRate;
         private readonly InterestManager _interestManager;
+        private readonly StateFlagReader _stateFlags = new StateFlagReader();
 
         /// <summary>Current adaptive transform tick rate in Hz (visible in the status tab).</summary>
         public float CurrentTickHz => _tickRate.CurrentTickHz;
@@ -158,7 +156,7 @@ namespace SilksongCoop.Mod.Services
                     velocityY = velocity.y;
                 }
 
-                ushort flags = BuildStateFlags(state);
+                ushort flags = _stateFlags.Build(state);
                 int clipHash = 0;
                 ushort normalizedTime = 0;
                 var animator = hero.AnimCtrl?.animator;
@@ -248,23 +246,13 @@ namespace SilksongCoop.Mod.Services
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
 
-                    transport.Send(
-                        session.RemotePeerId.Value,
-                        buffer,
-                        0,
-                        writer.Position,
-                        DeliveryMethod.Unreliable,
-                        NetworkChannels.Transform);
-
-                    session.RecordSent(writer.Position);
-                    Diagnostics?.RecordSent(writer.Position);
-
-                    // N-player: single-peer transports report the same recipient list, so the
-                    // extra loop costs nothing while multi-peer transports reach everyone.
+                    // Send exactly once per real recipient. The previous code sent to
+                    // session.RemotePeerId first and then iterated the peer list while
+                    // skipping that id; with three or more players the first send could
+                    // target a peer that was no longer connected, and the skip assumed the
+                    // list always contained RemotePeerId.
                     for (int i = 0; i < recipients.Count; i++)
                     {
-                        if (recipients[i] == session.RemotePeerId.Value) continue;
-
                         transport.Send(
                             recipients[i],
                             buffer,
@@ -314,148 +302,5 @@ namespace SilksongCoop.Mod.Services
             return _singleRecipient;
         }
 
-        // Reflection metadata lookups are expensive and this runs on every transform tick
-        // (30-60 times per second with ~13 field probes each). Resolve each member once per
-        // runtime state type and compile a direct getter; the fallback keeps the mod working
-        // if the runtime rejects expression compilation (for example under a restrictive AOT
-        // host), but still avoids the metadata lookup on every frame.
-        //
-        // The accessor set is strongly typed so the hot path does not do a string-keyed
-        // dictionary lookup per flag. It is cached per runtime type (shared across all
-        // orchestrator instances) and additionally on this instance, so a stable state type
-        // costs one type comparison per tick instead of a ConcurrentDictionary lookup.
-        private static readonly ConcurrentDictionary<Type, StateFlagAccessors> StateAccessors =
-            new ConcurrentDictionary<Type, StateFlagAccessors>();
-
-        // Cache the factory delegate once: a method-group conversion inside GetOrAdd could
-        // allocate on every tick on runtimes that do not cache static method groups.
-        private static readonly Func<Type, StateFlagAccessors> BuildAccessorSetFactory =
-            BuildAccessorSet;
-
-        private StateFlagAccessors? _cachedStateAccessors;
-        private Type? _cachedStateType;
-
-        private ushort BuildStateFlags(object state)
-        {
-            var stateType = state.GetType();
-            var accessors = _cachedStateAccessors;
-            if (accessors == null || _cachedStateType != stateType)
-            {
-                accessors = StateAccessors.GetOrAdd(stateType, BuildAccessorSetFactory);
-                _cachedStateType = stateType;
-                _cachedStateAccessors = accessors;
-            }
-
-            ushort flags = 0;
-            if (GetBool(accessors.OnGround, state)) flags |= TransformSyncPacket.FlagGrounded;
-            if (GetBool(accessors.Dashing, state) || GetBool(accessors.AirDashing, state) || GetBool(accessors.ShadowDashing, state) || GetBool(accessors.SuperDashing, state))
-                flags |= TransformSyncPacket.FlagDashing;
-            if (GetBool(accessors.WallSliding, state)) flags |= TransformSyncPacket.FlagWallSliding;
-            if (GetBool(accessors.Jumping, state) || GetBool(accessors.DoubleJumping, state) || GetBool(accessors.WallJumping, state))
-                flags |= TransformSyncPacket.FlagJumping;
-            if (GetBool(accessors.Falling, state)) flags |= TransformSyncPacket.FlagFalling;
-            if (GetBool(accessors.Attacking, state)) flags |= TransformSyncPacket.FlagAttacking;
-            if (GetBool(accessors.Invulnerable, state)) flags |= TransformSyncPacket.FlagInvulnerable;
-            if (GetBool(accessors.Swimming, state)) flags |= TransformSyncPacket.FlagSwimming;
-            return flags;
-        }
-
-        private static bool GetBool(Func<object, bool>? accessor, object instance)
-        {
-            return accessor != null && accessor(instance);
-        }
-
-        private static StateFlagAccessors BuildAccessorSet(Type type)
-        {
-            return new StateFlagAccessors
-            {
-                OnGround = CreateBoolAccessor(type, "onGround"),
-                Dashing = CreateBoolAccessor(type, "dashing"),
-                AirDashing = CreateBoolAccessor(type, "airDashing"),
-                ShadowDashing = CreateBoolAccessor(type, "shadowDashing"),
-                SuperDashing = CreateBoolAccessor(type, "superDashing"),
-                WallSliding = CreateBoolAccessor(type, "wallSliding"),
-                Jumping = CreateBoolAccessor(type, "jumping"),
-                DoubleJumping = CreateBoolAccessor(type, "doubleJumping"),
-                WallJumping = CreateBoolAccessor(type, "wallJumping"),
-                Falling = CreateBoolAccessor(type, "falling"),
-                Attacking = CreateBoolAccessor(type, "attacking"),
-                Invulnerable = CreateBoolAccessor(type, "invulnerable"),
-                Swimming = CreateBoolAccessor(type, "swimming")
-            };
-        }
-
-        private sealed class StateFlagAccessors
-        {
-            public Func<object, bool>? OnGround;
-            public Func<object, bool>? Dashing;
-            public Func<object, bool>? AirDashing;
-            public Func<object, bool>? ShadowDashing;
-            public Func<object, bool>? SuperDashing;
-            public Func<object, bool>? WallSliding;
-            public Func<object, bool>? Jumping;
-            public Func<object, bool>? DoubleJumping;
-            public Func<object, bool>? WallJumping;
-            public Func<object, bool>? Falling;
-            public Func<object, bool>? Attacking;
-            public Func<object, bool>? Invulnerable;
-            public Func<object, bool>? Swimming;
-        }
-
-        private static Func<object, bool>? CreateBoolAccessor(Type type, string name)
-        {
-            const BindingFlags Flags = BindingFlags.Public | BindingFlags.Instance;
-
-            try
-            {
-                // Keep the original lookup order (property before field) and public-only
-                // scope: the old reflection helper never read private members, and widening
-                // it could silently change which value a shadowing member reports.
-                var property = type.GetProperty(name, Flags);
-                if (property != null && property.PropertyType == typeof(bool))
-                    return CompilePropertyAccessor(type, property);
-
-                var field = type.GetField(name, Flags);
-                if (field != null && field.FieldType == typeof(bool))
-                    return CompileFieldAccessor(type, field);
-            }
-            catch (AmbiguousMatchException)
-            {
-                // A type with two same-named public members is malformed for our purpose;
-                // treat the flag as absent instead of aborting the transform send loop.
-            }
-
-            return null;
-        }
-
-        private static Func<object, bool> CompileFieldAccessor(Type type, FieldInfo field)
-        {
-            try
-            {
-                var instance = Expression.Parameter(typeof(object), "instance");
-                var typedInstance = Expression.Convert(instance, type);
-                var read = Expression.Field(typedInstance, field);
-                return Expression.Lambda<Func<object, bool>>(read, instance).Compile();
-            }
-            catch
-            {
-                return instance => field.GetValue(instance) is bool value && value;
-            }
-        }
-
-        private static Func<object, bool> CompilePropertyAccessor(Type type, PropertyInfo property)
-        {
-            try
-            {
-                var instance = Expression.Parameter(typeof(object), "instance");
-                var typedInstance = Expression.Convert(instance, type);
-                var read = Expression.Property(typedInstance, property);
-                return Expression.Lambda<Func<object, bool>>(read, instance).Compile();
-            }
-            catch
-            {
-                return instance => property.GetValue(instance) is bool value && value;
-            }
-        }
     }
 }

@@ -39,6 +39,11 @@ namespace SilksongCoop.Mod.UI
         // ── UI state ───────────────────────────────────────────────────────────
         private Tab _activeTab = Tab.Host;
         private Rect _windowRect = new Rect(40, 50, 460, 600);
+        // Current adaptive window size. The content uses a scroll view, so shrinking the
+        // window on small resolutions keeps every control reachable instead of drawing the
+        // close button off-screen.
+        private float _layoutWidth = 460f;
+        private float _layoutHeight = 600f;
         private string _inputAddressOrCode = "";
         private string _currentHostAddress = "";
         private string _currentRoomCode = "";
@@ -283,6 +288,7 @@ namespace SilksongCoop.Mod.UI
             // ── Main window ────────────────────────────────────────────────────
             if (!IsVisible) return;
 
+            UpdateWindowLayout();
             _windowRect = GUI.Window(_windowId, _windowRect, DrawWindowContents, "");
 
             // Keep the window fully on-screen so the close button stays reachable.
@@ -569,19 +575,40 @@ namespace SilksongCoop.Mod.UI
 
         #region Main Window and Tab Drawing
 
+        /// <summary>
+        /// Fits the window inside the current screen. The preferred 460x600 layout is kept
+        /// when there is room; on smaller resolutions the window shrinks and the content
+        /// scroll view still provides access to every tab.
+        /// </summary>
+        private void UpdateWindowLayout()
+        {
+            float width = Mathf.Min(460f, Mathf.Max(320f, Screen.width - 80f));
+            float height = Mathf.Min(600f, Mathf.Max(300f, Screen.height - 80f));
+
+            if (!Mathf.Approximately(width, _layoutWidth) ||
+                !Mathf.Approximately(height, _layoutHeight))
+            {
+                _layoutWidth = width;
+                _layoutHeight = height;
+                _windowRect.width = width;
+                _windowRect.height = height;
+            }
+        }
+
         // ─── Main window ──────────────────────────────────────────────────────
         private void DrawWindowContents(int windowId)
         {
-            GUI.DragWindow(new Rect(0, 0, 460, 24));
+            GUI.DragWindow(new Rect(0, 0, _layoutWidth, 24));
 
             // Title bar
             GUI.color = SilksongSkin.Gold;
             var titleStyle = _styleTitle ?? Skin.label;
-            GUI.Label(new Rect(12, 4, 300, 20), "SILKSONG CO-OP", titleStyle);
+            GUI.Label(new Rect(12, 4, Mathf.Max(120f, _layoutWidth - 48f), 20),
+                "SILKSONG CO-OP", titleStyle);
 
             // Close button
             GUI.color = Color.white;
-            if (GUI.Button(new Rect(460 - 28, 3, 24, 18), "×"))
+            if (GUI.Button(new Rect(_layoutWidth - 28, 3, 24, 18), "×"))
             {
                 IsVisible = false;
             }
@@ -867,7 +894,7 @@ namespace SilksongCoop.Mod.UI
             {
                 // Draw placeholder text on top of the empty, unfocused field
                 GUI.color = SilksongSkin.TextMuted;
-                GUI.Label(fieldRect, "192.168.1.5:7777 or SK-...", _placeholderStyle ?? Skin.textField);
+                GUI.Label(fieldRect, Loc.T("192.168.1.5:7777 or SK-..."), _placeholderStyle ?? Skin.textField);
                 GUI.color = Color.white;
             }
             GUILayout.EndHorizontal();
@@ -1092,9 +1119,9 @@ namespace SilksongCoop.Mod.UI
             // Language
             GUILayout.Label(Loc.T("<b>Language</b>"));
             GUILayout.BeginHorizontal();
-            DrawLanguageButton("Auto", "Auto");
-            DrawLanguageButton("English", "English");
-            DrawLanguageButton("Русский", "Russian");
+            DrawLanguageButton(Loc.T("Auto"), "Auto");
+            DrawLanguageButton(Loc.T("English"), "English");
+            DrawLanguageButton(Loc.T("Russian"), "Russian");
             GUILayout.EndHorizontal();
             GUILayout.Label(Loc.T("Language changes apply immediately."), _styleSubtitle ?? Skin.label);
             GUILayout.Label(

@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 Все значимые изменения проекта документируются в этом файле.
 
@@ -43,12 +43,37 @@
 - **Читаемость и локализация.** Повышен контраст вторичного текста, увеличен
   размер подзаголовков, локализованы метки `BW`, `KB/s`, `HP`, `Silk`.
 
+### Инфраструктура и качество
+
+- **Адаптивный UI.** Окно меню, тосты и панель диагностики подстраиваются под
+  маленькие разрешения и не выходят за экран; содержимое вкладок остаётся
+  доступным через прокрутку.
+- **`StateFlagReader` вынесен в Core.** Чтение флагов состояния игрока больше не
+  живёт внутри `NetworkOrchestrator`, покрыто тестами и сохраняет нулевые
+  аллокации после прогрева.
+- **Multi-peer broadcast.** Transform-пакет отправляется ровно один раз каждому
+  реальному получателю; больше нет отдельной отправки в `RemotePeerId` с
+  пропуском при обходе списка.
+- **Наблюдаемость.** Добавлен проект `BenchmarkDotNet` для заголовка, пакетов,
+  merge-пути врагов, snapshot-буфера и rate limiter; baseline записан в
+  `docs/perf-baseline-2026-11.md`.
+- **Надёжность.** Новые реальные UDP lifecycle-тесты, детерминированные
+  chaos-сценарии (потери/jitter/reorder/дубли), расширенные fuzz-кампании и
+  allocation-бюджеты. Добавлены `docs/coop-invariants.md` и
+  `docs/multiplayer-3plus-analysis.md`.
+- **CI/CD.** Матрица Linux/Windows, `--blame-hang`, ночной workflow с
+  расширенным fuzzing, автоматическая проверка артефактов
+  (`scripts/verify-artifacts.ps1`) и генерация release notes
+  (`scripts/release-notes.ps1`).
+
 ### Тесты
 
-- 934/934 тестов, 0 пропущено; Release и Debug без ошибок и предупреждений
+- 963/963 тестов, 0 пропущено; Release и Debug без ошибок и предупреждений
   компилятора (только `NU1900`).
 - Новые файлы: `EnemySyncRemediationTests`, `SaveScopeTrackerTests`,
-  `UdpHandshakeRemediationTests`.
+  `UdpHandshakeRemediationTests`, `RealUdpLifecycleTests`,
+  `ChaosSimulationTests`, `ProtocolFuzzCampaignTests`,
+  `SerializationAllocationTests`, `StateFlagReaderTests`.
 
 ## [3.3.2] - 2026-11-08
 
@@ -1354,3 +1379,4 @@ persistent-состояния получили поля ревизии и ист
 - `Удалено` - удаленный функционал
 - `Исправлено` - исправления ошибок
 - `Безопасность` - изменения, связанные с безопасностью
+

@@ -5,6 +5,7 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  workflow_dispatch:
 
 # A newer commit on the same branch makes the previous run obsolete. This frees both
 # hosted minutes and the single self-hosted Mod runner for the latest revision.
@@ -12,10 +13,23 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
+
 jobs:
   core:
-    name: Core - build + tests
-    runs-on: ubuntu-latest
+    name: Core - build + tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -39,10 +53,15 @@ jobs:
         run: dotnet build src/SilksongCoop.Core/SilksongCoop.Core.csproj -c Release -p:TreatWarningsAsErrors=true
 
       - name: Run tests
-        run: dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj -c Release --logger "trx;LogFileName=results.trx"
+        run: >-
+          dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj
+          -c Release
+          --logger "trx;LogFileName=results.trx"
+          --blame-hang --blame-hang-timeout 5m
 
       - name: Verify test results
         if: always()
+        shell: bash
         run: |
           set -euo pipefail
           trx=$(find . -name results.trx -print -quit)
@@ -59,9 +78,38 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: test-results-${{ matrix.os }}
           path: '**/results.trx'
           if-no-files-found: error
+
+  benchmarks:
+    name: Benchmarks - dry smoke
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', 'nuget.config') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore benchmark project
+        run: dotnet restore tools/SilksongCoop.Benchmarks/SilksongCoop.Benchmarks.csproj
+
+      - name: Run BenchmarkDotNet dry job
+        run: >-
+          dotnet run --project tools/SilksongCoop.Benchmarks -c Release --no-restore --
+          --filter "*" --job dry
 
   mod:
     name: Mod - compile against game assemblies (self-hosted)
@@ -78,6 +126,7 @@ jobs:
           (github.event_name != 'pull_request' ||
            github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: [self-hosted, linux, silksong]
+    timeout-minutes: 30
     environment: silksong-mod-build
     steps:
       - uses: actions/checkout@v4
@@ -125,4 +174,8 @@ jobs:
       - name: Build Mod (warnings as errors)
         env:
           MANAGED_DIR: ${{ vars.SILKSONG_MANAGED_DIR }}
-        run: dotnet build src/SilksongCoop.Mod/SilksongCoop.Mod.csproj -c Release -p:TreatWarningsAsErrors=true -p:ManagedDir="$MANAGED_DIR"
+        run: >-
+          dotnet build src/SilksongCoop.Mod/SilksongCoop.Mod.csproj
+          -c Release
+          -p:TreatWarningsAsErrors=true
+          -p:ManagedDir="$MANAGED_DIR"

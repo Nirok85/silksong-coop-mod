@@ -56,3 +56,7 @@ TestResults/
 backups/
 *.bak*
 
+
+# BenchmarkDotNet
+BenchmarkDotNet.Artifacts/
+
