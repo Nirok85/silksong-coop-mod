@@ -60,6 +60,10 @@ namespace SilksongCoop.Core.State
         // Per-peer snapshots; legacy Remote* fields above mirror the primary peer.
         private readonly Dictionary<NetworkPeerId, RemotePeerVitals> _remoteVitals =
             new Dictionary<NetworkPeerId, RemotePeerVitals>();
+        // Cached read-only view returned by RemotePeers. Rebuilt under _stateLock after
+        // every mutation of _remoteVitals, so reads outside mutations allocate nothing.
+        // The view wraps a private copy so callers cannot mutate the live dictionary.
+        private IReadOnlyList<RemotePeerVitals> _remotePeersSnapshot = Array.Empty<RemotePeerVitals>();
         private NetworkPeerId? _primaryRemotePeer;
 
         /// <summary>Snapshot of every peer that has sent vitals this session.</summary>
@@ -69,9 +73,26 @@ namespace SilksongCoop.Core.State
             {
                 lock (_stateLock)
                 {
-                    return new List<RemotePeerVitals>(_remoteVitals.Values);
+                    return _remotePeersSnapshot;
                 }
             }
+        }
+
+        /// <summary>
+        /// Rebuilds the cached <see cref="RemotePeers"/> snapshot. Must be called under
+        /// <see cref="_stateLock"/> after <see cref="_remoteVitals"/> was mutated.
+        /// </summary>
+        private void RebuildRemotePeersSnapshot()
+        {
+            if (_remoteVitals.Count == 0)
+            {
+                _remotePeersSnapshot = Array.Empty<RemotePeerVitals>();
+                return;
+            }
+
+            var snapshot = new RemotePeerVitals[_remoteVitals.Count];
+            _remoteVitals.Values.CopyTo(snapshot, 0);
+            _remotePeersSnapshot = Array.AsReadOnly(snapshot);
         }
 
         public bool TryGetRemoteVitals(NetworkPeerId peer, out RemotePeerVitals vitals)
@@ -172,6 +193,9 @@ namespace SilksongCoop.Core.State
                 _remoteNeedleUpgradeLevel = 0;
                 _hasRemoteData = false;
                 _remoteVitals.Clear();
+                _remotePeersSnapshot = Array.Empty<RemotePeerVitals>();
+                // (the view is rebuilt by ClearRemotePeers/InitializeState explicitly;
+                // this line keeps the invariant even if the dictionary is cleared here)
                 _primaryRemotePeer = null;
             }
             lock (_transactionLock)
@@ -497,6 +521,7 @@ namespace SilksongCoop.Core.State
                         packet.MaxSilkSpools,
                         packet.NeedleUpgradeLevel);
                     _remoteVitals[sender] = snapshot;
+                    RebuildRemotePeersSnapshot();
 
                     if (!_primaryRemotePeer.HasValue)
                     {
@@ -586,6 +611,7 @@ namespace SilksongCoop.Core.State
                 }
 
                 _hasRemoteData = _remoteVitals.Count > 0;
+                RebuildRemotePeersSnapshot();
             }
         }
 
@@ -595,6 +621,7 @@ namespace SilksongCoop.Core.State
             lock (_stateLock)
             {
                 _remoteVitals.Clear();
+                RebuildRemotePeersSnapshot();
                 _primaryRemotePeer = null;
                 _remoteHealth = 0;
                 _remoteSilk = 0;

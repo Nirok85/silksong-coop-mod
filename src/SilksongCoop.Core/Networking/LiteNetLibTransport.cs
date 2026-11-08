@@ -225,10 +225,38 @@ namespace SilksongCoop.Core.Networking
         public bool IsConnected => _isConnected;
         public NetworkPeerId LocalPeerId => _localPeerId;
         public NetworkPeerId? RemotePeerId => _remotePeerId;
-        public System.Collections.Generic.IReadOnlyList<NetworkPeerId> ConnectedPeers =>
-            _remotePeerId.HasValue
-                ? new System.Collections.Generic.List<NetworkPeerId> { _remotePeerId.Value }
-                : new System.Collections.Generic.List<NetworkPeerId>();
+
+        // Cached single-peer snapshot for ConnectedPeers. The UDP transport holds one
+        // remote peer at a time, so the read-only view is reused until the peer id changes.
+        private IReadOnlyList<NetworkPeerId> _connectedPeersSnapshot = System.Array.Empty<NetworkPeerId>();
+        private NetworkPeerId? _connectedPeersSnapshotPeer;
+
+        public System.Collections.Generic.IReadOnlyList<NetworkPeerId> ConnectedPeers
+        {
+            get
+            {
+                // Connection state is mutated under _lock; take the same lock so a peer
+                // change cannot pair one peer id with another peer's cached snapshot.
+                lock (_lock)
+                {
+                    NetworkPeerId? peer = _remotePeerId;
+                    if (!peer.HasValue) return System.Array.Empty<NetworkPeerId>();
+
+                    NetworkPeerId? cachedPeer = _connectedPeersSnapshotPeer;
+                    if (cachedPeer.HasValue &&
+                        cachedPeer.Value.Value == peer.Value.Value &&
+                        string.Equals(cachedPeer.Value.DisplayName, peer.Value.DisplayName, StringComparison.Ordinal))
+                    {
+                        return _connectedPeersSnapshot;
+                    }
+
+                    var snapshot = System.Array.AsReadOnly(new[] { peer.Value });
+                    _connectedPeersSnapshot = snapshot;
+                    _connectedPeersSnapshotPeer = peer;
+                    return snapshot;
+                }
+            }
+        }
         public int RoundTripTimeMs => _rttMs;
         /// <summary>
         /// Unreliable packet loss estimate (0-100) over the last few seconds, based on
@@ -617,11 +645,11 @@ namespace SilksongCoop.Core.Networking
         /// </summary>
         public void Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
-            var peers = ConnectedPeers;
-            for (int i = 0; i < peers.Count; i++)
-            {
-                Send(peers[i], data, offset, length, method, channel);
-            }
+            // This transport holds a single remote peer; send directly instead of
+            // materializing a ConnectedPeers snapshot on every broadcast.
+            NetworkPeerId? peer = _remotePeerId;
+            if (!peer.HasValue) return;
+            Send(peer.Value, data, offset, length, method, channel);
         }
 
         /// <summary>Legacy UDP transport holds one remote peer at a time.</summary>

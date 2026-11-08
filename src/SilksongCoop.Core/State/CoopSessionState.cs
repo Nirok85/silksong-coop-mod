@@ -41,6 +41,10 @@ namespace SilksongCoop.Core.State
         private NetworkPeerId? _localPeerId;
         private NetworkPeerId? _remotePeerId;
         private readonly List<NetworkPeerId> _remotePeerIds = new List<NetworkPeerId>();
+        // Cached read-only view returned by RemotePeerIds. Rebuilt only when the peer list
+        // changes, so every read outside a mutation is allocation-free. The view wraps a
+        // private copy so callers cannot mutate the live peer list through a cast.
+        private IReadOnlyList<NetworkPeerId> _remotePeerIdsSnapshot = Array.Empty<NetworkPeerId>();
         private string? _currentRoomCode;
         private ulong? _steamLobbyId;
 
@@ -83,6 +87,7 @@ namespace SilksongCoop.Core.State
                     _remotePeerId = value;
                     _remotePeerIds.Clear();
                     if (value.HasValue) _remotePeerIds.Add(value.Value);
+                    RebuildRemotePeerIdsSnapshot();
                 }
             }
         }
@@ -93,7 +98,18 @@ namespace SilksongCoop.Core.State
         /// </summary>
         public IReadOnlyList<NetworkPeerId> RemotePeerIds
         {
-            get { lock (_lock) { return _remotePeerIds.ToArray(); } }
+            get { lock (_lock) { return _remotePeerIdsSnapshot; } }
+        }
+
+        /// <summary>
+        /// Rebuilds the cached <see cref="RemotePeerIds"/> snapshot. Must be called under
+        /// <see cref="_lock"/> after <see cref="_remotePeerIds"/> was mutated.
+        /// </summary>
+        private void RebuildRemotePeerIdsSnapshot()
+        {
+            _remotePeerIdsSnapshot = _remotePeerIds.Count == 0
+                ? Array.Empty<NetworkPeerId>()
+                : Array.AsReadOnly(_remotePeerIds.ToArray());
         }
 
         /// <summary>
@@ -106,8 +122,39 @@ namespace SilksongCoop.Core.State
         {
             lock (_lock)
             {
-                if (!_remotePeerIds.Contains(peer)) _remotePeerIds.Add(peer);
-                if (!_remotePeerId.HasValue) _remotePeerId = peer;
+                bool changed = false;
+                int index = _remotePeerIds.FindIndex(existing => existing.Value == peer.Value);
+                if (index < 0)
+                {
+                    _remotePeerIds.Add(peer);
+                    changed = true;
+                }
+                else if (!string.Equals(
+                             _remotePeerIds[index].DisplayName,
+                             peer.DisplayName,
+                             StringComparison.Ordinal))
+                {
+                    // Same numeric peer id, newer display name (reconnect/persona change).
+                    _remotePeerIds[index] = peer;
+                    changed = true;
+                }
+
+                if (!_remotePeerId.HasValue)
+                {
+                    _remotePeerId = peer;
+                    changed = true;
+                }
+                else if (_remotePeerId.Value.Value == peer.Value &&
+                         !string.Equals(
+                             _remotePeerId.Value.DisplayName,
+                             peer.DisplayName,
+                             StringComparison.Ordinal))
+                {
+                    _remotePeerId = peer;
+                    changed = true;
+                }
+
+                if (changed) RebuildRemotePeerIdsSnapshot();
             }
             Peers.Upsert(peer, PeerState.Ready);
         }
@@ -116,9 +163,13 @@ namespace SilksongCoop.Core.State
         {
             lock (_lock)
             {
-                _remotePeerIds.Remove(peer);
+                bool changed = _remotePeerIds.Remove(peer);
                 if (_remotePeerId.HasValue && _remotePeerId.Value == peer)
+                {
                     _remotePeerId = _remotePeerIds.Count > 0 ? _remotePeerIds[0] : (NetworkPeerId?)null;
+                    changed = true;
+                }
+                if (changed) RebuildRemotePeerIdsSnapshot();
             }
             Peers.Remove(peer);
         }

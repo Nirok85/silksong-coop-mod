@@ -42,6 +42,10 @@ namespace SilksongCoop.Mod.Services
         private GameObject? _cachedHeroBodyOwner;
         private readonly System.Collections.Generic.Dictionary<string, int> _clipHashCache = new System.Collections.Generic.Dictionary<string, int>(64);
 
+        // Reused fallback recipient list for transports that report no connected peers.
+        private readonly NetworkPeerId[] _singleRecipient = new NetworkPeerId[1];
+        private NetworkPeerId? _singleRecipientPeer;
+
         public NetworkOrchestrator(
             ISessionService sessionService,
             ITransportService transportService,
@@ -278,13 +282,26 @@ namespace SilksongCoop.Mod.Services
         /// Remote peers that must receive transform updates. Multi-peer transports may
         /// report several peers; single-peer transports report exactly one.
         /// </summary>
-        private static IReadOnlyList<NetworkPeerId> GetRecipients(INetworkTransport transport, CoopSessionState session)
+        private IReadOnlyList<NetworkPeerId> GetRecipients(INetworkTransport transport, CoopSessionState session)
         {
             var connected = transport.ConnectedPeers;
             if (connected.Count > 0) return connected;
-            return session.RemotePeerId.HasValue
-                ? new[] { session.RemotePeerId.Value }
-                : System.Array.Empty<NetworkPeerId>();
+            if (!session.RemotePeerId.HasValue) return Array.Empty<NetworkPeerId>();
+
+            // Reuse one single-element buffer: the fallback runs on every transform tick
+            // and a fresh array here was a steady-state allocation.
+            NetworkPeerId peer = session.RemotePeerId.Value;
+            if (!_singleRecipientPeer.HasValue ||
+                _singleRecipientPeer.Value.Value != peer.Value ||
+                !string.Equals(
+                    _singleRecipientPeer.Value.DisplayName,
+                    peer.DisplayName,
+                    StringComparison.Ordinal))
+            {
+                _singleRecipient[0] = peer;
+                _singleRecipientPeer = peer;
+            }
+            return _singleRecipient;
         }
 
         // Reflection metadata lookups are expensive and this runs on every transform tick

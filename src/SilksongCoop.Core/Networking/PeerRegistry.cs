@@ -56,6 +56,12 @@ namespace SilksongCoop.Core.Networking
         private readonly Dictionary<NetworkPeerId, PeerRecord> _peers =
             new Dictionary<NetworkPeerId, PeerRecord>();
 
+        // Cached read-only views returned by Peers/ReadyPeers. They are rebuilt under
+        // _lock on every mutation so steady-state reads allocate nothing. The views wrap
+        // private copies so callers cannot mutate the live registry through a cast.
+        private IReadOnlyList<PeerRecord> _peersSnapshot = Array.Empty<PeerRecord>();
+        private IReadOnlyList<NetworkPeerId> _readyPeersSnapshot = Array.Empty<NetworkPeerId>();
+
         public event Action<PeerRecord>? OnPeerAdded;
         public event Action<PeerRecord, PeerRecord>? OnPeerUpdated;
         public event Action<PeerRecord>? OnPeerRemoved;
@@ -72,7 +78,7 @@ namespace SilksongCoop.Core.Networking
             {
                 lock (_lock)
                 {
-                    return new List<PeerRecord>(_peers.Values);
+                    return _peersSnapshot;
                 }
             }
         }
@@ -84,14 +90,46 @@ namespace SilksongCoop.Core.Networking
             {
                 lock (_lock)
                 {
-                    var ready = new List<NetworkPeerId>();
-                    foreach (var pair in _peers)
-                    {
-                        if (pair.Value.State == PeerState.Ready) ready.Add(pair.Key);
-                    }
-                    return ready;
+                    return _readyPeersSnapshot;
                 }
             }
+        }
+
+        /// <summary>
+        /// Rebuilds both cached snapshots. Must be called under <see cref="_lock"/> after
+        /// <see cref="_peers"/> was mutated.
+        /// </summary>
+        private void RebuildSnapshots()
+        {
+            if (_peers.Count == 0)
+            {
+                _peersSnapshot = Array.Empty<PeerRecord>();
+                _readyPeersSnapshot = Array.Empty<NetworkPeerId>();
+                return;
+            }
+
+            var peers = new PeerRecord[_peers.Count];
+            int readyCount = 0;
+            foreach (var pair in _peers)
+            {
+                if (pair.Value.State == PeerState.Ready) readyCount++;
+            }
+
+            var ready = readyCount == 0 ? Array.Empty<NetworkPeerId>() : new NetworkPeerId[readyCount];
+            int peerIndex = 0;
+            int readyIndex = 0;
+            foreach (var pair in _peers)
+            {
+                peers[peerIndex++] = pair.Value;
+                // Use the record's peer, not the dictionary key: a same-Value upsert can
+                // refresh the display name while the dictionary keeps the original key.
+                if (pair.Value.State == PeerState.Ready) ready[readyIndex++] = pair.Value.Peer;
+            }
+
+            _peersSnapshot = Array.AsReadOnly(peers);
+            _readyPeersSnapshot = ready.Length == 0
+                ? Array.Empty<NetworkPeerId>()
+                : Array.AsReadOnly(ready);
         }
 
         public bool TryGet(NetworkPeerId peer, out PeerRecord record)
@@ -130,9 +168,28 @@ namespace SilksongCoop.Core.Networking
                 var now = DateTimeOffset.UtcNow;
                 if (_peers.TryGetValue(peer, out previous))
                 {
-                    result = previous.WithState(state, now);
-                    if (!string.IsNullOrEmpty(role)) result = new PeerRecord(
-                        peer, state, role, previous.ConnectedAtUtc, now);
+                    bool nameChanged = !string.Equals(
+                        previous.Peer.DisplayName,
+                        peer.DisplayName,
+                        StringComparison.Ordinal);
+                    if (nameChanged)
+                    {
+                        result = new PeerRecord(
+                            peer,
+                            state,
+                            string.IsNullOrEmpty(role) ? previous.Role : role,
+                            previous.ConnectedAtUtc,
+                            now);
+                        // NetworkPeerId equality ignores DisplayName, so replace the
+                        // dictionary key explicitly to keep Peers/ReadyPeers consistent.
+                        _peers.Remove(previous.Peer);
+                    }
+                    else
+                    {
+                        result = previous.WithState(state, now);
+                        if (!string.IsNullOrEmpty(role)) result = new PeerRecord(
+                            peer, state, role, previous.ConnectedAtUtc, now);
+                    }
                 }
                 else
                 {
@@ -140,7 +197,8 @@ namespace SilksongCoop.Core.Networking
                     added = true;
                 }
 
-                _peers[peer] = result;
+                _peers[result.Peer] = result;
+                RebuildSnapshots();
             }
 
             if (added)
@@ -164,8 +222,18 @@ namespace SilksongCoop.Core.Networking
             lock (_lock)
             {
                 if (!_peers.TryGetValue(peer, out previous)) return false;
-                updated = previous.WithState(state, DateTimeOffset.UtcNow);
-                _peers[peer] = updated;
+                var now = DateTimeOffset.UtcNow;
+                bool nameChanged = !string.Equals(
+                    previous.Peer.DisplayName,
+                    peer.DisplayName,
+                    StringComparison.Ordinal);
+                updated = nameChanged
+                    ? new PeerRecord(peer, state, previous.Role, previous.ConnectedAtUtc, now)
+                    : previous.WithState(state, now);
+
+                if (nameChanged) _peers.Remove(previous.Peer);
+                _peers[updated.Peer] = updated;
+                RebuildSnapshots();
             }
 
             OnPeerUpdated?.Invoke(previous, updated);
@@ -180,6 +248,7 @@ namespace SilksongCoop.Core.Networking
             {
                 if (!_peers.TryGetValue(peer, out removed)) return false;
                 _peers.Remove(peer);
+                RebuildSnapshots();
             }
 
             OnPeerRemoved?.Invoke(removed);
@@ -195,6 +264,7 @@ namespace SilksongCoop.Core.Networking
                 if (_peers.Count == 0) return;
                 removed = new List<PeerRecord>(_peers.Values);
                 _peers.Clear();
+                RebuildSnapshots();
             }
 
             for (int i = 0; i < removed.Count; i++)

@@ -134,24 +134,58 @@ namespace SilksongCoop.Mod.Networking
         public bool IsHost { get; private set; }
         public bool IsConnected { get; private set; }
         public NetworkPeerId LocalPeerId { get; private set; }
+
+        // Lazily rebuilt snapshot for ConnectedPeers: primary peer (when connected) plus
+        // every additional peer that already raised OnPeerConnected. Membership changes
+        // mark it dirty; steady-state reads allocate nothing.
+        private System.Collections.Generic.IReadOnlyList<NetworkPeerId> _connectedPeersSnapshot =
+            Array.Empty<NetworkPeerId>();
+        private bool _connectedPeersSnapshotDirty = true;
+
         public System.Collections.Generic.IReadOnlyList<NetworkPeerId> ConnectedPeers
         {
             get
             {
-                var peers = new List<NetworkPeerId>();
-                if (IsConnected && _remoteSteamId != CSteamID.Nil)
-                {
-                    peers.Add(new NetworkPeerId((ulong)_remoteSteamId));
-                }
-
-                foreach (var pair in _additionalPeers)
-                {
-                    if (pair.Value.Notified) peers.Add(pair.Value.PeerId);
-                }
-
-                return peers;
+                if (_connectedPeersSnapshotDirty) RebuildConnectedPeersSnapshot();
+                return _connectedPeersSnapshot;
             }
         }
+
+        private void MarkConnectedPeersDirty()
+        {
+            _connectedPeersSnapshotDirty = true;
+        }
+
+        private void RebuildConnectedPeersSnapshot()
+        {
+            int count = (IsConnected && _remoteSteamId != CSteamID.Nil) ? 1 : 0;
+            foreach (var pair in _additionalPeers)
+            {
+                if (pair.Value.Notified) count++;
+            }
+
+            if (count == 0)
+            {
+                _connectedPeersSnapshot = Array.Empty<NetworkPeerId>();
+                _connectedPeersSnapshotDirty = false;
+                return;
+            }
+
+            var snapshot = new NetworkPeerId[count];
+            int index = 0;
+            if (IsConnected && _remoteSteamId != CSteamID.Nil)
+            {
+                snapshot[index++] = new NetworkPeerId((ulong)_remoteSteamId);
+            }
+            foreach (var pair in _additionalPeers)
+            {
+                if (pair.Value.Notified) snapshot[index++] = pair.Value.PeerId;
+            }
+
+            _connectedPeersSnapshot = Array.AsReadOnly(snapshot);
+            _connectedPeersSnapshotDirty = false;
+        }
+
         public CSteamID CurrentLobbyId => _lobbyId;
 
         // Steamworks.NET's P2P API exposes no RTT/loss counters for lobby networking, so
@@ -289,6 +323,7 @@ namespace SilksongCoop.Mod.Networking
             _peerConnectNotified = false;
             _protocolRejectedPeer = CSteamID.Nil;
             _lobbyId = CSteamID.Nil;
+            MarkConnectedPeersDirty();
             _requestedLobbyId = 0;
             _lobbyRequestGeneration = ++_sessionGeneration;
             _pendingCreateLobbyCount = 1;
@@ -335,6 +370,7 @@ namespace SilksongCoop.Mod.Networking
             _protocolRejectedPeer = CSteamID.Nil;
             _lobbyId = CSteamID.Nil;
             IsConnected = false;
+            MarkConnectedPeersDirty();
             _connectionAttemptStartMs = NowMs();
             _requestedLobbyId = lobbyIdVal;
             _lobbyRequestGeneration = ++_sessionGeneration;
@@ -403,6 +439,8 @@ namespace SilksongCoop.Mod.Networking
                 IsConnected = false;
                 _peerConnectNotified = false;
             }
+
+            MarkConnectedPeersDirty();
         }
 
         #endregion // Connection Management
@@ -419,6 +457,7 @@ namespace SilksongCoop.Mod.Networking
             if (_peerConnectNotified) return;
             _peerConnectNotified = true;
             IsConnected = true;
+            MarkConnectedPeersDirty();
             _connectionAttemptStartMs = 0;
 
             _rttMs = 0;
@@ -450,6 +489,7 @@ namespace SilksongCoop.Mod.Networking
             var peer = _remoteSteamId;
             bool wasNotified = _peerConnectNotified;
             _remoteSteamId = CSteamID.Nil;
+            MarkConnectedPeersDirty();
             _peerConnectNotified = false;
             _rttMs = 0;
             _packetLossPercent = 0;
@@ -465,6 +505,7 @@ namespace SilksongCoop.Mod.Networking
             {
                 IsConnected = false;
             }
+            MarkConnectedPeersDirty();
         }
 
         /// <summary>
@@ -555,6 +596,7 @@ namespace SilksongCoop.Mod.Networking
                 Notified = false,
                 LastSeenMs = NowMs()
             };
+            MarkConnectedPeersDirty();
 
             try
             {
@@ -584,6 +626,7 @@ namespace SilksongCoop.Mod.Networking
         {
             if (entry.Notified) return;
             entry.Notified = true;
+            MarkConnectedPeersDirty();
             IsConnected = true;
             _connectionAttemptStartMs = 0;
             OnPeerConnected?.Invoke(entry.PeerId);
@@ -611,6 +654,7 @@ namespace SilksongCoop.Mod.Networking
         {
             if (!_additionalPeers.TryGetValue(peer.m_SteamID, out var entry)) return;
             _additionalPeers.Remove(peer.m_SteamID);
+            MarkConnectedPeersDirty();
 
             if (entry.Notified)
             {
@@ -621,6 +665,7 @@ namespace SilksongCoop.Mod.Networking
             {
                 IsConnected = false;
             }
+            MarkConnectedPeersDirty();
         }
 
         private bool HasNotifiedAdditionalPeer()
@@ -655,6 +700,7 @@ namespace SilksongCoop.Mod.Networking
 
             _additionalPeers.Remove(promoteKey);
             _remoteSteamId = promote.SteamId;
+            MarkConnectedPeersDirty();
             _peerConnectNotified = true;
             IsConnected = true;
             _rttMs = 0;
@@ -673,6 +719,7 @@ namespace SilksongCoop.Mod.Networking
 
             var removed = new List<AdditionalPeer>(_additionalPeers.Values);
             _additionalPeers.Clear();
+            MarkConnectedPeersDirty();
             for (int i = 0; i < removed.Count; i++)
             {
                 try { SteamNetworking.CloseP2PSessionWithUser(removed[i].SteamId); } catch { /* best-effort */ }
@@ -692,10 +739,22 @@ namespace SilksongCoop.Mod.Networking
         /// </summary>
         public void Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
-            var peers = ConnectedPeers;
-            for (int i = 0; i < peers.Count; i++)
+            if (!IsSteamAvailable) return;
+            if (data == null || offset < 0 || length < 0 || offset + length > data.Length) return;
+
+            // Iterate the primary and additional peers directly: building a ConnectedPeers
+            // list here allocated on every broadcast tick.
+            if (IsConnected && _remoteSteamId != CSteamID.Nil)
             {
-                Send(peers[i], data, offset, length, method, channel);
+                SendToPeer(_remoteSteamId, data, offset, length, method, channel);
+            }
+
+            foreach (var pair in _additionalPeers)
+            {
+                if (pair.Value.Notified)
+                {
+                    SendToPeer(pair.Value.SteamId, data, offset, length, method, channel);
+                }
             }
         }
 
@@ -732,6 +791,19 @@ namespace SilksongCoop.Mod.Networking
             {
                 return;
             }
+
+            SendToPeer(targetId, data, offset, length, method, channel);
+        }
+
+        /// <summary>
+        /// Frames and sends one payload to a resolved Steam peer. Callers must already have
+        /// validated the target; all framing and protocol-prefix behavior lives here.
+        /// </summary>
+        private void SendToPeer(CSteamID targetId, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
+        {
+            // Both callers validate availability and the source buffer before entering
+            // this per-peer helper; do not call SteamAPI.IsSteamRunning() once per peer.
+            if (data == null || offset < 0 || length < 0 || offset + length > data.Length) return;
 
             EP2PSend sendType = (method == DeliveryMethod.Unreliable || method == DeliveryMethod.Sequenced)
                 ? EP2PSend.k_EP2PSendUnreliableNoDelay
@@ -826,6 +898,7 @@ namespace SilksongCoop.Mod.Networking
                     IsConnected = false;
                     _peerConnectNotified = false;
                     _protocolRejectedPeer = CSteamID.Nil;
+                    MarkConnectedPeersDirty();
                     OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.Timeout);
                 }
             }
@@ -1065,7 +1138,10 @@ namespace SilksongCoop.Mod.Networking
                             // and protocol validation. Other lobby members are already in
                             // _additionalPeers.
                             if (_remoteSteamId == CSteamID.Nil)
+                            {
                                 _remoteSteamId = remoteId;
+                                MarkConnectedPeersDirty();
+                            }
 
                             if (_remoteSteamId == remoteId)
                             {
@@ -1389,6 +1465,7 @@ namespace SilksongCoop.Mod.Networking
                 }
 
                 _remoteSteamId = hostId;
+                MarkConnectedPeersDirty();
 
                 // Send the protocol revision to trigger P2P session acceptance on the host
                 // and let it verify compatibility before marking the session connected.
@@ -1442,6 +1519,7 @@ namespace SilksongCoop.Mod.Networking
                 if (_remoteSteamId == CSteamID.Nil && IsHost)
                 {
                     _remoteSteamId = remote;
+                    MarkConnectedPeersDirty();
                 }
                 else if (_remoteSteamId != CSteamID.Nil && _remoteSteamId != remote)
                 {
@@ -1485,6 +1563,7 @@ namespace SilksongCoop.Mod.Networking
             }
             _peerConnectNotified = false;
             IsConnected = false;
+            MarkConnectedPeersDirty();
 
             SilksongCoopPlugin.Instance?.SessionState?.SetConnecting(LocalPeerId, callback.m_steamIDLobby.m_SteamID.ToString());
             _connectionAttemptStartMs = NowMs();
@@ -1524,6 +1603,7 @@ namespace SilksongCoop.Mod.Networking
                     if (_remoteSteamId == CSteamID.Nil)
                     {
                         _remoteSteamId = joinedUser;
+                        MarkConnectedPeersDirty();
                         try { SteamNetworking.AcceptP2PSessionWithUser(joinedUser); } catch { /* best-effort */ }
                         SendHandshake(joinedUser);
                     }
@@ -1549,6 +1629,7 @@ namespace SilksongCoop.Mod.Networking
                         if (_remoteSteamId != joinedUser)
                         {
                             _remoteSteamId = joinedUser;
+                            MarkConnectedPeersDirty();
                             try { SteamNetworking.AcceptP2PSessionWithUser(joinedUser); } catch { /* best-effort */ }
                             SendHandshake(joinedUser);
                         }
@@ -1583,6 +1664,7 @@ namespace SilksongCoop.Mod.Networking
                         _remoteSteamId = CSteamID.Nil;
                         _peerConnectNotified = false;
                         IsConnected = false;
+                        MarkConnectedPeersDirty();
                         if (_lobbyId != CSteamID.Nil)
                         {
                             try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
