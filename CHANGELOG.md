@@ -68,12 +68,15 @@
 
 ### Тесты
 
-- 963/963 тестов, 0 пропущено; Release и Debug без ошибок и предупреждений
+- 964/964 тестов, 0 пропущено; Release и Debug без ошибок и предупреждений
   компилятора (только `NU1900`).
 - Новые файлы: `EnemySyncRemediationTests`, `SaveScopeTrackerTests`,
   `UdpHandshakeRemediationTests`, `RealUdpLifecycleTests`,
   `ChaosSimulationTests`, `ProtocolFuzzCampaignTests`,
-  `SerializationAllocationTests`, `StateFlagReaderTests`.
+  `SerializationAllocationTests`, `StateFlagReaderTests`,
+  `EnemySnapshotSendPolicyTests`.
+- `tools/SilksongCoop.Probe`: headless-клиент для smoke-проверки реального
+  хоста без второго игрока.
 
 ## [3.3.2] - 2026-11-08
 
@@ -1379,4 +1382,5 @@ persistent-состояния получили поля ревизии и ист
 - `Удалено` - удаленный функционал
 - `Исправлено` - исправления ошибок
 - `Безопасность` - изменения, связанные с безопасностью
+
 

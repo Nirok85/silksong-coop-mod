@@ -7,10 +7,10 @@
 
 | Показатель | До | После |
 |---|---:|---:|
-| Тесты | 934 | **963** |
+| Тесты | 934 | **964** |
 | Release build | 0 ошибок / 0 предупреждений | **0 / 0** |
 | Debug build | 0 / 0 | **0 / 0** |
-| Fuzz / chaos / allocation тесты | базовые | **+21 новых тестов** |
+| Fuzz / chaos / allocation тесты | базовые | **+30 новых тестов** |
 | Бенчмарки Core | нет | **7 сценариев, 5 классов** |
 | CI | Linux Core + Mod | **Linux/Windows Core + nightly + benchmark smoke** |
 
@@ -102,7 +102,7 @@
 ```text
 dotnet build -c Release -p:TreatWarningsAsErrors=true  -> 0 warnings, 0 errors
 dotnet build -c Debug   -p:TreatWarningsAsErrors=true  -> 0 warnings, 0 errors
-dotnet test  -c Release                                 -> 963 passed, 0 skipped
+dotnet test  -c Release                                 -> 964 passed, 0 skipped
 preflight-release.ps1                                   -> passed
 package-release.ps1                                     -> both archives produced
 verify-artifacts.ps1 -Version 3.3.3                     -> passed
@@ -124,4 +124,6 @@ verify-artifacts.ps1 -Version 3.3.3                     -> passed
 
 Автоматические тесты проверяют протокол и сервисы, но не заменяют Unity-сцену
 и Steam API.
+
+
 

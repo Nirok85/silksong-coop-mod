@@ -153,6 +153,46 @@ namespace SilksongCoop.Tests.Integration
         }
 
         [Fact]
+        public void RealUdp_SecondClient_IsRejectedWhileSinglePeerSessionIsActive()
+        {
+            using var host = new LiteNetLibTransport(1, "Host");
+            using var first = new LiteNetLibTransport(2, "First");
+            using var second = new LiteNetLibTransport(3, "Second");
+
+            host.StartHost(0);
+            int port = host.BoundPort;
+            AssertConnect(host, first, ConnectTimeout);
+
+            second.Connect($"127.0.0.1:{port}");
+
+            // Give the second handshake enough time to be processed and rejected.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+            while (DateTime.UtcNow < deadline)
+            {
+                host.PollEvents();
+                first.PollEvents();
+                second.PollEvents();
+                Thread.Sleep(5);
+            }
+
+            Assert.True(host.IsConnected);
+            Assert.Equal((ulong)2, host.RemotePeerId!.Value.Value);
+            Assert.False(second.IsConnected,
+                "v8 UDP transport must not accept a second remote peer");
+
+            // The active peer is unaffected by the rejected handshake.
+            var received = new List<byte>();
+            first.OnDataReceived += (_, data, offset, length) =>
+            {
+                for (int i = 0; i < length; i++) received.Add(data[offset + i]);
+            };
+            host.Send(first.LocalPeerId, new byte[] { 0x42 }, 0, 1,
+                DeliveryMethod.ReliableOrdered, NetworkChannels.World);
+            PumpUntil(() => received.Count == 1, DeliveryTimeout, host, first);
+            Assert.Equal(0x42, received[0]);
+        }
+
+        [Fact]
         public void RealUdp_HostRestart_NewEndpointAcceptsClientAndClearsOldIdentity()
         {
             using var host = new LiteNetLibTransport(1, "Host");
