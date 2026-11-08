@@ -159,7 +159,7 @@ namespace SilksongCoop.Mod.UI
         {
             var t = new Texture2D(1, 1, TextureFormat.ARGB32, false) { hideFlags = HideFlags.DontSave };
             t.SetPixel(0, 0, c);
-            t.Apply();
+            t.Apply(false);
             return t;
         }
 
@@ -183,6 +183,9 @@ namespace SilksongCoop.Mod.UI
             // ── Font setup (use Unity's default font at various sizes) ─────────
             // Cached so Release() can destroy the runtime-created font.
             _font = Font.CreateDynamicFontFromOSFont("Segoe UI", 14);
+            // Fall back to Unity's built-in font when the OS font is unavailable (Linux/macOS
+            // or a stripped system), so the UI never renders with a null font.
+            if (_font == null) _font = GUI.skin != null ? GUI.skin.font : null;
             var font = _font;
 
             // ── WINDOW ──────────────────────────────────────────────────────────
@@ -195,7 +198,7 @@ namespace SilksongCoop.Mod.UI
                 font = font,
                 fontSize = 14,
                 fontStyle = FontStyle.Normal,
-                border = new RectOffset(2, 2, 2, 2),
+                border = new RectOffset(0, 0, 0, 0),
                 padding = new RectOffset(12, 12, 28, 12),
                 margin = new RectOffset(0, 0, 0, 0),
                 alignment = TextAnchor.UpperLeft,
@@ -251,7 +254,7 @@ namespace SilksongCoop.Mod.UI
                 fontSize = 13,
                 fontStyle = FontStyle.Normal,
                 padding = new RectOffset(8, 8, 4, 4),
-                border = new RectOffset(2, 2, 2, 2),
+                border = new RectOffset(0, 0, 0, 0),
                 richText = false,
             };
 
@@ -271,7 +274,7 @@ namespace SilksongCoop.Mod.UI
             skin.horizontalSlider = new GUIStyle(skin.horizontalSlider)
             {
                 normal = { background = _texBgField },
-                border = new RectOffset(2, 2, 2, 2),
+                border = new RectOffset(0, 0, 0, 0),
                 fixedHeight = 8,
             };
             skin.horizontalSliderThumb = new GUIStyle(skin.horizontalSliderThumb)
@@ -287,7 +290,7 @@ namespace SilksongCoop.Mod.UI
             skin.verticalScrollbar = new GUIStyle(skin.verticalScrollbar)
             {
                 normal = { background = _texBgField },
-                border = new RectOffset(2, 2, 2, 2),
+                border = new RectOffset(0, 0, 0, 0),
                 fixedWidth = 10,
             };
             skin.verticalScrollbarThumb = new GUIStyle(skin.verticalScrollbarThumb)

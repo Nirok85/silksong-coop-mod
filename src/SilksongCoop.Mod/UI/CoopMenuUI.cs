@@ -229,6 +229,9 @@ namespace SilksongCoop.Mod.UI
             // GUI.skin is process-global; restore the previous skin so other mods' OnGUI
             // passes are not rendered with the co-op skin.
             var previousSkin = GUI.skin;
+            var previousColor = GUI.color;
+            var previousContentColor = GUI.contentColor;
+            var previousBackgroundColor = GUI.backgroundColor;
             try
             {
             // Lazy-load skin + styles
@@ -285,6 +288,9 @@ namespace SilksongCoop.Mod.UI
             finally
             {
                 GUI.skin = previousSkin;
+                GUI.color = previousColor;
+                GUI.contentColor = previousContentColor;
+                GUI.backgroundColor = previousBackgroundColor;
             }
         }
 
@@ -561,10 +567,7 @@ namespace SilksongCoop.Mod.UI
             // Title bar
             GUI.color = SilksongSkin.Gold;
             var titleStyle = _styleTitle ?? Skin.label;
-            int origSize = titleStyle.fontSize;
-            titleStyle.fontSize = 14;
             GUI.Label(new Rect(12, 4, 300, 20), "SILKSONG CO-OP", titleStyle);
-            titleStyle.fontSize = origSize;
 
             // Close button
             GUI.color = Color.white;
