@@ -1,4 +1,4 @@
-# Smoke-проверка 3.3.3
+﻿# Smoke-проверка 3.3.3
 
 Дата: 2026-11-09
 Сборка: `3.3.3` (protocol v8)
@@ -8,8 +8,8 @@
 
 | Файл | SHA-256 |
 |---|---|
-| `SilksongCoop_v3.3.3.zip` | `eb3d33b83f9722076ee2d35ca04ce4f85a950c88a929c1012ea54aa0adeb7f2e` |
-| `SilksongCoop_v3.3.3_plugin-only.zip` | `7c0fa9998e64e9bfa0aae4e3aec6a68f2f273139fc97cbb8bde915b8026b5854` |
+| `SilksongCoop_v3.3.3.zip` | `a3e91e5f1eb1958f1466f7ac78d8cea22c9bce93ff39c995fedf029e922d9ee5` |
+| `SilksongCoop_v3.3.3_plugin-only.zip` | `05d9f035d4c9abdd2f11d8c8cdcfb847d2aba3a20fb0d024415f34d2eb98060e` |
 
 Для smoke в игру развёрнуты `SilksongCoop.Mod.dll` и `SilksongCoop.Core.dll` из
 Release-сборки 3.3.3. Предыдущая версия сохранена вне `BepInEx/plugins`, чтобы
@@ -99,3 +99,4 @@ handshake, все каналы, reconnect и очистку. Он не пров�
 - Автоматический реальный UDP: **проверяется тестами**.
 - Два живых клиента UDP/Steam: **не выполнено** — требуется второй игрок.
 - Тег `v3.3.3` и GitHub Release: **ожидают** двухклиентного smoke.
+

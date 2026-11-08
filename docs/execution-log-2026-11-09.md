@@ -1,4 +1,4 @@
-# Журнал выполнения плана — 2026-11-09
+﻿# Журнал выполнения плана — 2026-11-09
 
 Основание: `docs/global-improvement-plan-2026-11.md`. Протокол остаётся **v8**.
 Все проверки выполнялись на Windows, Silksong 1.0.30000, Unity 6000.0.50f1.
@@ -108,8 +108,8 @@ verify-artifacts.ps1 -Version 3.3.3                     -> passed
 
 | Файл | SHA-256 |
 |---|---|
-| `SilksongCoop_v3.3.3.zip` | `eb3d33b83f9722076ee2d35ca04ce4f85a950c88a929c1012ea54aa0adeb7f2e` |
-| `SilksongCoop_v3.3.3_plugin-only.zip` | `7c0fa9998e64e9bfa0aae4e3aec6a68f2f273139fc97cbb8bde915b8026b5854` |
+| `SilksongCoop_v3.3.3.zip` | `a3e91e5f1eb1958f1466f7ac78d8cea22c9bce93ff39c995fedf029e922d9ee5` |
+| `SilksongCoop_v3.3.3_plugin-only.zip` | `05d9f035d4c9abdd2f11d8c8cdcfb847d2aba3a20fb0d024415f34d2eb98060e` |
 
 ## Незакрытые внешние гейты
 
@@ -120,3 +120,4 @@ verify-artifacts.ps1 -Version 3.3.3                     -> passed
 
 Автоматические тесты проверяют протокол и сервисы, но не заменяют Unity-сцену
 и Steam API.
+
