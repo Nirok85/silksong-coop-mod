@@ -24,6 +24,10 @@
   client reconnect и host restart.
 - Одиночный smoke: 3.3.3 загружается, F10 и F11 работают, локализация видна,
   ошибок после инициализации нет.
+- **Хост в реальной игре + headless-клиент** (`tools/SilksongCoop.Probe`):
+  handshake с room code, приём `VitalsSync`/`ItemUnlock`, отправка vitals,
+  HUD напарника, RTT 16 ms, loss 0%. Прямой IP без кода корректно отклонён.
+- `docs/smoke-3.3.3.md` фиксирует оба результата и оставшийся ручной гейт.
 
 ## Этап B — измерения
 
