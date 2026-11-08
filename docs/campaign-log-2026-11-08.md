@@ -9,11 +9,44 @@ Baseline: `652720b` (version 3.3.1, protocol v8)
 |---|---|---|---|
 | M1 — shared session state | **Done** | `3ced065` | Release/Debug build 0 warnings; 908/908 tests; independent audit clean |
 | M2a — cached peer snapshots | **Done** | `aed9176` | 916/916 tests; allocation tests 0 B/read; independent audit clean |
-| M2b — UDP/HMAC allocation pass | Pending | — | — |
+| M2b — UDP/HMAC allocation pass | **Done** | `54bec12` | 916/916 tests; Release/Debug 0 warnings; independent audit clean |
 | M3 — UI and small hot paths | Pending | — | — |
 | M4 — enemy/world indexing | Pending | — | — |
 | M5 — targeted architecture & lifecycle | Pending | — | — |
 | M6 — release 3.3.2 & GitHub | Pending | — | — |
+
+## M2b — UDP/HMAC allocation pass
+
+**Changes:**
+
+- Session HMAC is cached (`SetSessionKey` / `ClearSessionKey`); MACs are computed
+  with `TryComputeHash` into `stackalloc` buffers instead of constructing an
+  `HMACSHA256` and a hash array for every datagram.
+- `BinaryPrimitives` replaces `BitConverter.GetBytes` for data sequences,
+  envelopes, ACK payloads and heartbeat timestamps.
+- Envelope buffers are rented from `ArrayPool` and returned after the synchronous
+  `SendTo`; ACK and ping payloads are stack-allocated.
+- Unreliable and sequenced payloads are copied into pooled buffers and returned
+  after the deferred handler runs. Reliable ordered/unordered paths keep their
+  existing array ownership.
+- `DrainPendingEvents` uses a reusable batch list, a reentrancy/concurrency
+  guard, an atomic `_drainRequested` handoff and returns pooled buffers on every
+  exit. Handler exceptions are logged per event and no longer strand the tail.
+- Connected receive polling reuses one `IPEndPoint`; handshake/disconnected
+  paths still allocate fresh endpoints because they may store the endpoint as a
+  pending-handshake key.
+- `INetworkTransport.OnDataReceived` now documents that the data window is valid
+  only during the callback.
+
+**Checks:**
+
+- Release build: 0 errors, 0 warnings.
+- Debug build: 0 errors, 0 warnings.
+- `dotnet test -c Release --no-build`: 916 passed, 0 failed, 0 skipped.
+- Independent audit iterations found and closed: drain race, callback deadlock,
+  event-loss gap and handler-exception tail loss. Final audit: no issues.
+- Residual risk: HMAC `TryComputeHash`/span behavior is compile-verified on the
+  target netstandard2.1; live UDP/Steam smoke remains M6.
 
 ## M2a — cached peer snapshots
 
