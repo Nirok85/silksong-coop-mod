@@ -10,7 +10,7 @@
 
 A fully-featured cooperative mod for **Hollow Knight: Silksong**, allowing two players to explore the world of Pharloom together in real time. The release package is **fully self-contained** — BepInEx 5.4.21 and HarmonyX are bundled; no separate downloads are required.
 
-**Latest release:** [v3.3.3](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.3) (2026-11-09) — performance and reliability pass.
+**Latest release:** [v3.3.3](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.3) (2026-11-09) — reliability, performance and UI pass.
 
 ---
 

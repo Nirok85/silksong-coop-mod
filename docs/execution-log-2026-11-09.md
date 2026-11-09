@@ -118,12 +118,17 @@ verify-artifacts.ps1 -Version 3.3.3                     -> passed
 
 Проверка: `pwsh ./scripts/verify-artifacts.ps1 -Version 3.3.3`.
 
+Опубликовано: [GitHub Release v3.3.3](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.3).
+SHA-256 загруженных GitHub ассетов совпадает с локальным манифестом.
+
 ## Незакрытые внешние гейты
 
 - Живой smoke двумя клиентами (UDP и Steam): подключение, бой,
   смерть/revive, скамейка, переходы сцен, late join, reconnect, quest-флаги.
 - Steam 3+ экспериментальный прогон.
-- Тег `v3.3.3` и публикация GitHub Release — только после этих проверок.
+- Полный двухклиентный gameplay-smoke остаётся обязательным для следующего
+  патча. Тег `v3.3.3` и GitHub Release опубликованы 2026-11-09 по решению
+  владельца проекта.
 
 Автоматические тесты проверяют протокол и сервисы, но не заменяют Unity-сцену
 и Steam API.
