@@ -10,7 +10,7 @@
 
 Полнофункциональный кооперативный мод для **Hollow Knight: Silksong**, позволяющий двум игрокам совместно исследовать мир Фарлума в реальном времени. Релизный пакет **полностью самодостаточен** — BepInEx 5.4.21 и HarmonyX включены, отдельные загрузки не требуются.
 
-**Последний релиз:** [v3.3.3](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.3) (2026-11-09) — патч надёжности, производительности и UI.
+**Последний релиз:** [v3.3.4](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.4) (2026-11-09) — полное исправление аудита.
 
 ---
 
@@ -83,7 +83,7 @@
 
 ### Способ A — Релизный пакет (Рекомендуется)
 
-Архив `SilksongCoop_v3.3.3.zip` со страницы [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) включает всё: BepInEx 5.4.21, HarmonyX и DLL мода.
+Архив `SilksongCoop_v3.3.4.zip` со страницы [Releases](https://github.com/Nirok85/silksong-coop-mod/releases) включает всё: BepInEx 5.4.21, HarmonyX и DLL мода.
 
 1. Закройте игру, если она запущена.
 2. Откройте папку установки Silksong в Steam (Управление → Просмотреть локальные файлы). Типичный путь:
@@ -101,7 +101,7 @@
 ### Способ B — Ручная установка (сборка из исходников)
 
 Если BepInEx 5.4.x уже установлен (любая ОС, включая Linux/macOS), возьмите со страницы
-релизов `SilksongCoop_v3.3.3_plugin-only.zip` — там только две DLL, дефолтный конфиг и инструкция.
+релизов `SilksongCoop_v3.3.4_plugin-only.zip` — там только две DLL, дефолтный конфиг и инструкция.
 
 1. Установите [BepInEx 5.4.x (x64)](https://github.com/BepInEx/BepInEx/releases) в корень игры (чтобы появились `BepInEx\` и `winhttp.dll` рядом с exe).
 2. Соберите мод из исходников (см. [Разработка и сборка](#-разработка-и-сборка)) или возьмите DLL из релизного архива.
@@ -325,7 +325,7 @@ dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj -c Release
 * **F11** — оверлей сетевой диагностики (графики пинга/потерь/трафика, правый верхний угол).
 * Клавиши настраиваются в `BepInEx\config\com.silksong.coop.cfg`, секция `[Keybinds]`.
 
-Если клавиши не отвечают: проверьте, что в `BepInEx\LogOutput.log` загружается плагин (строка `Initializing Silksong Co-op Multiplayer v3.3.3...`). Убедитесь, что ни другой мод, ни системная утилита (рекордеры, медиаплееры) не перехватывают F10/F11 глобально.
+Если клавиши не отвечают: проверьте, что в `BepInEx\LogOutput.log` загружается плагин (строка `Initializing Silksong Co-op Multiplayer v3.3.4...`). Убедитесь, что ни другой мод, ни системная утилита (рекордеры, медиаплееры) не перехватывают F10/F11 глобально.
 </details>
 
 <details>
@@ -420,8 +420,8 @@ pwsh ./scripts/preflight-release.ps1 -AllowDirty
 Перед публикацией проверьте архивы и сгенерируйте текст релиза:
 
 ```powershell
-pwsh ./scripts/verify-artifacts.ps1 -Version 3.3.3
-pwsh ./scripts/release-notes.ps1 -Version 3.3.3 -OutputPath dist/3.3.3/release-notes.md
+pwsh ./scripts/verify-artifacts.ps1 -Version 3.3.4
+pwsh ./scripts/release-notes.ps1 -Version 3.3.4 -OutputPath dist/3.3.4/release-notes.md
 ```
 
 Полный чек-лист публикации (подъём версии, проверка, `gh release create`) —
