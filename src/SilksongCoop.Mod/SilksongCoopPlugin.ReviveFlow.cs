@@ -12,6 +12,12 @@ namespace SilksongCoop.Mod
     public partial class SilksongCoopPlugin
     {
         #region Spectator and Death Handling
+
+        // True while ReviveInvulnerabilityRoutine owns the hero's damage mode. Plugin
+        // teardown uses this to restore FULL_DAMAGE without stomping a state the game set
+        // for its own reasons (hazard respawn, scripted sequence).
+        private bool _reviveInvulnerabilityActive;
+
         /// <summary>
         /// Enters spectator mode after local player death, hiding the hero and disabling physics.
         /// </summary>
@@ -309,6 +315,7 @@ namespace SilksongCoop.Mod
 
         private IEnumerator ReviveInvulnerabilityRoutine(HeroController hero, float duration)
         {
+            _reviveInvulnerabilityActive = true;
             hero.SetDamageMode(GlobalEnums.DamageMode.HAZARD_ONLY);
             hero.cState.invulnerable = true;
             var pulse = hero.GetComponent<InvulnerablePulse>();
@@ -321,16 +328,28 @@ namespace SilksongCoop.Mod
                 Logger.LogWarning($"[Coop] Failed to start invulnerable pulse: {ex.Message}");
             }
 
-            float elapsed = 0f;
-            while (elapsed < duration)
+            try
             {
-                if (hero == null || hero.gameObject == null)
-                    yield break; // Hero destroyed (scene transition) — abort coroutine
-                yield return null;
-                // BUG-01: unscaled time — Time.deltaTime is 0 while the game is paused,
-                // which would freeze the routine and leave the hero invulnerable forever.
-                elapsed += Time.unscaledDeltaTime;
+                float elapsed = 0f;
+                while (elapsed < duration)
+                {
+                    if (hero == null || hero.gameObject == null)
+                        yield break; // Hero destroyed (scene transition) — abort coroutine
+                    yield return null;
+                    // BUG-01: unscaled time — Time.deltaTime is 0 while the game is paused,
+                    // which would freeze the routine and leave the hero invulnerable forever.
+                    elapsed += Time.unscaledDeltaTime;
+                }
             }
+            finally
+            {
+                // Runs both on normal completion and when the coroutine is stopped by
+                // StopAllCoroutines during plugin teardown. A destroyed hero is caught by
+                // the null checks in the restore block below.
+                _reviveInvulnerabilityActive = false;
+            }
+
+            if (hero == null || hero.gameObject == null) yield break;
 
             try
             {

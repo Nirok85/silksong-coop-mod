@@ -23,6 +23,12 @@ namespace SilksongCoop.Core.State
         private (float X, float Y) _lastPartnerPosition = (0f, 0f);
         private uint _currentEpoch = 1;
 
+        // True when a higher epoch was adopted from a peer while this player was still in
+        // its own respawn cycle. Finishing that cycle must NOT advance the epoch again:
+        // the peer already advanced it for the same wipe, and double-advancing made the
+        // receiver discard the peer's genuine deaths as stale until the next sync.
+        private bool _adoptedEpochDuringRespawn;
+
         // The peer selected for the current revive attempt. Kept separate from
         // LastPartnerPosition so the plugin can verify that the scene it is about to
         // revive into belongs to the same player the coordinator picked.
@@ -840,6 +846,7 @@ namespace SilksongCoop.Core.State
                 _isPartnerAlive = true;
                 _remainingSpectatorTime = 0f;
                 _currentEpoch = 1;
+                _adoptedEpochDuringRespawn = false;
                 _lastPartnerPosition = (0f, 0f);
                 _reviveTargetPeer = null;
                 _reviveTargetPosition = (0f, 0f);
@@ -883,6 +890,11 @@ namespace SilksongCoop.Core.State
                 if (packet.Epoch > CurrentEpoch)
                 {
                     CurrentEpoch = packet.Epoch;
+
+                    // The peer finished the same wipe first. Remember that this epoch was
+                    // adopted so our own ResetAfterBenchRespawn does not increment it again.
+                    if (CurrentState != DeathState.Alive)
+                        _adoptedEpochDuringRespawn = true;
                 }
                 else if (packet.Epoch != CurrentEpoch)
                 {
@@ -997,6 +1009,7 @@ namespace SilksongCoop.Core.State
             lock (_lock)
             {
                 _reviveTargetPeer = null;
+                _adoptedEpochDuringRespawn = false;
                 _pendingSoloBenchRespawn = !notifyPartner && !notifyImmediately;
 
                 if (notifyPartner)
@@ -1068,7 +1081,17 @@ namespace SilksongCoop.Core.State
         {
             CurrentState = DeathState.Alive;
             RemainingSpectatorTime = 0f;
-            CurrentEpoch++;
+
+            bool advanceEpoch;
+            lock (_lock)
+            {
+                // Both peers advance the epoch for the same wipe. If this player adopted
+                // the peer's higher epoch while still reloading, advancing again would put
+                // the two peers on different epochs and hide genuine deaths.
+                advanceEpoch = !_adoptedEpochDuringRespawn;
+                _adoptedEpochDuringRespawn = false;
+            }
+            if (advanceEpoch) CurrentEpoch++;
 
             bool notifySoloBenchRespawn;
             lock (_lock)

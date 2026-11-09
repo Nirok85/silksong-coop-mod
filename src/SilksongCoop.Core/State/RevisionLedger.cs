@@ -10,11 +10,16 @@ namespace SilksongCoop.Core.State
     /// </summary>
     public sealed class RevisionLedger
     {
-        private readonly Dictionary<ulong, (uint Revision, ulong Origin)> _applied =
-            new Dictionary<ulong, (uint Revision, ulong Origin)>();
+        // One watermark per (object, origin). A single origin slot per object was not
+        // enough: applying A/5, then B/1, then a delayed A/4 made A/4 look fresh again
+        // because the newer origin overwrote A's watermark.
+        private readonly Dictionary<(ulong Key, ulong Origin), uint> _applied =
+            new Dictionary<(ulong Key, ulong Origin), uint>();
+
+        private readonly HashSet<ulong> _keys = new HashSet<ulong>();
 
         /// <summary>Number of objects with a recorded revision (diagnostics/tests).</summary>
-        public int Count => _applied.Count;
+        public int Count => _keys.Count;
 
         /// <summary>
         /// True when the packet describes a state that was already applied or is older than
@@ -23,17 +28,26 @@ namespace SilksongCoop.Core.State
         public bool IsStale(ulong key, uint revision, ulong origin)
         {
             if (revision == 0) return false;
-            if (!_applied.TryGetValue(key, out var last)) return false;
-            if (last.Origin != origin) return false;
-            return revision <= last.Revision;
+            if (!_applied.TryGetValue((key, origin), out uint last)) return false;
+            return revision <= last;
         }
 
         /// <summary>Records an applied revision. Revision 0 carries no ordering.</summary>
         public void Record(ulong key, uint revision, ulong origin)
         {
-            if (revision != 0) _applied[key] = (revision, origin);
+            if (revision == 0) return;
+
+            if (!_applied.TryGetValue((key, origin), out uint last) || revision > last)
+            {
+                _applied[(key, origin)] = revision;
+                _keys.Add(key);
+            }
         }
 
-        public void Clear() => _applied.Clear();
+        public void Clear()
+        {
+            _applied.Clear();
+            _keys.Clear();
+        }
     }
 }

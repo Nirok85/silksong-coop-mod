@@ -9,16 +9,24 @@ namespace SilksongCoop.Core.State
     /// </summary>
     public readonly struct DeadEnemyRecord
     {
-        public DeadEnemyRecord(float x, float y, bool isBoss)
+        public DeadEnemyRecord(float x, float y, bool isBoss, bool isSequenceBoss = false)
         {
             X = x;
             Y = y;
             IsBoss = isBoss;
+            IsSequenceBoss = isSequenceBoss;
         }
 
         public float X { get; }
         public float Y { get; }
         public bool IsBoss { get; }
+
+        /// <summary>
+        /// A boss that belongs to a repeatable boss sequence and respawns when the sequence
+        /// is restarted. It survives ordinary scene changes like a boss, but must be
+        /// dropped when the sequence ends or the next attempt starts already dead.
+        /// </summary>
+        public bool IsSequenceBoss { get; }
     }
 
     /// <summary>
@@ -61,7 +69,7 @@ namespace SilksongCoop.Core.State
         /// Records a death. Re-registering the same key updates its position/flags without
         /// growing the eviction queue; the oldest record is evicted at capacity.
         /// </summary>
-        public void Register(ulong key, float x, float y, bool isBoss)
+        public void Register(ulong key, float x, float y, bool isBoss, bool isSequenceBoss = false)
         {
             if (key == 0) return;
 
@@ -74,8 +82,16 @@ namespace SilksongCoop.Core.State
 
                 _order.Enqueue(key);
             }
+            else if (_records.TryGetValue(key, out var existing))
+            {
+                // Never downgrade a boss/sequence record when the same key is later
+                // reported from a context without that information (for example a
+                // snapshot applied after the boss-sequence lookup went away).
+                isBoss |= existing.IsBoss;
+                isSequenceBoss |= existing.IsSequenceBoss;
+            }
 
-            _records[key] = new DeadEnemyRecord(x, y, isBoss);
+            _records[key] = new DeadEnemyRecord(x, y, isBoss, isSequenceBoss);
         }
 
         /// <summary>
@@ -135,6 +151,39 @@ namespace SilksongCoop.Core.State
 
             int removed = _records.Count - survivors.Count;
             if (removed == 0) return 0;
+
+            _records.Clear();
+            _order.Clear();
+            for (int i = 0; i < survivors.Count; i++)
+            {
+                _records[survivors[i].Key] = survivors[i].Value;
+                _order.Enqueue(survivors[i].Key);
+            }
+
+            return removed;
+        }
+
+        /// <summary>
+        /// Drops death records that belong to a repeatable boss sequence and returns their
+        /// keys so the caller can also forget the matching per-object service state. Called
+        /// when a sequence ends: the next attempt spawns the same bosses again and must not
+        /// inherit the previous attempt's deaths.
+        /// </summary>
+        public List<ulong> DropSequenceBosses()
+        {
+            var removed = new List<ulong>();
+            if (_records.Count == 0) return removed;
+
+            var survivors = new List<KeyValuePair<ulong, DeadEnemyRecord>>();
+            foreach (var pair in _records)
+            {
+                if (pair.Value.IsSequenceBoss)
+                    removed.Add(pair.Key);
+                else
+                    survivors.Add(pair);
+            }
+
+            if (removed.Count == 0) return removed;
 
             _records.Clear();
             _order.Clear();

@@ -69,12 +69,28 @@ namespace SilksongCoop.Mod.Services
                 _currencyResyncTimer = 0f;
                 _vitalsSync.BroadcastCurrentCurrency();
             }
+
+            ReconcileWalletIfDue();
         }
 
         public void OnSessionStarted(bool isHost) { }
-        public void OnSessionEnded() { _currencyResyncTimer = 0f; }
+
+        public void OnSessionEnded()
+        {
+            _currencyResyncTimer = 0f;
+            _walletReconcilePending = false;
+            _walletReconcileAttempts = 0;
+        }
 
         private float _currencyResyncTimer;
+
+        // A delta-only application can leave PlayerData behind the shared wallet when the
+        // sender's packet also repaired a missed gain. Re-apply the shared total after the
+        // game's queued currency change has settled, instead of trusting the packet delta
+        // as the final balance.
+        private float _walletReconcileAt;
+        private bool _walletReconcilePending;
+        private int _walletReconcileAttempts;
 
         private void OnOutgoingVitals(VitalsSyncPacket packet)
         {
@@ -153,6 +169,59 @@ namespace SilksongCoop.Mod.Services
                         CurrencyManager.ChangeCurrency(diff, silkgurrencyType, true);
                 }
             }
+
+            // The shared core wallet may be higher than PlayerData + delta when the
+            // sender's packet reconciled a missed gain. Apply the remainder once the
+            // queued change above has been processed by the game.
+            ScheduleWalletReconcile();
+        }
+
+        private void ScheduleWalletReconcile()
+        {
+            _walletReconcilePending = true;
+            _walletReconcileAttempts = 4;
+            _walletReconcileAt = Time.unscaledTime + 0.15f;
+        }
+
+        private void ReconcileWalletIfDue()
+        {
+            if (!_walletReconcilePending || Time.unscaledTime < _walletReconcileAt) return;
+
+            // CurrencyManager only queues the change; while the game is paused the queue
+            // does not drain and comparing PlayerData with Core would apply the remainder
+            // a second time once it does. Retry on the first unpaused frame.
+            if (Time.timeScale <= 0f) return;
+
+            var pd = PlayerData.instance;
+            if (pd == null)
+            {
+                _walletReconcilePending = false;
+                return;
+            }
+
+            bool applied = false;
+            using (RemoteApplyScope.Begin())
+            {
+                int rosaryDiff = _vitalsSync.SharedRosaries - pd.geo;
+                if (rosaryDiff != 0)
+                {
+                    CurrencyManager.ChangeCurrency(rosaryDiff, CurrencyType.Money, false);
+                    applied = true;
+                }
+
+                int shardDiff = _vitalsSync.SharedShellShards - pd.ShellShards;
+                if (shardDiff != 0)
+                {
+                    CurrencyManager.ChangeCurrency(shardDiff, CurrencyType.Shard, false);
+                    applied = true;
+                }
+            }
+
+            _walletReconcileAttempts--;
+            if (applied && _walletReconcileAttempts > 0)
+                _walletReconcileAt = Time.unscaledTime + 0.15f;
+            else
+                _walletReconcilePending = false;
         }
 
         private void OnRemotePickupClaimed(Core.Protocol.Packets.CurrencyType currency, ulong key, float x, float y)

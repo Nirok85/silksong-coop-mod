@@ -46,7 +46,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "3.3.3";
+        public const string PluginVersion = "3.3.4";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -602,6 +602,63 @@ namespace SilksongCoop.Mod
         }
 
         /// <summary>
+        /// Ends the current session from user input (menu button, transport switch) and
+        /// performs the gameplay cleanup synchronously. The transport's PeerDisconnected
+        /// event is deferred for UDP and its handler deliberately ignores events after the
+        /// state is already Disconnected, so relying on that event left the partner clone,
+        /// death state and spectator view behind until the next session.
+        /// </summary>
+        public void DisconnectFromSession(DisconnectReason reason = DisconnectReason.GracefulDisconnect)
+        {
+            try
+            {
+                // Capture the death state before it is overwritten by SetDisconnected.
+                bool recoveringFromSpectator =
+                    DeathCoordinator?.CurrentState == DeathState.Spectating ||
+                    DeathCoordinator?.CurrentState == DeathState.RespawningAtPartner;
+
+                // Mark the session ended FIRST: Steam delivers its disconnect callback
+                // synchronously from Disconnect(), and the transport handler must not run
+                // the same teardown twice.
+                SessionState?.SetDisconnected(reason);
+
+                try
+                {
+                    ActiveTransport?.Disconnect();
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning($"[Coop] Failed to close transport: {ex.Message}");
+                }
+
+                ResetDesyncTracking();
+                EventBus?.Publish(new SessionEndedEvent { Reason = reason });
+                MenuUI?.Diagnostics?.OnSessionEnded();
+
+                CloneSpawner?.ResetAllClones();
+                VitalsSync?.ClearRemotePeers();
+                DeathCoordinator?.ClearRemotePeers();
+                InventorySync?.ResetSessionState();
+                EnemySync?.ResetSession();
+                QuestStateSync?.ResetSession();
+
+                if (recoveringFromSpectator)
+                {
+                    Logger.LogWarning("[Coop] Session ended while in spectator mode. Exiting spectator and respawning at a bench.");
+                    ExitSpectatorMode();
+                    TriggerTeamWipe();
+                }
+
+                RefreshLocalVisuals(false);
+                MenuUI?.SetStatusMessage(Loc.T("Disconnected"));
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"[Coop] Failed to disconnect session: {ex.Message}\n{ex.StackTrace}");
+            }
+        }
+
+        /// <summary>
         /// Refreshes local player visuals based on player index (palette swap and dash trail).
         /// </summary>
         /// <param name="isPlayer2">True if this is player 2, false for player 1.</param>
@@ -640,7 +697,7 @@ namespace SilksongCoop.Mod
         {
             try
             {
-                if (ActiveTransport == null || SessionState?.IsConnected != true || !SessionState.RemotePeerId.HasValue) return;
+                if (ActiveTransport == null || SessionState?.IsConnected != true) return;
                 var hero = HeroController.instance;
                 Vector2 pos = (hero != null) ? (Vector2)hero.transform.position : Vector2.zero;
                 Vector2 dir = (hero != null && hero.cState.facingRight) ? Vector2.right : Vector2.left;
@@ -658,24 +715,16 @@ namespace SilksongCoop.Mod
                     Parameter = parameter
                 };
 
-                // P3: heap buffer passed directly (no stackalloc + ToArray copy).
-                byte[] buffer = ArrayPool<byte>.Shared.Rent(64);
-                try
-                {
-                    var writer = new PacketWriter(buffer);
-                    packet.Serialize(ref writer);
-                    ActiveTransport.Send(
-                        SessionState.RemotePeerId.Value,
-                        buffer,
-                        0,
-                        writer.Position,
-                        DeliveryMethod.ReliableOrdered,
-                        NetworkChannels.Action);
-                }
-                finally
-                {
-                    ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
-                }
+                // Actions used to go only to the primary peer, so in an experimental 3+
+                // session one guest saw movement without the matching actions.
+                PacketSender.SendToAll(
+                    ActiveTransport,
+                    packet,
+                    DeliveryMethod.ReliableOrdered,
+                    NetworkChannels.Action,
+                    64,
+                    MenuUI?.Diagnostics,
+                    "[Coop]");
             }
             catch (Exception ex)
             {
@@ -1883,11 +1932,68 @@ namespace SilksongCoop.Mod
             }
         }
 
+        /// <summary>
+        /// Restores the local hero after a plugin unload. Spectator mode and revive
+        /// invulnerability are applied by this plugin, and their normal cleanup runs only
+        /// when the corresponding coroutine finishes.
+        /// </summary>
+        private void RestoreGameplayStateForTeardown()
+        {
+            try
+            {
+                if (Spectator.IsActive ||
+                    DeathCoordinator?.CurrentState == DeathState.Spectating ||
+                    DeathCoordinator?.CurrentState == DeathState.RespawningAtPartner ||
+                    DeathCoordinator?.CurrentState == DeathState.TeamWipe)
+                {
+                    ExitSpectatorMode();
+                }
+
+                // Only undo the damage mode this plugin applied. The game may own
+                // HAZARD_ONLY/FULL_DAMAGE for its own hazard or scripted sequence.
+                if (!_reviveInvulnerabilityActive) return;
+
+                var hero = HeroController.instance;
+                if (hero == null || hero.gameObject == null) return;
+
+                hero.cState.invulnerable = false;
+                hero.cState.recoiling = false;
+                hero.SetDamageMode(GlobalEnums.DamageMode.FULL_DAMAGE);
+                _reviveInvulnerabilityActive = false;
+
+                var pulse = hero.GetComponent<InvulnerablePulse>();
+                pulse?.StopInvulnerablePulse();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[Coop] Failed restoring hero state on unload: {ex.Message}");
+            }
+        }
+
+        private static void DestroyPersistentObject(Component? component)
+        {
+            try
+            {
+                if (component != null && component.gameObject != null)
+                    Destroy(component.gameObject);
+            }
+            catch
+            {
+                // Unity may already be shutting down; the object is gone with the process.
+            }
+        }
+
         private void OnDestroy()
         {
             try
             {
                 StopAllCoroutines();
+
+                // StopAllCoroutines() also cancels ReviveInvulnerabilityRoutine, whose
+                // cleanup lives after the wait loop. Restore the hero explicitly so a
+                // plugin unload cannot leave it invulnerable, physics-disabled or without
+                // control when the plugin is removed/reloaded.
+                RestoreGameplayStateForTeardown();
 
                 // Unsubscribe managers before disposing transports so no callback can run
                 // against a half-torn-down session.
@@ -1917,6 +2023,13 @@ namespace SilksongCoop.Mod
                 CancelReconnect();
 
                 _harmony?.UnpatchSelf();
+
+                // The spawner, enemy sync and menu are separate DontDestroyOnLoad objects;
+                // destroying only the plugin's own GameObject leaked them into a reloaded
+                // plugin instance (two spawners/two menu UIs sharing static state).
+                DestroyPersistentObject(CloneSpawner);
+                DestroyPersistentObject(EnemySync);
+                DestroyPersistentObject(MenuUI);
 
                 // Release static GUI resources (textures are HideFlags.DontSave and are not
                 // collected with the scene).

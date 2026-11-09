@@ -101,6 +101,18 @@ namespace SilksongCoop.Core.State
         }
 
         /// <summary>
+        /// Forgets one enemy's tracked state. Used when a repeatable boss sequence ends:
+        /// the same hierarchy key is reused by the next attempt and must start alive.
+        /// </summary>
+        public bool Forget(ulong enemyKey)
+        {
+            lock (_lock)
+            {
+                return _enemies.Remove(enemyKey);
+            }
+        }
+
+        /// <summary>
         /// Evicts the oldest tracked enemy instead of clearing every entry, which would
         /// forget that earlier enemies are already dead.
         /// </summary>

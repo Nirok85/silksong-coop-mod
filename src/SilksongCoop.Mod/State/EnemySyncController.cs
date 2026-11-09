@@ -36,6 +36,10 @@ namespace SilksongCoop.Mod.State
         {
             public EnemySnapshotEntry Entry;
             public uint Timestamp;
+            // A client's death claim for an enemy the host had not loaded. It carries no
+            // host-simulated HP to check, so at minimum it must prove actual damage.
+            public short Damage;
+            public bool FromRemoteClaim;
         }
 
         /// <summary>
@@ -166,6 +170,10 @@ namespace SilksongCoop.Mod.State
         private static bool _initHpResolved;
         private static bool _bossProbeWarningLogged;
 
+        // Edge-triggered boss-sequence tracking: sequences reuse boss hierarchy keys, so
+        // death records created during one attempt must not survive into the next.
+        private bool _wasInBossSequence;
+
         /// <summary>
         /// Binds the controller to the plugin.
         /// </summary>
@@ -286,6 +294,10 @@ namespace SilksongCoop.Mod.State
             // to a new partner.
             RefreshSaveScope();
 
+            // Repeatable boss sequences spawn the same hierarchy keys again; clear their
+            // old death records as soon as the sequence ends, on both host and client.
+            TrackBossSequenceTransition();
+
             // Track scene changes even while disconnected. Otherwise the first connection
             // looked like a scene change (empty _sceneName) and cleared dead enemies that
             // were recorded while playing solo, just before their catch-up replay.
@@ -384,12 +396,17 @@ namespace SilksongCoop.Mod.State
 
             // Register even before a peer connects so a later client is caught up. Bosses
             // are flagged here, while the scene is still loaded, because the registry uses
-            // that flag to survive the scene change that follows a boss kill.
+            // that flag to survive the scene change that follows a boss kill. A boss that
+            // belongs to a repeatable sequence is tracked separately: it must disappear
+            // from catch-up data when the sequence ends.
+            bool sceneBoss = IsBossSceneBoss(target) || IsBossSceneBoss(healthManager);
+            bool sequenceBoss = !sceneBoss && IsInBossSequence();
             _deadRegistry.Register(
                 key,
                 target.transform.position.x,
                 target.transform.position.y,
-                IsBoss(target) || IsBoss(healthManager));
+                sceneBoss || sequenceBoss,
+                sequenceBoss);
 
             if (_plugin?.SessionState?.IsConnected != true) return;
 
@@ -419,6 +436,8 @@ namespace SilksongCoop.Mod.State
         public void ApplyRemoteHit(EnemySyncPacket packet, NetworkPeerId sender)
         {
             bool dead = packet.EventType == EnemySyncEventType.Death;
+            var session = _plugin?.SessionState;
+            bool localHost = session?.IsHost == true;
 
             // A death must match the exact object: the packet may describe an enemy in a
             // scene this peer has not loaded, and the proximity fallback could kill an
@@ -439,6 +458,18 @@ namespace SilksongCoop.Mod.State
                 // later duplicate look like a stale packet.
                 if (dead && packet.EnemyKey != 0)
                 {
+                    // The host is authoritative for every enemy it simulates. When the
+                    // enemy is not loaded there is no host HP to merge, so a client's kill
+                    // claim must at least prove that a damaging hit happened. A zero-damage
+                    // claim used to be cached and then applied as an authoritative snapshot
+                    // when the scene loaded, bypassing the hosted HP check entirely.
+                    if (localHost && packet.Damage <= 0)
+                    {
+                        SilksongCoopPlugin.LogWarn(
+                            $"[EnemySync] Ignored deferred client death claim for {packet.EnemyKey}: no damage");
+                        return;
+                    }
+
                     CachePendingDeadEnemy(
                         new EnemySnapshotEntry
                         {
@@ -448,13 +479,12 @@ namespace SilksongCoop.Mod.State
                             PositionX = packet.PositionX,
                             PositionY = packet.PositionY
                         },
-                        packet.Header.Timestamp);
+                        packet.Header.Timestamp,
+                        packet.Damage,
+                        fromRemoteClaim: true);
                 }
                 return;
             }
-
-            var session = _plugin?.SessionState;
-            bool localHost = session?.IsHost == true;
 
             // The authority model is defined in docs/state-authority.md. While the host
             // actively simulates this enemy, its absolute HP is authoritative and every
@@ -550,11 +580,14 @@ namespace SilksongCoop.Mod.State
                         // Prefer the target's own key over a proximity-match packet key.
                         ulong actualKey = GetFreshKey(target);
                         if (actualKey != 0) enemyKey = actualKey;
+                        bool sceneBoss = IsBossSceneBoss(target);
+                        bool sequenceBoss = !sceneBoss && IsInBossSequence();
                         _deadRegistry.Register(
                             enemyKey,
                             target.transform.position.x,
                             target.transform.position.y,
-                            IsBoss(target));
+                            sceneBoss || sequenceBoss,
+                            sequenceBoss);
                         target.hp = 0;
                         target.Die(null, AttackTypes.Nail, ignoreEvasion: true);
                         return enemyKey;
@@ -1991,7 +2024,11 @@ namespace SilksongCoop.Mod.State
         /// per session, so an entry dropped while the boss room is unloaded would otherwise
         /// leave the boss alive on the late joiner's screen forever.
         /// </summary>
-        private void CachePendingDeadEnemy(EnemySnapshotEntry entry, uint timestamp)
+        private void CachePendingDeadEnemy(
+            EnemySnapshotEntry entry,
+            uint timestamp,
+            short damage = 0,
+            bool fromRemoteClaim = false)
         {
             if (entry.EnemyKey == 0) return;
 
@@ -2013,7 +2050,9 @@ namespace SilksongCoop.Mod.State
                 _pendingDeadEnemies[entry.EnemyKey] = new PendingDeadEnemy
                 {
                     Entry = entry,
-                    Timestamp = timestamp
+                    Timestamp = timestamp,
+                    Damage = damage,
+                    FromRemoteClaim = fromRemoteClaim
                 };
             }
 
@@ -2039,6 +2078,18 @@ namespace SilksongCoop.Mod.State
                     pending.Entry.PositionY,
                     allowProximity: false);
                 if (target == null) continue;
+
+                // Defense in depth for claims cached by older code paths: the host will
+                // not apply a deferred client death that carries no damage proof.
+                if (_plugin?.SessionState?.IsHost == true &&
+                    pending.FromRemoteClaim &&
+                    pending.Damage <= 0)
+                {
+                    SilksongCoopPlugin.LogWarn(
+                        $"[EnemySync] Dropped deferred death claim for {pending.Entry.EnemyKey}: no damage");
+                    (resolved ??= new List<ulong>()).Add(pair.Key);
+                    continue;
+                }
 
                 if (_service.TryAcceptSnapshot(
                         pending.Entry.EnemyKey,
@@ -2069,11 +2120,56 @@ namespace SilksongCoop.Mod.State
         }
 
         /// <summary>
+        /// Detects the end of a repeatable boss sequence and drops the death records and
+        /// per-enemy state that belonged to that attempt. Without this, the next attempt
+        /// reused the same keys, sent both an alive snapshot and the old death, and the
+        /// client killed the freshly spawned boss immediately.
+        /// </summary>
+        private void TrackBossSequenceTransition()
+        {
+            bool inSequence = IsInBossSequence();
+            if (inSequence == _wasInBossSequence) return;
+            _wasInBossSequence = inSequence;
+
+            if (inSequence) return;
+
+            var droppedKeys = _deadRegistry.DropSequenceBosses();
+            if (droppedKeys.Count == 0) return;
+
+            for (int i = 0; i < droppedKeys.Count; i++)
+            {
+                ulong key = droppedKeys[i];
+                _service.Forget(key);
+                _lastSnapshot.Remove(key);
+                _pendingDeadEnemies.Remove(key);
+            }
+
+            while (_pendingDeadOrder.Count > 0 &&
+                   !_pendingDeadEnemies.ContainsKey(_pendingDeadOrder.Peek()))
+            {
+                _pendingDeadOrder.Dequeue();
+            }
+
+            // The next periodic snapshot must resend the bosses that remain dead for the
+            // save; the cleared sequence bosses are now alive again.
+            _forceSnapshotReconcile = true;
+
+            SilksongCoopPlugin.LogInfo(
+                $"[EnemySync] Boss sequence ended; cleared {droppedKeys.Count} repeatable boss death record(s)");
+        }
+
+        /// <summary>
         /// Whether this enemy is a boss that does not respawn with its scene. BossSceneController
         /// covers scripted boss rooms; a boss sequence covers Godhome-style fights where every
         /// active enemy belongs to the run.
         /// </summary>
         private static bool IsBoss(HealthManager healthManager)
+            => IsBossSceneBoss(healthManager) || IsInBossSequence();
+
+        /// <summary>
+        /// A boss owned by the scripted boss room. These persist for the whole save.
+        /// </summary>
+        private static bool IsBossSceneBoss(HealthManager healthManager)
         {
             if (healthManager == null) return false;
 
@@ -2096,9 +2192,6 @@ namespace SilksongCoop.Mod.State
                     if (lookup != null && lookup.ContainsKey(healthManager))
                         return true;
                 }
-
-                if (BossSequenceController.IsInSequence)
-                    return true;
             }
             catch (Exception ex)
             {
@@ -2111,6 +2204,22 @@ namespace SilksongCoop.Mod.State
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Whether a repeatable boss sequence is running. Such bosses reuse their hierarchy
+        /// keys between attempts and must not keep a death record after the sequence ends.
+        /// </summary>
+        private static bool IsInBossSequence()
+        {
+            try
+            {
+                return BossSequenceController.IsInSequence;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool MatchesHierarchy(KeyHolder holder, Transform transform)

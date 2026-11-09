@@ -5,20 +5,20 @@ receiver resolves conflicts, and which failures are accepted by design. When cod
 and this document disagree, the code is wrong unless the document is updated in
 the same change.
 
-## Current state (3.3.3)
+## Current state (3.3.4)
 
 | State | Writer(s) | Receiver rule | Conflict resolution |
 |---|---|---|---|
 | Player transform | Each player writes their own | Field-validated (NaN/Infinity, world bounds, velocity cap) | Newer tick wins; interpolation smooths the rest |
-| Player death/revive | Each player writes their own lifecycle | `DeathLifecycleCoordinator` with epoch + event type; per-peer alive/position state when several peers are registered | Higher epoch is adopted; stale epochs are ignored; the nearest living peer is selected and re-validated (alive, connected, same scene) immediately before the revive; a fallback goes to the local bench with an explicit banner/toast; `PartnerReviveTrigger` is sent only after `ConfirmReviveAtPartner` |
+| Player death/revive | Each player writes their own lifecycle | `DeathLifecycleCoordinator` with epoch + event type; per-peer alive/position state when several peers are registered | One wipe advances the epoch once: a higher epoch adopted while still reloading is not incremented again by the local respawn; stale epochs are ignored; the nearest living peer is selected and re-validated (alive, connected, same scene) immediately before the revive; a fallback goes to the local bench with an explicit banner/toast; `PartnerReviveTrigger` is sent only after `ConfirmReviveAtPartner` |
 | Shared vitals (max HP, silk spools, needle) | Either peer | Monotonic upgrades only, applied under `RemoteApplyScope` | A higher value wins; a lower value never downgrades |
-| Currency | Either peer | Transaction GUID dedup + per-sender sequence, applied under `RemoteApplyScope` | Duplicate transaction IDs are dropped; wallet is clamped to a sane ceiling |
+| Currency | Either peer | Transaction GUID dedup + per-sender sequence, applied under `RemoteApplyScope` | Duplicate transaction IDs are dropped; a packet's total may repair a missed gain only while no local wallet change has been sent since the peer's previous packet; `PlayerData` is reconciled to the Core wallet after the queued change settles |
 | Inventory unlocks | Either peer | Idempotent per item key | First unlock wins; repeats are no-ops |
-| Enemy/boss HP, deaths and phases | Attackers replicate hits; the host simulates its scene | `EnemySyncController` + `EnemySyncService`; a replicated hit re-emits `TookDamage`/`TOOK DAMAGE` without reapplying damage | Exact `scene + hierarchy` key; see the authority rules below (absolute host HP, additive client damage only without host authority, per-sender sequence dedup) |
-| World events (breakables, gates) | Either peer | `WorldEventPacket` with `StateRevision`/`OriginPeerId` | Per-key revision/ origin comparison in `RevisionLedger`; replay of stored events on join; queued stale revisions are discarded before applying |
-| Persistent world values | Either peer | `PersistentStatePacket` keyed by scene + persistent id + type; `SaveState` hook plus a 1 Hz poll of `PersistentBoolItem`/`PersistentIntItem` | Same `RevisionLedger` rule; the retry queue re-checks staleness before `SaveState`; polling seeds initial scene state without broadcasting it |
+| Enemy/boss HP, deaths and phases | Attackers replicate hits; the host simulates its scene | `EnemySyncController` + `EnemySyncService`; a replicated hit re-emits `TookDamage`/`TOOK DAMAGE` without reapplying damage | Exact `scene + hierarchy` key; see the authority rules below (absolute host HP, additive client damage only without host authority, per-sender sequence dedup, damage proof for deferred kills) |
+| World events (breakables, gates) | Either peer | `WorldEventPacket` with `StateRevision`/`OriginPeerId` | Per-object **and per-origin** revision comparison in `RevisionLedger`; replay of stored events on join; queued stale revisions are discarded before applying |
+| Persistent world values | Either peer | `PersistentStatePacket` keyed by scene + persistent id + type; `SaveState` hook plus a 1 Hz poll of `PersistentBoolItem`/`PersistentIntItem` | Same per-origin `RevisionLedger` rule; the retry queue re-checks staleness before `SaveState`; polling seeds initial scene state without broadcasting it |
 | Quest flags from NPC dialogue | Either peer | `QuestStatePacket` (0x56) after `NPCControlBase` dialogue plus a 1 Hz poll; only allowlisted `PlayerData` bool/int names | Diff of before/after snapshots; only changed values are sent and applied under `RemoteApplyScope`; batches are split by encoded size; overlapping dialogue flushes keep separate baselines |
-| Physical pickups | Either peer | Stable pickup key + one-time claim tracking | Exact key first; coordinates only as a guarded fallback |
+| Physical pickups | Either peer | Stable pickup key + one-time claim tracking | Exact key first; the coordinate fallback only compares a local pickup with a peer claim (or vice versa), never two drops from the same simulation |
 
 ## What "authoritative" means here
 
@@ -61,6 +61,12 @@ the same peer whose `EnemySnapshotPacket` is accepted. The rules are:
    This avoids the visible "enemy heals" window while the host is still receiving
    the hit. A later snapshot (after host authority has caught up) may correct the
    value normally.
+7. **Deferred kills need damage proof.** If the host receives a client `Death` for
+   an enemy it has not loaded (another scene), there is no host HP to merge. The
+   claim is cached only when `Damage > 0`; a zero-damage claim is rejected instead
+   of being applied later as an authoritative snapshot. A repeatable boss sequence
+   drops its death records when the sequence ends, so the next attempt starts
+   alive.
 
 The host is not authoritative for player position, death lifecycle, wallet,
 inventory or world-progress state, and there is no vote-based arbitration. Do not

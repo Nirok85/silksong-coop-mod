@@ -1761,14 +1761,23 @@ namespace SilksongCoop.Mod.UI
         {
             try
             {
-                _currentTransport?.Disconnect();
-                _sessionState?.SetDisconnected(DisconnectReason.GracefulDisconnect);
-
                 var plugin = SilksongCoopPlugin.Instance;
-                plugin?.CancelReconnect();
-                if (plugin != null && plugin.UdpTransport != null)
+                if (plugin != null)
                 {
-                    plugin.SetActiveTransport(plugin.UdpTransport);
+                    // Full gameplay teardown: the UDP disconnect event is delivered on a
+                    // later frame and would be ignored after SetDisconnected, leaving the
+                    // clone, death state and spectator mode behind.
+                    plugin.DisconnectFromSession(DisconnectReason.GracefulDisconnect);
+                    plugin.CancelReconnect();
+                    if (plugin.UdpTransport != null)
+                    {
+                        plugin.SetActiveTransport(plugin.UdpTransport);
+                    }
+                }
+                else
+                {
+                    _currentTransport?.Disconnect();
+                    _sessionState?.SetDisconnected(DisconnectReason.GracefulDisconnect);
                 }
 
                 _currentHostAddress = "";

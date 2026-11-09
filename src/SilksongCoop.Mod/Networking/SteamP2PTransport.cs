@@ -59,6 +59,12 @@ namespace SilksongCoop.Mod.Networking
         private int _pendingCreateGeneration;
         private bool _deferredHostStart;
 
+        // Every CreateLobby request, in callback order. A callback dequeues the request it
+        // belongs to instead of comparing against the newest request. Requests invalidated
+        // by the timeout are replaced with a sentinel so their late lobby is left open.
+        private const int InvalidLobbyRequestGeneration = int.MinValue;
+        private readonly Queue<int> _pendingCreateLobbyGenerations = new Queue<int>();
+
         // Monotonic clock: system-clock adjustments must not stretch or collapse the
         // Steam connection timeout.
         private static readonly Stopwatch Clock = Stopwatch.StartNew();
@@ -329,6 +335,11 @@ namespace SilksongCoop.Mod.Networking
             _pendingCreateLobbyCount = 1;
             _pendingCreateLobbyStartedMs = NowMs();
             _pendingCreateGeneration = _sessionGeneration;
+            _pendingCreateLobbyGenerations.Enqueue(_sessionGeneration);
+            // Steam is expected to answer every request, but never let a pathological
+            // failure to deliver callbacks grow the queue without bound.
+            while (_pendingCreateLobbyGenerations.Count > 8)
+                _pendingCreateLobbyGenerations.Dequeue();
             SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, _maxPlayers);
         }
 
@@ -860,6 +871,17 @@ namespace SilksongCoop.Mod.Networking
                 NowMs() - _pendingCreateLobbyStartedMs > SteamConnectionTimeoutMs)
             {
                 Logger?.LogWarning("[Steam] Lobby creation callback timed out; allowing a new host request");
+
+                // Unblock the UI, but keep one sentinel per outstanding request. Steam may
+                // still deliver that callback later; it must leave its lobby instead of
+                // being mistaken for the result of the new request.
+                int outstanding = _pendingCreateLobbyGenerations.Count;
+                for (int i = 0; i < outstanding; i++)
+                {
+                    _pendingCreateLobbyGenerations.Dequeue();
+                    _pendingCreateLobbyGenerations.Enqueue(InvalidLobbyRequestGeneration);
+                }
+
                 _pendingCreateLobbyCount = 0;
             }
 
@@ -895,9 +917,22 @@ namespace SilksongCoop.Mod.Networking
                         try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
                         _lobbyId = CSteamID.Nil;
                     }
+
+                    // Leaving the lobby is not enough: the P2P session and the remembered
+                    // peer id survived the timeout. A delayed protocol-valid datagram from
+                    // the abandoned host then bypassed the lobby-membership check and
+                    // resurrected the connection after the user had already left.
+                    ClearAdditionalPeers(DisconnectReason.Timeout, notify: true);
+                    if (_remoteSteamId != CSteamID.Nil)
+                    {
+                        try { SteamNetworking.CloseP2PSessionWithUser(_remoteSteamId); } catch { /* best-effort */ }
+                        _remoteSteamId = CSteamID.Nil;
+                    }
+
                     IsConnected = false;
                     _peerConnectNotified = false;
                     _protocolRejectedPeer = CSteamID.Nil;
+                    _lastPongReceivedMs = 0;
                     MarkConnectedPeersDirty();
                     OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.Timeout);
                 }
@@ -1336,7 +1371,12 @@ namespace SilksongCoop.Mod.Networking
         {
             // This callback consumes one in-flight CreateLobby request, whether it succeeds
             // or fails. The deferred host request (if any) is started from PollEvents once
-            // this callback has fully unwound.
+            // this callback has fully unwound. The dequeued generation identifies which
+            // request this callback belongs to; comparing against the newest request let a
+            // delayed callback adopt its old lobby after a timeout and new host attempt.
+            int requestGeneration = _pendingCreateLobbyGenerations.Count > 0
+                ? _pendingCreateLobbyGenerations.Dequeue()
+                : InvalidLobbyRequestGeneration;
             if (_pendingCreateLobbyCount > 0) _pendingCreateLobbyCount--;
 
             var createdLobby = new CSteamID(callback.m_ulSteamIDLobby);
@@ -1355,9 +1395,12 @@ namespace SilksongCoop.Mod.Networking
                 return;
             }
 
-            // A stale CreateLobby result after Disconnect/transport switch must not leave
-            // an orphan lobby open.
-            if (!IsHost || _lobbyRequestGeneration != _sessionGeneration)
+            // A stale CreateLobby result after Disconnect/transport switch or after the
+            // request timed out must not leave an orphan lobby open, and must never be
+            // adopted as the result of a newer request.
+            if (requestGeneration == InvalidLobbyRequestGeneration ||
+                !IsHost ||
+                requestGeneration != _sessionGeneration)
             {
                 try { SteamMatchmaking.LeaveLobby(createdLobby); } catch { /* best-effort */ }
                 return;
@@ -1641,7 +1684,12 @@ namespace SilksongCoop.Mod.Networking
                 }
             }
             else if ((callback.m_rgfChatMemberStateChange & (uint)EChatMemberStateChange.k_EChatMemberStateChangeLeft) != 0 ||
-                     (callback.m_rgfChatMemberStateChange & (uint)EChatMemberStateChange.k_EChatMemberStateChangeDisconnected) != 0)
+                     (callback.m_rgfChatMemberStateChange & (uint)EChatMemberStateChange.k_EChatMemberStateChangeDisconnected) != 0 ||
+                     // Kicked/Banned remove the member just as effectively as leaving;
+                     // treating them as harmless left the peer registered and its future
+                     // traffic accepted without another lobby-membership check.
+                     (callback.m_rgfChatMemberStateChange & (uint)EChatMemberStateChange.k_EChatMemberStateChangeKicked) != 0 ||
+                     (callback.m_rgfChatMemberStateChange & (uint)EChatMemberStateChange.k_EChatMemberStateChangeBanned) != 0)
             {
                 CSteamID leftUser = new CSteamID(callback.m_ulSteamIDUserChanged);
 

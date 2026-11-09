@@ -26,6 +26,13 @@ namespace SilksongCoop.Core.State
         private readonly Dictionary<(NetworkPeerId Peer, CurrencyType Currency), uint> _lastCurrencySequences = new();
         private uint _currencySequence;
 
+        // Local wallet revisions per currency and the revision observed when a peer's
+        // last packet arrived. A received total may only repair a missed delta while no
+        // local change has been sent since that packet was received; otherwise the peer's
+        // total predates our change and "repairing" upward would undo a concurrent spend.
+        private readonly Dictionary<CurrencyType, uint> _localCurrencyRevisions = new();
+        private readonly Dictionary<(NetworkPeerId Peer, CurrencyType Currency), uint> _peerViewLocalRevision = new();
+
         // Physical drops exist in BOTH simulations (each client kills the same enemy and
         // spawns its own copy). A shared key (plus a small proximity window for physics
         // drift) lets the second pickup be credited only once.
@@ -35,6 +42,10 @@ namespace SilksongCoop.Core.State
             public float X;
             public float Y;
             public CurrencyType Currency;
+            // True when the claim came from the peer. Proximity matching is only used
+            // between the two simulations (local vs peer); two claims from the same
+            // simulation are distinct world drops even when they lie close together.
+            public bool FromRemote;
         }
 
         private readonly List<ClaimedPickup> _claimedPickups = new List<ClaimedPickup>();
@@ -204,6 +215,8 @@ namespace SilksongCoop.Core.State
                 SharedShellShards = initialShards;
                 // New session: peer sequences restart from 1 on both sides.
                 _lastCurrencySequences.Clear();
+                _peerViewLocalRevision.Clear();
+                _localCurrencyRevisions.Clear();
                 _currencySequence = 0;
                 // _claimedPickups intentionally survives: a peer that connects later must be
                 // told which drops were already collected so it can remove its local copies.
@@ -397,15 +410,23 @@ namespace SilksongCoop.Core.State
 
                 if (pickupKey != 0)
                 {
-                    if (IsPickupAlreadyClaimed(currency, pickupKey, pickupX, pickupY))
+                    if (IsPickupAlreadyClaimed(currency, pickupKey, pickupX, pickupY, isLocalClaim: true))
                     {
                         duplicatePickup = true;
                         currentWallet = currency == CurrencyType.Rosaries ? SharedRosaries : SharedShellShards;
                     }
                     else
                     {
-                        TrackClaimedPickup(currency, pickupKey, pickupX, pickupY);
+                        TrackClaimedPickup(currency, pickupKey, pickupX, pickupY, fromRemote: false);
                     }
+                }
+
+                if (!duplicatePickup)
+                {
+                    // Record that this wallet changed locally. A peer packet generated
+                    // before it arrived must not repair the wallet upward.
+                    _localCurrencyRevisions.TryGetValue(currency, out uint revision);
+                    _localCurrencyRevisions[currency] = revision + 1;
                 }
 
                 if (!duplicatePickup)
@@ -457,7 +478,8 @@ namespace SilksongCoop.Core.State
             OnOutgoingCurrencyBroadcast?.Invoke(packet);
         }
 
-        private bool IsPickupAlreadyClaimed(CurrencyType currency, ulong pickupKey, float x, float y)
+        private bool IsPickupAlreadyClaimed(
+            CurrencyType currency, ulong pickupKey, float x, float y, bool isLocalClaim)
         {
             for (int i = 0; i < _claimedPickups.Count; i++)
             {
@@ -466,6 +488,12 @@ namespace SilksongCoop.Core.State
 
                 if (pickupKey != 0 && claimed.Key == pickupKey)
                     return true;
+
+                // Proximity is a reconciliation window between the two simulations of the
+                // same drop (local pickup vs peer claim). Claims recorded by the same
+                // simulation are separate objects: two coins can lie 0.1 units apart and
+                // must both be credited.
+                if (claimed.FromRemote != isLocalClaim) continue;
 
                 if (!float.IsNaN(x) && !float.IsNaN(y) &&
                     !float.IsNaN(claimed.X) && !float.IsNaN(claimed.Y))
@@ -480,14 +508,16 @@ namespace SilksongCoop.Core.State
             return false;
         }
 
-        private void TrackClaimedPickup(CurrencyType currency, ulong pickupKey, float x, float y)
+        private void TrackClaimedPickup(
+            CurrencyType currency, ulong pickupKey, float x, float y, bool fromRemote)
         {
             _claimedPickups.Add(new ClaimedPickup
             {
                 Key = pickupKey,
                 X = x,
                 Y = y,
-                Currency = currency
+                Currency = currency,
+                FromRemote = fromRemote
             });
 
             while (_claimedPickups.Count > MaxTrackedPickupKeys)
@@ -646,14 +676,16 @@ namespace SilksongCoop.Core.State
                 int delta = packet.DeltaAmount;
                 int updatedWallet;
                 bool claimedPickup = false;
+                bool canReconcile;
                 lock (_transactionLock)
                 {
+                    var sequenceKey = (sender, packet.Currency);
+
                     // Reject replayed/out-of-order snapshots even after their GUID has been
                     // evicted from the 500-entry FIFO. Packets from this build always carry
                     // a per-sender sequence; the value 0 keeps older/manual callers working.
                     if (packet.PickupUniqueId > 0)
                     {
-                        var sequenceKey = (sender, packet.Currency);
                         if (_lastCurrencySequences.TryGetValue(sequenceKey, out uint lastSequence) &&
                             packet.PickupUniqueId <= lastSequence)
                         {
@@ -662,11 +694,22 @@ namespace SilksongCoop.Core.State
                         _lastCurrencySequences[sequenceKey] = packet.PickupUniqueId;
                     }
 
+                    // A total is only trustworthy while no local wallet change has been sent
+                    // since the peer's previous packet. Otherwise the packet was generated
+                    // before the peer saw that change, and adopting its higher total would
+                    // resurrect currency spent concurrently (A spends 80 while B gains 10).
+                    _localCurrencyRevisions.TryGetValue(packet.Currency, out uint localRevision);
+                    _peerViewLocalRevision.TryGetValue(sequenceKey, out uint observedRevision);
+                    canReconcile = localRevision == observedRevision;
+                    _peerViewLocalRevision[sequenceKey] = localRevision;
+
                     // The same physical drop exists in both simulations. If this drop was
                     // already credited locally, the local player collected its copy — do not
                     // apply the peer's delta a second time.
                     if (packet.PickupKey != 0 &&
-                        IsPickupAlreadyClaimed(packet.Currency, packet.PickupKey, packet.PickupX, packet.PickupY))
+                        IsPickupAlreadyClaimed(
+                            packet.Currency, packet.PickupKey, packet.PickupX, packet.PickupY,
+                            isLocalClaim: false))
                     {
                         return;
                     }
@@ -680,7 +723,9 @@ namespace SilksongCoop.Core.State
 
                     if (packet.PickupKey != 0)
                     {
-                        TrackClaimedPickup(packet.Currency, packet.PickupKey, packet.PickupX, packet.PickupY);
+                        TrackClaimedPickup(
+                            packet.Currency, packet.PickupKey, packet.PickupX, packet.PickupY,
+                            fromRemote: true);
                         claimedPickup = true;
                     }
 
@@ -688,9 +733,14 @@ namespace SilksongCoop.Core.State
                     {
                         if (delta == 0)
                         {
-                            // Initial sync: take the higher of the two values so a local
-                            // pickup that has not been synced yet is not clobbered.
-                            SharedRosaries = Math.Max(SharedRosaries, Math.Max(0, packet.TotalWalletAmount));
+                            // Initial sync/resync: take the higher of the two values so a
+                            // local pickup that has not been synced yet is not clobbered.
+                            // Skip it while a local change is in flight: the sender's total
+                            // predates that change.
+                            if (canReconcile)
+                            {
+                                SharedRosaries = Math.Max(SharedRosaries, Math.Max(0, packet.TotalWalletAmount));
+                            }
                         }
                         else
                         {
@@ -700,7 +750,7 @@ namespace SilksongCoop.Core.State
                             // This repairs a missed positive delta without resurrecting a
                             // stale balance after a concurrent spend (negative deltas are
                             // applied arithmetically and stay clamped at zero).
-                            if (delta > 0 && packet.TotalWalletAmount > 0)
+                            if (canReconcile && delta > 0 && packet.TotalWalletAmount > 0)
                             {
                                 next = Math.Max(next, packet.TotalWalletAmount);
                             }
@@ -713,12 +763,15 @@ namespace SilksongCoop.Core.State
                     {
                         if (delta == 0)
                         {
-                            SharedShellShards = Math.Max(SharedShellShards, Math.Max(0, packet.TotalWalletAmount));
+                            if (canReconcile)
+                            {
+                                SharedShellShards = Math.Max(SharedShellShards, Math.Max(0, packet.TotalWalletAmount));
+                            }
                         }
                         else
                         {
                             int next = (int)Math.Clamp((long)SharedShellShards + delta, 0, PacketValidator.MaxReasonableCurrency);
-                            if (delta > 0 && packet.TotalWalletAmount > 0)
+                            if (canReconcile && delta > 0 && packet.TotalWalletAmount > 0)
                             {
                                 next = Math.Max(next, packet.TotalWalletAmount);
                             }
