@@ -48,4 +48,11 @@
 - Steam two-client и experimental 3+ (late join, per-peer revive, promotion,
   длинная сессия).
 - Реальный packet loss/latency за пределами loopback и симулированных тестов.
-- Публикация GitHub Release 3.3.4 и архивов — после этих проверок.
+
+## Публикация
+
+- Релиз: [v3.3.4](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.4), published, не draft/prerelease.
+- Тег `v3.3.4` (annotated) указывает на `2fb3bc8`.
+- `SilksongCoop_v3.3.4.zip`: `21fe8b63ac4715264de27b067e018548ab2a9da66278707780f91e102207efad`.
+- `SilksongCoop_v3.3.4_plugin-only.zip`: `2a14d66147b1976e75573e0d0ed6fd6fe94ed65cebfdebac1adaa21a0e449133`.
+- Обе суммы совпали после независимого скачивания ассетов с GitHub.
