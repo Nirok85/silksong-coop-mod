@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using SilksongCoop.Core.Events;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol.Packets;
@@ -18,6 +19,7 @@ namespace SilksongCoop.Mod.Services
         private readonly IVitalsSyncService _vitalsSync;
         private readonly DeathLifecycleCoordinator _deathCoordinator;
         private readonly EnemySyncController? _enemySync;
+        private readonly Queue<CurrencySyncPacket> _pendingUdpCurrency = new();
 
         /// <summary>
         /// Optional diagnostics sink, wired up after the Menu UI is created.
@@ -63,13 +65,8 @@ namespace SilksongCoop.Mod.Services
             var session = _sessionService.SessionState;
             if (session?.IsConnected != true || !session.RemotePeerId.HasValue) return;
 
-            _currencyResyncTimer += Time.unscaledDeltaTime;
-            if (_currencyResyncTimer >= 5f)
-            {
-                _currencyResyncTimer = 0f;
-                _vitalsSync.BroadcastCurrentCurrency();
-            }
-
+            if (_transportService.ActiveTransport is LiteNetLibTransport udp)
+                FlushUdpCurrency(udp);
             ReconcileWalletIfDue();
         }
 
@@ -77,19 +74,15 @@ namespace SilksongCoop.Mod.Services
 
         public void OnSessionEnded()
         {
-            _currencyResyncTimer = 0f;
-            _walletReconcilePending = false;
+            _pendingUdpCurrency.Clear();
+            _walletReconcilePlayerData = null;
             _walletReconcileAttempts = 0;
         }
 
-        private float _currencyResyncTimer;
-
-        // A delta-only application can leave PlayerData behind the shared wallet when the
-        // sender's packet also repaired a missed gain. Re-apply the shared total after the
-        // game's queued currency change has settled, instead of trusting the packet delta
-        // as the final balance.
+        // CurrencyManager queues changes. Align PlayerData with the accepted Core balance
+        // after the game drains that queue.
         private float _walletReconcileAt;
-        private bool _walletReconcilePending;
+        private PlayerData? _walletReconcilePlayerData;
         private int _walletReconcileAttempts;
 
         private void OnOutgoingVitals(VitalsSyncPacket packet)
@@ -99,7 +92,29 @@ namespace SilksongCoop.Mod.Services
 
         private void OnOutgoingCurrency(CurrencySyncPacket packet)
         {
+            if (_transportService.ActiveTransport is LiteNetLibTransport udp && udp.IsConnected)
+            {
+                _pendingUdpCurrency.Enqueue(packet);
+                FlushUdpCurrency(udp);
+                return;
+            }
+
             SendPacket(packet, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency);
+        }
+
+        private void FlushUdpCurrency(LiteNetLibTransport transport)
+        {
+            // The transport and game hooks run on Unity's thread. Keep order and wait for
+            // space instead of handing a spend to the transport when it would drop it.
+            while (transport.IsConnected && _pendingUdpCurrency.Count > 0 &&
+                   transport.ReliableBacklogCount < NetworkLimits.ReliableBacklogCap)
+            {
+                if (!PacketSender.SendToAll(transport, _pendingUdpCurrency.Peek(),
+                    DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, 64, Diagnostics))
+                    break;
+
+                _pendingUdpCurrency.Dequeue();
+            }
         }
 
         private void SendPacket<T>(T packet, DeliveryMethod method, byte channel) where T : struct, IPacket
@@ -156,46 +171,33 @@ namespace SilksongCoop.Mod.Services
             if (pd == null) return;
             using (RemoteApplyScope.Begin())
             {
-                var silkgurrencyType = (type == Core.Protocol.Packets.CurrencyType.Rosaries) ? CurrencyType.Money : CurrencyType.Shard;
-                if (delta != 0)
-                {
-                    CurrencyManager.ChangeCurrency(delta, silkgurrencyType, true);
-                }
-                else
-                {
-                    int current = (type == Core.Protocol.Packets.CurrencyType.Rosaries) ? pd.geo : pd.ShellShards;
-                    int diff = total - current;
-                    if (diff > 0)
-                        CurrencyManager.ChangeCurrency(diff, silkgurrencyType, true);
-                }
+                var gameCurrency = type == Core.Protocol.Packets.CurrencyType.Rosaries ? CurrencyType.Money : CurrencyType.Shard;
+                CurrencyManager.ChangeCurrency(delta, gameCurrency, true);
             }
 
-            // The shared core wallet may be higher than PlayerData + delta when the
-            // sender's packet reconciled a missed gain. Apply the remainder once the
-            // queued change above has been processed by the game.
-            ScheduleWalletReconcile();
+            ScheduleWalletReconcile(pd);
         }
 
-        private void ScheduleWalletReconcile()
+        private void ScheduleWalletReconcile(PlayerData playerData)
         {
-            _walletReconcilePending = true;
+            _walletReconcilePlayerData = playerData;
             _walletReconcileAttempts = 4;
             _walletReconcileAt = Time.unscaledTime + 0.15f;
         }
 
         private void ReconcileWalletIfDue()
         {
-            if (!_walletReconcilePending || Time.unscaledTime < _walletReconcileAt) return;
+            var pd = _walletReconcilePlayerData;
+            if (pd == null || Time.unscaledTime < _walletReconcileAt) return;
 
             // CurrencyManager only queues the change; while the game is paused the queue
             // does not drain and comparing PlayerData with Core would apply the remainder
             // a second time once it does. Retry on the first unpaused frame.
             if (Time.timeScale <= 0f) return;
 
-            var pd = PlayerData.instance;
-            if (pd == null)
+            if (!ReferenceEquals(pd, PlayerData.instance))
             {
-                _walletReconcilePending = false;
+                _walletReconcilePlayerData = null;
                 return;
             }
 
@@ -221,18 +223,12 @@ namespace SilksongCoop.Mod.Services
             if (applied && _walletReconcileAttempts > 0)
                 _walletReconcileAt = Time.unscaledTime + 0.15f;
             else
-                _walletReconcilePending = false;
+                _walletReconcilePlayerData = null;
         }
 
         private void OnRemotePickupClaimed(Core.Protocol.Packets.CurrencyType currency, ulong key, float x, float y)
         {
-            // The event originates from HandleCurrencyPacket, which only runs for the single
-            // session peer today. Pass it explicitly so the Unity layer can require that the
-            // collector is actually in the local scene before using coordinates.
-            var sender = _sessionService.SessionState?.RemotePeerId;
-            if (!sender.HasValue) return;
-
-            _enemySync?.OnRemotePickupClaimed(currency, key, x, y, sender.Value);
+            _enemySync?.OnRemotePickupClaimed(currency, key);
         }
     }
 }

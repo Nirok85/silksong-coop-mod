@@ -18,6 +18,31 @@ namespace SilksongCoop.Tests.Integration
         private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(5);
         private static readonly TimeSpan DeliveryTimeout = TimeSpan.FromSeconds(5);
 
+        [Theory]
+        [InlineData("1.0.30000", true)]
+        [InlineData("1.0.29999", false)]
+        [InlineData(null, false)]
+        public void RealUdp_RequiresMatchingGameVersion(string? clientVersion, bool shouldConnect)
+        {
+            using var host = new LiteNetLibTransport(1, "Host", "1.0.30000");
+            using var client = new LiteNetLibTransport(2, "Client", clientVersion);
+            host.StartHost(0);
+            client.Connect($"127.0.0.1:{host.BoundPort}");
+
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+            do
+            {
+                host.PollEvents();
+                client.PollEvents();
+                if (host.IsConnected && client.IsConnected) break;
+                Thread.Sleep(5);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            Assert.Equal(shouldConnect, host.IsConnected);
+            Assert.Equal(shouldConnect, client.IsConnected);
+        }
+
         [Fact]
         public void RealUdp_AllGameChannels_DeliverPayloadsBothWays()
         {
@@ -178,7 +203,7 @@ namespace SilksongCoop.Tests.Integration
             Assert.True(host.IsConnected);
             Assert.Equal((ulong)2, host.RemotePeerId!.Value.Value);
             Assert.False(second.IsConnected,
-                "v8 UDP transport must not accept a second remote peer");
+                "UDP transport must not accept a second remote peer");
 
             // The active peer is unaffected by the rejected handshake.
             var received = new List<byte>();

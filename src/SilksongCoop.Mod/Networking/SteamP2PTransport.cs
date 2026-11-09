@@ -1,6 +1,7 @@
 // SteamP2PTransport.cs — Steamworks.NET P2P network transport using lobbies and SteamNetworking.
 // Handles lobby creation/joining, friend invites, P2P packet streaming, and connection lifecycle.
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics;
 using SilksongCoop.Core.Networking;
@@ -50,27 +51,15 @@ namespace SilksongCoop.Mod.Networking
         private int _lobbyRequestGeneration = -1;
         private ulong _requestedLobbyId;
 
-        // Steam's LobbyCreated callback carries no request id. Two overlapping CreateLobby
-        // calls therefore make it impossible to tell which lobby a callback describes: the
-        // older lobby can be adopted as the new session and the real result rejected as
-        // stale. Only one create may be in flight; a newer host request waits for it.
-        private int _pendingCreateLobbyCount;
-        private long _pendingCreateLobbyStartedMs;
-        private int _pendingCreateGeneration;
-        private bool _deferredHostStart;
-
-        // Every CreateLobby request, in callback order. A callback dequeues the request it
-        // belongs to instead of comparing against the newest request. Requests invalidated
-        // by the timeout are replaced with a sentinel so their late lobby is left open.
-        private const int InvalidLobbyRequestGeneration = int.MinValue;
-        private readonly Queue<int> _pendingCreateLobbyGenerations = new Queue<int>();
-
+        private bool _creatingLobby;
+        private long _lobbyCreateStartedMs;
+        private readonly HashSet<CSteamID> _earlyHostLobbyEntries = new();
         // Monotonic clock: system-clock adjustments must not stretch or collapse the
         // Steam connection timeout.
         private static readonly Stopwatch Clock = Stopwatch.StartNew();
         private static long NowMs() => (long)(Clock.ElapsedTicks * 1000.0 / Stopwatch.Frequency);
         private const long SteamConnectionTimeoutMs = 15000;
-        private readonly Callback<LobbyCreated_t> _lobbyCreatedCallback;
+        private readonly CallResult<LobbyCreated_t> _lobbyCreatedResult;
         private readonly Callback<LobbyEnter_t> _lobbyEnteredCallback;
         private readonly Callback<P2PSessionRequest_t> _p2pSessionRequestCallback;
         private readonly Callback<GameLobbyJoinRequested_t> _gameLobbyJoinRequestedCallback;
@@ -84,8 +73,11 @@ namespace SilksongCoop.Mod.Networking
         // with the protocol revision. A peer that does not speak the same revision is
         // disconnected instead of appearing "connected" while all packets are unusable.
         private byte[] _sendBuffer = new byte[4096];
-        private const int ProtocolPrefixSize = 2;
+        private const int ProtocolPrefixSize = sizeof(ushort) + sizeof(ulong);
+        private readonly byte[] _protocolPrefix = new byte[ProtocolPrefixSize];
+        private readonly string _gameVersion = UnityEngine.Application.version;
         private const string LobbyProtocolKey = "protocol_version";
+        private const string LobbyGameVersionKey = "game_version";
         private const string LobbyMaxPlayersKey = "max_players";
         
         // Channels actually used by the protocol. The RTT probes live on the dedicated
@@ -239,6 +231,8 @@ namespace SilksongCoop.Mod.Networking
         public SteamP2PTransport(int maxPlayers = 2)
         {
             _maxPlayers = Math.Clamp(maxPlayers, 2, 8);
+            BinaryPrimitives.WriteUInt16LittleEndian(_protocolPrefix, NetworkProtocol.Version);
+            BinaryPrimitives.WriteUInt64LittleEndian(_protocolPrefix.AsSpan(sizeof(ushort)), NetworkProtocol.GameVersionTag(_gameVersion));
             // BUG-14: never fall back to peer id 0 — the clone dictionaries key on
             // NetworkPeerId and a zero id could collide with the transport-default
             // sentinel. The Steam transport cannot connect without Steam anyway, but the
@@ -266,7 +260,7 @@ namespace SilksongCoop.Mod.Networking
 
             LocalPeerId = new NetworkPeerId(localId, localName);
 
-            _lobbyCreatedCallback = Callback<LobbyCreated_t>.Create(OnLobbyCreated);
+            _lobbyCreatedResult = CallResult<LobbyCreated_t>.Create(OnLobbyCreated);
             _lobbyEnteredCallback = Callback<LobbyEnter_t>.Create(OnLobbyEntered);
             _p2pSessionRequestCallback = Callback<P2PSessionRequest_t>.Create(OnP2PSessionRequest);
             _gameLobbyJoinRequestedCallback = Callback<GameLobbyJoinRequested_t>.Create(OnGameLobbyJoinRequested);
@@ -288,21 +282,7 @@ namespace SilksongCoop.Mod.Networking
                 throw new InvalidOperationException("Steam is not initialized or offline.");
             }
 
-            if (_pendingCreateLobbyCount > 0)
-            {
-                if (_pendingCreateGeneration == _sessionGeneration)
-                {
-                    // Already creating the lobby this request wants. Firing a second
-                    // CreateLobby would make the callback ambiguous.
-                    Logger?.LogInfo("[Steam] Lobby creation is already in flight; ignoring duplicate host request");
-                    return;
-                }
-
-                _deferredHostStart = true;
-                Logger?.LogInfo("[Steam] Deferring host start until the previous CreateLobby callback arrives");
-                return;
-            }
-
+            if (_creatingLobby) return;
             StartHostCore();
         }
 
@@ -331,16 +311,17 @@ namespace SilksongCoop.Mod.Networking
             _lobbyId = CSteamID.Nil;
             MarkConnectedPeersDirty();
             _requestedLobbyId = 0;
-            _lobbyRequestGeneration = ++_sessionGeneration;
-            _pendingCreateLobbyCount = 1;
-            _pendingCreateLobbyStartedMs = NowMs();
-            _pendingCreateGeneration = _sessionGeneration;
-            _pendingCreateLobbyGenerations.Enqueue(_sessionGeneration);
-            // Steam is expected to answer every request, but never let a pathological
-            // failure to deliver callbacks grow the queue without bound.
-            while (_pendingCreateLobbyGenerations.Count > 8)
-                _pendingCreateLobbyGenerations.Dequeue();
-            SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, _maxPlayers);
+            _sessionGeneration++;
+            _lobbyRequestGeneration = -1;
+            var call = SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, _maxPlayers);
+            if (call == SteamAPICall_t.Invalid)
+            {
+                IsHost = false;
+                throw new InvalidOperationException("Steam did not start lobby creation.");
+            }
+            _lobbyCreatedResult.Set(call);
+            _lobbyCreateStartedMs = NowMs();
+            _creatingLobby = true;
         }
 
         /// <summary>
@@ -361,6 +342,7 @@ namespace SilksongCoop.Mod.Networking
                 throw new ArgumentException("Steam transport requires a valid 64-bit Steam Lobby ID.", nameof(addressOrCode));
             }
 
+            CancelLobbyCreation();
             IsHost = false;
             SilksongCoopPlugin.Instance?.SetActiveTransport(this);
 
@@ -407,10 +389,7 @@ namespace SilksongCoop.Mod.Networking
             _sessionGeneration++;
             _lobbyRequestGeneration = -1;
             _requestedLobbyId = 0;
-            // A queued host start belongs to the previous intent. The transport keeps
-            // _pendingCreateLobbyCount until Steam delivers the outstanding callback so a
-            // later StartHost cannot create a second, ambiguous lobby.
-            _deferredHostStart = false;
+            CancelLobbyCreation();
             _protocolRejectedPeer = CSteamID.Nil;
             _additionalRejectedPeers.Clear();
 
@@ -563,13 +542,8 @@ namespace SilksongCoop.Mod.Networking
         {
             try
             {
-                byte[] handshake =
-                {
-                    (byte)(NetworkProtocol.Version & 0xFF),
-                    (byte)(NetworkProtocol.Version >> 8)
-                };
                 if (!SteamNetworking.SendP2PPacket(
-                        peer, handshake, (uint)handshake.Length,
+                        peer, _protocolPrefix, ProtocolPrefixSize,
                         EP2PSend.k_EP2PSendReliable, 2))
                 {
                     Logger?.LogWarning($"[Steam] Failed to send handshake to {peer.m_SteamID}");
@@ -826,8 +800,7 @@ namespace SilksongCoop.Mod.Networking
 
             // Protocol revision first; older builds sent an unprefixed packet, which the
             // receiver now rejects before dispatching it to the game layer.
-            _sendBuffer[0] = (byte)(NetworkProtocol.Version & 0xFF);
-            _sendBuffer[1] = (byte)(NetworkProtocol.Version >> 8);
+            _protocolPrefix.CopyTo(_sendBuffer, 0);
             Buffer.BlockCopy(data, offset, _sendBuffer, ProtocolPrefixSize, length);
 
             try
@@ -865,33 +838,14 @@ namespace SilksongCoop.Mod.Networking
                 Logger?.LogError($"[Steam] RunCallbacks threw: {ex.Message}");
             }
 
-            // A CreateLobby callback carries no request id. If it never arrives (Steam
-            // failure), unblock a queued host request instead of waiting forever.
-            if (_pendingCreateLobbyCount > 0 &&
-                NowMs() - _pendingCreateLobbyStartedMs > SteamConnectionTimeoutMs)
+            if (_creatingLobby && NowMs() - _lobbyCreateStartedMs > SteamConnectionTimeoutMs)
             {
-                Logger?.LogWarning("[Steam] Lobby creation callback timed out; allowing a new host request");
-
-                // Unblock the UI, but keep one sentinel per outstanding request. Steam may
-                // still deliver that callback later; it must leave its lobby instead of
-                // being mistaken for the result of the new request.
-                int outstanding = _pendingCreateLobbyGenerations.Count;
-                for (int i = 0; i < outstanding; i++)
-                {
-                    _pendingCreateLobbyGenerations.Dequeue();
-                    _pendingCreateLobbyGenerations.Enqueue(InvalidLobbyRequestGeneration);
-                }
-
-                _pendingCreateLobbyCount = 0;
+                Logger?.LogWarning("[Steam] Lobby creation timed out");
+                CancelLobbyCreation();
+                IsHost = false;
+                OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.ConnectionFailed);
             }
 
-            if (_deferredHostStart && _pendingCreateLobbyCount == 0)
-            {
-                _deferredHostStart = false;
-                StartHostCore();
-            }
-
-            // Connection timeout check
             if (!IsConnected && _connectionAttemptStartMs > 0 && !IsHost)
             {
                 long elapsed = NowMs() - _connectionAttemptStartMs;
@@ -1144,11 +1098,10 @@ namespace SilksongCoop.Mod.Networking
                                 }
                             }
 
-                            ushort remoteProtocol = (ushort)(_readBuffer[0] | (_readBuffer[1] << 8));
-                            if (remoteProtocol != NetworkProtocol.Version)
+                            if (!_readBuffer.AsSpan(0, ProtocolPrefixSize).SequenceEqual(_protocolPrefix))
                             {
                                 Logger?.LogWarning(
-                                    $"[Steam] Peer protocol {remoteProtocol} is incompatible with local {NetworkProtocol.Version}; disconnecting {remoteId.m_SteamID}");
+                                    $"[Steam] Peer protocol or game version mismatch; disconnecting {remoteId.m_SteamID}");
 
                                 bool isPrimary = _remoteSteamId == remoteId ||
                                                  (_remoteSteamId == CSteamID.Nil && IsHost);
@@ -1367,64 +1320,44 @@ namespace SilksongCoop.Mod.Networking
 
         #region Steam Callback Handlers
 
-        private void OnLobbyCreated(LobbyCreated_t callback)
+        private void CancelLobbyCreation()
         {
-            // This callback consumes one in-flight CreateLobby request, whether it succeeds
-            // or fails. The deferred host request (if any) is started from PollEvents once
-            // this callback has fully unwound. The dequeued generation identifies which
-            // request this callback belongs to; comparing against the newest request let a
-            // delayed callback adopt its old lobby after a timeout and new host attempt.
-            int requestGeneration = _pendingCreateLobbyGenerations.Count > 0
-                ? _pendingCreateLobbyGenerations.Dequeue()
-                : InvalidLobbyRequestGeneration;
-            if (_pendingCreateLobbyCount > 0) _pendingCreateLobbyCount--;
+            if (_creatingLobby)
+                _lobbyCreatedResult.Cancel();
+            _creatingLobby = false;
+            LeaveEarlyHostLobbies(CSteamID.Nil);
+        }
 
+        private void LeaveEarlyHostLobbies(CSteamID keep)
+        {
+            foreach (var lobby in _earlyHostLobbyEntries)
+            {
+                if (lobby == keep) continue;
+                try { SteamMatchmaking.LeaveLobby(lobby); } catch { /* best-effort */ }
+            }
+            _earlyHostLobbyEntries.Clear();
+        }
+
+        private void OnLobbyCreated(LobbyCreated_t callback, bool ioFailure)
+        {
+            _creatingLobby = false;
             var createdLobby = new CSteamID(callback.m_ulSteamIDLobby);
-
-            // Some Steam builds deliver LobbyEntered before LobbyCreated. If that already
-            // accepted this exact lobby, only publish its metadata.
-            if (callback.m_eResult == EResult.k_EResultOK &&
-                IsHost && _lobbyId != CSteamID.Nil && _lobbyId == createdLobby)
+            if (ioFailure || callback.m_eResult != EResult.k_EResultOK || createdLobby == CSteamID.Nil)
             {
-                _lobbyRequestGeneration = -1;
-                _requestedLobbyId = createdLobby.m_SteamID;
-                SteamMatchmaking.SetLobbyData(_lobbyId, "mod_name", "SilksongCoop");
-                SteamMatchmaking.SetLobbyData(_lobbyId, "mod_version", SilksongCoopPlugin.PluginVersion);
-                SteamMatchmaking.SetLobbyData(_lobbyId, LobbyProtocolKey, NetworkProtocol.Version.ToString());
-                SteamMatchmaking.SetLobbyData(_lobbyId, LobbyMaxPlayersKey, _maxPlayers.ToString());
-                return;
-            }
-
-            // A stale CreateLobby result after Disconnect/transport switch or after the
-            // request timed out must not leave an orphan lobby open, and must never be
-            // adopted as the result of a newer request.
-            if (requestGeneration == InvalidLobbyRequestGeneration ||
-                !IsHost ||
-                requestGeneration != _sessionGeneration)
-            {
-                try { SteamMatchmaking.LeaveLobby(createdLobby); } catch { /* best-effort */ }
-                return;
-            }
-
-            _lobbyRequestGeneration = -1;
-
-            if (callback.m_eResult == EResult.k_EResultOK)
-            {
-                _lobbyId = createdLobby;
-                _requestedLobbyId = createdLobby.m_SteamID;
-                SteamMatchmaking.SetLobbyData(_lobbyId, "mod_name", "SilksongCoop");
-                // Real build version, not a hard-coded placeholder — the joining client
-                // compares it and refuses to mix incompatible protocol layouts.
-                SteamMatchmaking.SetLobbyData(_lobbyId, "mod_version", SilksongCoopPlugin.PluginVersion);
-                SteamMatchmaking.SetLobbyData(_lobbyId, LobbyProtocolKey, NetworkProtocol.Version.ToString());
-                SteamMatchmaking.SetLobbyData(_lobbyId, LobbyMaxPlayersKey, _maxPlayers.ToString());
-            }
-            else
-            {
+                LeaveEarlyHostLobbies(CSteamID.Nil);
                 IsHost = false;
-                _connectionAttemptStartMs = 0;
                 OnPeerDisconnected?.Invoke(new NetworkPeerId(0), DisconnectReason.ConnectionFailed);
+                return;
             }
+
+            LeaveEarlyHostLobbies(createdLobby);
+            _lobbyId = createdLobby;
+            _requestedLobbyId = createdLobby.m_SteamID;
+            SteamMatchmaking.SetLobbyData(_lobbyId, "mod_name", "SilksongCoop");
+            SteamMatchmaking.SetLobbyData(_lobbyId, "mod_version", SilksongCoopPlugin.PluginVersion);
+            SteamMatchmaking.SetLobbyData(_lobbyId, LobbyProtocolKey, NetworkProtocol.Version.ToString());
+            SteamMatchmaking.SetLobbyData(_lobbyId, LobbyGameVersionKey, _gameVersion);
+            SteamMatchmaking.SetLobbyData(_lobbyId, LobbyMaxPlayersKey, _maxPlayers.ToString());
         }
 
         private void OnLobbyEntered(LobbyEnter_t callback)
@@ -1432,6 +1365,14 @@ namespace SilksongCoop.Mod.Networking
             Logger?.LogInfo($"[Steam] OnLobbyEntered: response={callback.m_EChatRoomEnterResponse}, lobby={callback.m_ulSteamIDLobby}");
 
             var enteredLobby = new CSteamID(callback.m_ulSteamIDLobby);
+            if (IsHost && _creatingLobby)
+            {
+                // LobbyEnter has no call handle. Wait for the matching CreateLobby result
+                // to select this lobby or leave it if it belonged to an expired request.
+                if (callback.m_EChatRoomEnterResponse == (uint)EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess)
+                    _earlyHostLobbyEntries.Add(enteredLobby);
+                return;
+            }
             bool isOwnHostLobby = IsHost && _lobbyId != CSteamID.Nil && _lobbyId == enteredLobby;
             if (!isOwnHostLobby)
             {
@@ -1467,6 +1408,7 @@ namespace SilksongCoop.Mod.Networking
                 string modName = SteamMatchmaking.GetLobbyData(_lobbyId, "mod_name");
                 string modVersion = SteamMatchmaking.GetLobbyData(_lobbyId, "mod_version");
                 string protocolText = SteamMatchmaking.GetLobbyData(_lobbyId, LobbyProtocolKey);
+                string gameVersion = SteamMatchmaking.GetLobbyData(_lobbyId, LobbyGameVersionKey);
                 string maxPlayersText = SteamMatchmaking.GetLobbyData(_lobbyId, LobbyMaxPlayersKey);
                 bool protocolMatches = ushort.TryParse(protocolText, out ushort hostProtocol) &&
                                        hostProtocol == NetworkProtocol.Version;
@@ -1481,7 +1423,7 @@ namespace SilksongCoop.Mod.Networking
 
                 if (!string.Equals(modName, "SilksongCoop", StringComparison.Ordinal) ||
                     !string.Equals(modVersion, SilksongCoopPlugin.PluginVersion, StringComparison.Ordinal) ||
-                    !protocolMatches)
+                    !protocolMatches || !string.Equals(gameVersion, _gameVersion, StringComparison.Ordinal))
                 {
                     Logger?.LogWarning(
                         $"[Steam] Refusing incompatible lobby: mod='{modName}', version='{modVersion}', protocol='{protocolText}' (local {NetworkProtocol.Version})");
@@ -1584,6 +1526,7 @@ namespace SilksongCoop.Mod.Networking
             if (_lobbyId != CSteamID.Nil && _lobbyId == callback.m_steamIDLobby)
                 return;
 
+            CancelLobbyCreation();
             IsHost = false;
             _protocolRejectedPeer = CSteamID.Nil;
             _additionalRejectedPeers.Clear();
@@ -1749,7 +1692,7 @@ namespace SilksongCoop.Mod.Networking
             // Steamworks keeps the registered callbacks alive until they are disposed.
             // Without this a recreated transport would still receive lobby/invite events
             // from the previous instance.
-            _lobbyCreatedCallback?.Dispose();
+            _lobbyCreatedResult.Dispose();
             _lobbyEnteredCallback?.Dispose();
             _p2pSessionRequestCallback?.Dispose();
             _gameLobbyJoinRequestedCallback?.Dispose();

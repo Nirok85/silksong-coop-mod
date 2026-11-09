@@ -16,8 +16,11 @@
   meantime is not rolled back by the older cached entry.
 - **Reliable-drop recovery.** If transport backpressure rejects reliable packets,
   the host replays world/persistent state and a full snapshot after the backlog
-  drains; quest sync re-sends its full allowlisted snapshot. A packet lost by the
-  OS without a backlog drop is covered only by the next live update or replay.
+  drains, and quest sync re-sends its full allowlisted snapshot. Currency queues
+  behind the backlog and is sent in order as space becomes available. The queue
+  belongs to the connection that produced the transactions.
+- **Save changes.** Leaving or replacing the loaded save ends the co-op session
+  and discards pending wallet reconciliation for that save.
 - **Boss-death catch-up.** The host keeps boss death records across scene changes
   (`DeadEnemyRegistry`), and a client that receives a dead-boss snapshot while the
   boss room is unloaded caches it until the scene loads. Ordinary-enemy deaths are
@@ -27,8 +30,8 @@
 
 - There is no `SessionId` / `ConnectionEpoch` handshake and no delta resync:
   catch-up is a full replay of the registered state.
-- There is no "reconnect rejected because a different session" check beyond the
-  protocol/mod version agreement.
+- Compatibility checks include the game build, but reconnect has no separate
+  identifier for the previous game session.
 - Disconnect during a scene change does not preserve per-scene state in a formal
   way; only the pending caches and the boss-death registry described above survive.
 

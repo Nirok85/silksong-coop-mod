@@ -141,6 +141,7 @@ namespace SilksongCoop.Core.Networking
         private const int MaxPreAuthBuckets = 1024;
         private const int MaxDatagramsPerPoll = 256;
         private readonly ConnectionAuthenticator _authenticator = new ConnectionAuthenticator();
+        private readonly ulong _gameVersionTag;
         // Derived after the HMAC challenge; authenticates every post-handshake datagram
         // (data, ACK, ping/pong, disconnect). Null for legacy direct-IP no-code sessions.
         private byte[]? _sessionKey;
@@ -313,9 +314,11 @@ namespace SilksongCoop.Core.Networking
         /// </summary>
         /// <param name="peerId">The unique identifier for this peer.</param>
         /// <param name="displayName">Optional display name for this peer.</param>
-        public LiteNetLibTransport(ulong peerId = 1, string displayName = "Player")
+        /// <param name="gameVersion">Exact game build expected by this transport, when used in-game.</param>
+        public LiteNetLibTransport(ulong peerId = 1, string displayName = "Player", string? gameVersion = null)
         {
             _localPeerId = new NetworkPeerId(peerId, displayName);
+            _gameVersionTag = NetworkProtocol.GameVersionTag(gameVersion);
         }
 
         /// <summary>
@@ -567,20 +570,29 @@ namespace SilksongCoop.Core.Networking
         /// </summary>
         private byte[] BuildHandshakePayload()
         {
-            byte[] payload = new byte[11];
+            byte[] payload = new byte[_gameVersionTag == 0 ? 11 : 19];
             Buffer.BlockCopy(BitConverter.GetBytes(LocalPeerId.Value), 0, payload, 0, 8);
             payload[8] = (byte)(_roomCode != null ? 1 : 0);
             Buffer.BlockCopy(BitConverter.GetBytes(ProtocolVersion), 0, payload, 9, 2);
+            if (_gameVersionTag != 0)
+                BinaryPrimitives.WriteUInt64LittleEndian(payload.AsSpan(11), _gameVersionTag);
             return payload;
         }
 
         private byte[] BuildHandshakeAckPayload()
         {
-            byte[] payload = new byte[10];
+            byte[] payload = new byte[_gameVersionTag == 0 ? 10 : 18];
             Buffer.BlockCopy(BitConverter.GetBytes(LocalPeerId.Value), 0, payload, 0, 8);
             Buffer.BlockCopy(BitConverter.GetBytes(ProtocolVersion), 0, payload, 8, 2);
+            if (_gameVersionTag != 0)
+                BinaryPrimitives.WriteUInt64LittleEndian(payload.AsSpan(10), _gameVersionTag);
             return payload;
         }
+
+        private bool MatchesGameVersion(ReadOnlySpan<byte> payload, int offset) => _gameVersionTag == 0
+            ? payload.Length == offset
+            : payload.Length == offset + sizeof(ulong) &&
+              BinaryPrimitives.ReadUInt64LittleEndian(payload.Slice(offset)) == _gameVersionTag;
 
         /// <summary>
         /// Drops the current peer but keeps the listening socket open (host only), so the
@@ -1175,8 +1187,12 @@ namespace SilksongCoop.Core.Networking
                                 break;
                             }
 
-                            ulong clientPeerValue = payload.Length >= 8 ? BitConverter.ToUInt64(payload) : 2;
-                            if (payload.Length > 11) clientPeerValue = 2; // Cap oversized payloads
+                            if (!MatchesGameVersion(payload, 11))
+                            {
+                                CoopLog.Warn("[LiteNetLibTransport] Rejected client with a different game version");
+                                break;
+                            }
+                            ulong clientPeerValue = BitConverter.ToUInt64(payload);
                             var candidatePeer = new NetworkPeerId(clientPeerValue, "Client");
 
                             // BUG-B2: only challenge clients that announced a room code (flag
@@ -1344,6 +1360,11 @@ namespace SilksongCoop.Core.Networking
                                 break;
                             }
 
+                            if (!MatchesGameVersion(payload, 10))
+                            {
+                                CoopLog.Warn("[LiteNetLibTransport] Rejected host with a different game version");
+                                break;
+                            }
                             ulong hostPeerValue = BitConverter.ToUInt64(payload);
                             _remotePeerId = new NetworkPeerId(hostPeerValue, "Host");
                             _isConnected = true;

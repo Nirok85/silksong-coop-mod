@@ -14,6 +14,13 @@ namespace SilksongCoop.Mod.Hooks
     [HarmonyPatch]
     public static class SceneTransitionHooks
     {
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(GameManager), nameof(GameManager.ReturnToMainMenu))]
+        public static void PrefixReturnToMainMenu()
+        {
+            SilksongCoopPlugin.Instance?.OnLeavingSave();
+        }
+
         /// <summary>
         /// Hook that fires when the game begins a scene transition.
         /// </summary>

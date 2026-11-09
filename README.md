@@ -1,4 +1,4 @@
-﻿# Hollow Knight: Silksong — Co-op Multiplayer Mod
+# Hollow Knight: Silksong — Co-op Multiplayer Mod
 
 ![Platform](https://img.shields.io/badge/Platform-PC%20%7C%20Steam-blue)
 ![Engine](https://img.shields.io/badge/Engine-Unity%206000.0.50f1%20(Mono%20x64)-black)
@@ -170,7 +170,7 @@ The diagnostics overlay (**F11**) shows ping (RTT), packet loss and bandwidth gr
 | Unlocked items (auto-unlock for partner) | Death / revival state |
 | Benches & checkpoints | |
 
-> **Enemy/world sync:** enemy/boss HP is host-authoritative while the host simulates the scene. A hit from the host carries absolute HP, so a hit already included in a snapshot is not counted twice; while host authority is fresh, hits and deaths from other peers are deferred to the host's snapshot/death confirmation. When the host is in another room (no fresh snapshot), clients combine simultaneous damage additively and may finish the enemy themselves. A replicated hit also re-emits the boss's `TookDamage`/`TOOK DAMAGE` signals so PlayMaker phases stay in step. `Breakable` walls and `Gate.Open()` are mirrored; `PersistentBoolItem`/`PersistentIntItem` doors, chests and lifts use the `SaveState` hook plus a 1 Hz poll. Physical drops are deduplicated by their persistent id (or scene/type/position for dynamic drops) plus a 0.5-unit drift window. Quest-related `PlayerData` bool/int flags whose names contain `Quest` are replicated after NPC dialogues and by a 1 Hz poll (`[Gameplay] SyncQuestFlags`); purely visual dialogue text is not mirrored. Steam full-mesh 3+ (`[Network] SteamMaxPlayers`) is experimental: additional peers get clones/transform/world sync plus per-peer vitals, death/revive and HUD, but a live 3+ session has not been verified yet. Scripted doors driven only by `PlayerData` flags and boss phases that listen to neither damage signal may still differ. Progression packets are range-validated, but co-op still assumes invited friends — a modified client can raise its own progression within those limits.
+> **Enemy/world sync:** enemy/boss HP is host-authoritative while the host simulates the scene. A hit from the host carries absolute HP, so a hit already included in a snapshot is not counted twice; while host authority is fresh, hits and deaths from other peers are deferred to the host's snapshot/death confirmation. When the host is in another room (no fresh snapshot), clients combine simultaneous damage additively and may finish the enemy themselves. A replicated hit also re-emits the boss's `TookDamage`/`TOOK DAMAGE` signals so PlayMaker phases stay in step. `Breakable` walls and `Gate.Open()` are mirrored; `PersistentBoolItem`/`PersistentIntItem` doors, chests and lifts use the `SaveState` hook plus a 1 Hz poll. Physical drops are deduplicated by an exact key derived from their persistent ID or, for dynamic drops, their scene, type and rounded position. Quest-related `PlayerData` bool/int flags whose names contain `Quest` are replicated after NPC dialogues and by a 1 Hz poll (`[Gameplay] SyncQuestFlags`); purely visual dialogue text is not mirrored. Steam full-mesh 3+ (`[Network] SteamMaxPlayers`) is experimental: additional peers get clones/transform/world sync plus per-peer vitals, death/revive and HUD, but a live 3+ session has not been verified yet. Scripted doors driven only by `PlayerData` flags and boss phases that listen to neither damage signal may still differ. Progression packets are range-validated, but co-op still assumes invited friends — a modified client can raise its own progression within those limits.
 
 ---
 
@@ -314,13 +314,13 @@ The mod is in active development. The following limitations are by design or are
   peers get clones/transform/world sync plus per-peer vitals, death/revive and HUD.
   A live session with 3+ clients has not been verified yet, and UDP remains
   single-peer.
-- **Same game and mod version on both sides** is required; Steam lobbies verify the full mod version and protocol revision, every Steam datagram carries the revision, and the UDP handshake carries its own, so mismatched builds are refused.
+- **Use the same game and mod build on both sides.** Steam and UDP verify the game version and protocol revision. Steam also checks the full mod version on lobby entry.
 - **Boss phase edge cases.** Enemy/boss HP is now shared and host snapshots correct drift, but a phase that is driven exclusively by a `TookDamage` event (rather than polling HP) may lag by one hit on the partner's machine.
 - **Scripted doors.** `Breakable` walls, `Gate.Open()` and `PersistentBoolItem`/`PersistentIntItem` state (levers, chests, caches and most scripted doors) are mirrored while both players are in the same scene. A door whose state exists only in a PlayMaker FSM or `PlayerData` flag without a persistent component, or one changed while the partner is in another scene, is still local.
 - **Maximum stats only grow.** `maxHealth`, `silkMax` and `nailUpgrades` are monotonic; a higher value on one peer never downgrades the other.
 - **Internet play requires Steam.** Direct UDP works over LAN or VPN (Radmin/Hamachi); the host's detected LAN IP may be wrong behind VPNs. Use the room code: the menu host sets `RequireRoomCode`, so a bare `IP:Port` is rejected unless the host deliberately disabled it.
 - **Revive requires the partner to be in the same scene.** Cross-scene death falls back to a bench respawn.
-- **Pickup deduplication is positional.** A drop that lands more than 0.5 units away on the two machines (very high frame-time divergence) can still be credited twice; the periodic wallet reconciliation converges the total to the higher value.
+- **Dynamic drops use a rounded position in their key.** If copies land at different rounded positions, both can be credited.
 
 ## FAQ & Troubleshooting
 

@@ -13,7 +13,7 @@ using SilksongCoop.Core.Protocol.Packets;
 // HUD. It does not simulate movement or combat.
 //
 // Usage:
-//   dotnet run --project tools/SilksongCoop.Probe -c Release -- "SK-XXXX-..." [seconds]
+//   dotnet run --project tools/SilksongCoop.Probe -c Release -- "SK-XXXX-..." [seconds] [game-version]
 //
 // Start a UDP host in the game (F10 -> HOST -> create UDP), copy the room code, then
 // run this probe. Use a direct IP:port only if the host did not require a room code.
@@ -23,7 +23,7 @@ int seconds = args.Length > 1 && int.TryParse(args[1], out int parsedSeconds)
     ? Math.Clamp(parsedSeconds, 5, 300)
     : 20;
 
-using var transport = new LiteNetLibTransport(2, "Probe");
+using var transport = new LiteNetLibTransport(2, "Probe", args.Length > 2 ? args[2] : null);
 var counts = new Dictionary<PacketType, int>();
 bool connected = false;
 

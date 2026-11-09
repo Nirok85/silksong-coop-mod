@@ -14,10 +14,11 @@ the partner HUD and report `Connected`.
 4. Run:
 
 ```powershell
-dotnet run --project tools/SilksongCoop.Probe -c Release -- "SK-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" 20
+dotnet run --project tools/SilksongCoop.Probe -c Release -- "SK-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" 20 1.0.30000
 ```
 
-The second argument is the duration in seconds (5–300, default 20).
+The second argument is the duration in seconds (5–300, default 20). Set the
+third argument to the host's game version as reported in its compatibility log.
 
 Expected output on a healthy host:
 

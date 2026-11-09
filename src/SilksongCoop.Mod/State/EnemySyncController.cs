@@ -102,6 +102,9 @@ namespace SilksongCoop.Mod.State
         // Replay registries survive a reconnect but must not leak across save slots or a
         // save reload. The tracker is seeded by the game's profile id/save singleton.
         private readonly SaveScopeTracker _saveScope = new SaveScopeTracker();
+        // Transport peer IDs can change when the same player switches roles or transports.
+        // Keep the revision origin stable for the lifetime of the local replay cache.
+        private readonly ulong _revisionOrigin = BitConverter.ToUInt64(Guid.NewGuid().ToByteArray(), 0) | 1UL;
         // Dead snapshot entries whose scene is not loaded yet. Applying them immediately
         // dropped bosses killed before a late joiner entered the room; retry after a load.
         private readonly Dictionary<ulong, PendingDeadEnemy> _pendingDeadEnemies =
@@ -991,7 +994,7 @@ namespace SilksongCoop.Mod.State
                 PositionX = transform.position.x,
                 PositionY = transform.position.y,
                 StateRevision = _packetSequence,
-                OriginPeerId = (ulong)(_plugin?.ActiveTransport?.LocalPeerId.Value ?? 0)
+                OriginPeerId = _revisionOrigin
             };
 
             // Register even before a peer connects so a later client is caught up.
@@ -1072,7 +1075,7 @@ namespace SilksongCoop.Mod.State
                     var stored = item.Persistent;
                     SendPersistentPacket(new PersistentStatePacket
                     {
-                        Header = new PacketHeader(PacketType.PersistentState, WorldChannel, ++_packetSequence, NetworkClock.NowMs),
+                        Header = new PacketHeader(PacketType.PersistentState, WorldChannel, 0, NetworkClock.NowMs),
                         ItemKey = stored.ItemKey,
                         ValueType = stored.ValueType,
                         Value = stored.Value,
@@ -1135,7 +1138,7 @@ namespace SilksongCoop.Mod.State
         public void ApplyRemoteWorldEvent(WorldEventPacket packet, NetworkPeerId sender)
         {
             if (RemoteApplyScope.IsActive) return;
-            if (packet.ObjectKey == 0) return;
+            if (packet.ObjectKey == 0 || packet.OriginPeerId == _revisionOrigin) return;
 
             // Idempotency: drop stale or duplicate revisions. A revision is only meaningful
             // together with its origin, and revision 0 means "unversioned" (legacy sender).
@@ -1322,7 +1325,7 @@ namespace SilksongCoop.Mod.State
                 ValueType = valueType,
                 Value = value,
                 StateRevision = _packetSequence,
-                OriginPeerId = (ulong)(_plugin?.ActiveTransport?.LocalPeerId.Value ?? 0)
+                OriginPeerId = _revisionOrigin
             };
 
             RecordPersistentStateForReplay(packet);
@@ -1364,12 +1367,7 @@ namespace SilksongCoop.Mod.State
         public void ApplyRemotePersistentState(PersistentStatePacket packet)
         {
             if (RemoteApplyScope.IsActive) return;
-            if (packet.ItemKey == 0) return;
-
-            // Idempotency: drop stale or duplicate revisions. A revision is only meaningful
-            // together with its origin, and revision 0 means "unversioned" (legacy sender).
-            if (_appliedPersistentRevisions.IsStale(packet.ItemKey, packet.StateRevision, packet.OriginPeerId))
-                return;
+            if (packet.ItemKey == 0 || IsStalePersistentState(packet)) return;
 
             EnsurePersistentIndex();
 
@@ -1396,6 +1394,19 @@ namespace SilksongCoop.Mod.State
                 RecordPersistentStateForReplay(packet);
                 _appliedPersistentRevisions.Record(packet.ItemKey, packet.StateRevision, packet.OriginPeerId);
             }
+        }
+
+        private bool IsStalePersistentState(PersistentStatePacket packet)
+        {
+            if (packet.OriginPeerId == _revisionOrigin) return true;
+            if (_appliedPersistentRevisions.IsStale(packet.ItemKey, packet.StateRevision, packet.OriginPeerId))
+                return true;
+
+            // Replay packets reserve header sequence zero. Catch-up must not overwrite
+            // a value that was last changed in this save.
+            return packet.Header.TickSequence == 0 &&
+                   _persistentStates.TryGetValue(packet.ItemKey, out var local) &&
+                   local.OriginPeerId == _revisionOrigin;
         }
 
         /// <summary>
@@ -1549,8 +1560,7 @@ namespace SilksongCoop.Mod.State
                 // queued (for example when the object streamed in while the pump was
                 // waiting). Re-checking here prevents the old cached value from rolling the
                 // door/chest/lift back and persisting that rollback through SaveState.
-                if (_appliedPersistentRevisions.IsStale(
-                        pair.Key, pair.Value.StateRevision, pair.Value.OriginPeerId))
+                if (IsStalePersistentState(pair.Value))
                 {
                     (stale ??= new List<ulong>()).Add(pair.Key);
                     continue;
@@ -1833,101 +1843,31 @@ namespace SilksongCoop.Mod.State
             return _pickupCache;
         }
 
-        /// <summary>
-        /// Destroys the local copy of a drop that the peer collected. Uses the stable key first
-        /// and falls back to a single nearby drop of the same currency, but only while the
-        /// sender is confirmed to be in the local scene.
-        /// </summary>
-        /// <param name="currency">Currency type of the collected drop.</param>
-        /// <param name="key">Stable pickup key from the sender, or 0 when unavailable.</param>
-        /// <param name="x">World X reported by the sender.</param>
-        /// <param name="y">World Y reported by the sender.</param>
-        /// <param name="sender">Peer that collected the drop.</param>
-        public void OnRemotePickupClaimed(
-            SilksongCoop.Core.Protocol.Packets.CurrencyType currency,
-            ulong key,
-            float x,
-            float y,
-            NetworkPeerId sender)
+        /// <summary>Disables the local copy only when its stable key matches the claim.</summary>
+        public void OnRemotePickupClaimed(Core.Protocol.Packets.CurrencyType currency, ulong key)
         {
-            bool sameScene = IsSenderInLocalScene(sender);
+            if (key == 0) return;
+
             var pickups = GetCachedPickups(out bool scannedNow);
-            var target = FindPickup(
-                pickups, currency, key, x, y, sameScene, out int nearby, out bool exactMatch);
+            var target = FindPickup(pickups, currency, key);
+            if (target == null && !scannedNow)
+                target = FindPickup(ScanPickups(), currency, key);
 
-            // The cache exists to coalesce a burst, not to hide a drop that spawned or
-            // moved after the last scan. A proximity-only hit is never trusted from a
-            // reused cache: rescan live once before disabling a drop.
-            if (!exactMatch && !scannedNow)
-            {
-                pickups = ScanPickups();
-                target = FindPickup(
-                    pickups, currency, key, x, y, sameScene, out nearby, out exactMatch);
-            }
-
-            if (nearby > 1)
-            {
-                LogAmbiguousMatch($"Pickup: {nearby} candidates within 2.5 units");
-                return;
-            }
-
-            if (target != null)
-            {
-                target.Disable(0f);
-            }
+            if (target != null) target.Disable(0f);
         }
 
         private static CurrencyObjectBase? FindPickup(
-            CurrencyObjectBase[] pickups,
-            SilksongCoop.Core.Protocol.Packets.CurrencyType currency,
-            ulong key,
-            float x,
-            float y,
-            bool sameScene,
-            out int nearby,
-            out bool exactMatch)
+            CurrencyObjectBase[] pickups, Core.Protocol.Packets.CurrencyType currency, ulong key)
         {
-            CurrencyObjectBase? nearest = null;
-            const float radiusSq = 2.5f * 2.5f;
-            float nearestSq = radiusSq;
-            nearby = 0;
-            exactMatch = false;
-            bool wantShards = currency == SilksongCoop.Core.Protocol.Packets.CurrencyType.ShellShards;
-
-            for (int i = 0; i < pickups.Length; i++)
+            bool wantShards = currency == Core.Protocol.Packets.CurrencyType.ShellShards;
+            foreach (var pickup in pickups)
             {
-                var pickup = pickups[i];
                 if (pickup == null || !pickup.gameObject.activeInHierarchy) continue;
-
-                bool isShard = pickup is ShellShard;
-                if (isShard != wantShards) continue;
-
-                if (key != 0 && WorldObjectKey.ComputePickup(pickup) == key)
-                {
-                    nearby = 1;
-                    exactMatch = true;
-                    return pickup;
-                }
-
-                // A drop claimed in another room must not remove a local drop that happens
-                // to lie at the same coordinates in the scene this peer has loaded.
-                if (!sameScene) continue;
-                if (float.IsNaN(x) || float.IsNaN(y)) continue;
-
-                float dx = pickup.transform.position.x - x;
-                float dy = pickup.transform.position.y - y;
-                float distanceSq = dx * dx + dy * dy;
-                if (distanceSq > radiusSq) continue;
-
-                nearby++;
-                if (distanceSq < nearestSq)
-                {
-                    nearestSq = distanceSq;
-                    nearest = pickup;
-                }
+                if ((pickup is ShellShard) != wantShards) continue;
+                if (WorldObjectKey.ComputePickup(pickup) == key) return pickup;
             }
 
-            return nearby == 1 ? nearest : null;
+            return null;
         }
 
         #endregion

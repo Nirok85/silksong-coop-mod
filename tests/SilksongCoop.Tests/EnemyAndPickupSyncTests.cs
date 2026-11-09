@@ -450,7 +450,7 @@ namespace SilksongCoop.Tests
         }
 
         [Fact]
-        public void Currency_PickupProximity_DeduplicatesPhysicsDrift()
+        public void Currency_NearbyPickupsWithDifferentKeys_AreBothCredited()
         {
             var service = new VitalsSyncService();
             service.InitializeState(5, 5, 9, 1, 0, initialRosaries: 100, initialShards: 0);
@@ -468,11 +468,11 @@ namespace SilksongCoop.Tests
                 TransactionId = Guid.NewGuid()
             });
 
-            // Different hash (the drop drifted 0.5 units) but still the same physical drop.
+            // Proximity alone cannot establish that both claims refer to the same drop.
             service.OnLocalCurrencyChanged(
                 CurrencyType.Rosaries, 10, 120, Guid.NewGuid(), pickupKey: 8, pickupX: 5.4f, pickupY: 5.2f);
 
-            Assert.Equal(110, service.SharedRosaries);
+            Assert.Equal(120, service.SharedRosaries);
         }
 
         [Fact]

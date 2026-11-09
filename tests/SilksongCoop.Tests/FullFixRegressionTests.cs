@@ -78,22 +78,58 @@ namespace SilksongCoop.Tests
 
             Assert.Equal(20, service.SharedRosaries);
 
-            // Once the peer has processed the spend, its resync is allowed to reconcile.
+            // A second stale snapshot still carries no proof the peer received the spend.
             service.HandleCurrencyPacket(peer, new CurrencySyncPacket
             {
                 Header = new PacketHeader(PacketType.CurrencySync, 3, 6, 6),
                 Currency = CurrencyType.Rosaries,
                 DeltaAmount = 0,
-                TotalWalletAmount = 30,
+                TotalWalletAmount = 110,
                 PickupUniqueId = 6,
                 TransactionId = Guid.NewGuid()
             });
 
-            Assert.Equal(30, service.SharedRosaries);
+            Assert.Equal(20, service.SharedRosaries);
+        }
+
+        [Fact]
+        public void Currency_ReturningPeerCanRestartItsSequence()
+        {
+            var receiver = Wallet(0);
+            var returningPeer = new NetworkPeerId(2);
+            var packet = new CurrencySyncPacket
+            {
+                Currency = CurrencyType.Rosaries,
+                DeltaAmount = 5,
+                PickupUniqueId = 50,
+                TransactionId = Guid.NewGuid()
+            };
+            receiver.HandleCurrencyPacket(returningPeer, packet);
+            receiver.RemoveRemotePeer(returningPeer);
+
+            packet.PickupUniqueId = 1;
+            packet.TransactionId = Guid.NewGuid();
+            receiver.HandleCurrencyPacket(returningPeer, packet);
+
+            Assert.Equal(10, receiver.SharedRosaries);
+        }
+
+        [Theory]
+        [InlineData("", "Bench", 1)]
+        [InlineData("Town", " ", 1)]
+        [InlineData("Town", "Bench", int.MaxValue)]
+        public void BenchCheckpoint_RejectsInvalidFields(string scene, string marker, int spawnType)
+        {
+            Assert.False(PacketValidator.ValidateBenchCheckpoint(new BenchCheckpointSyncPacket
+            {
+                SceneName = scene,
+                RespawnMarker = marker,
+                SpawnType = spawnType
+            }));
         }
 
         // ---------------------------------------------------------------------
-        // Currency: proximity dedup only reconciles local<->remote copies.
+        // Currency: different pickup keys represent separate claims.
         // ---------------------------------------------------------------------
         [Fact]
         public void Currency_TwoNearbyLocalPickups_AreBothCredited()

@@ -5,11 +5,10 @@
 - The mod targets the installed game via `ManagedDir` at build time: the Mod
   project references the game assemblies (`Assembly-CSharp`, `UnityEngine`,
   `TeamCherry.TK2D`, Steamworks and others), so it cannot be compiled without them.
-- At runtime, protocol and mod version are enforced per session
-  (`NetworkProtocol.Version`, `SilksongCoopPlugin.PluginVersion`), so a peer on a
-  different build is rejected instead of silently desynchronising.
+- Steam and UDP require matching game versions and protocol revisions.
+  Steam also checks the full mod version on lobby entry.
 - Startup writes a compatibility banner to `BepInEx/LogOutput.log`:
-  `[Coop] Compatibility: game <version>, Unity <version>, mod <version>, protocol v8,
+  `[Coop] Compatibility: game <version>, Unity <version>, mod <version>, protocol v9,
   runtime <version>`. Attach that line to any bug report; it identifies the exact
   game build the mod ran against.
 - Missing Steamworks → the Steam transport reports itself unavailable and logs why;

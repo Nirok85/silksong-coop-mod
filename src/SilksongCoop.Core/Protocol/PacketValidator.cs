@@ -343,17 +343,13 @@ namespace SilksongCoop.Core.Protocol
         /// </summary>
         public static bool ValidateBenchCheckpoint(BenchCheckpointSyncPacket packet)
         {
-            if (packet.SceneName == null || packet.SceneName.Length > 256)
+            if (string.IsNullOrWhiteSpace(packet.SceneName) || packet.SceneName.Length > 256)
                 return false;
 
-            if (packet.RespawnMarker == null || packet.RespawnMarker.Length > 256)
+            if (string.IsNullOrWhiteSpace(packet.RespawnMarker) || packet.RespawnMarker.Length > 256)
                 return false;
 
-            // Spawn type and facing direction are independent fields: the old check
-            // compared the spawn type against {0,1} whenever facing-right was set, which
-            // silently dropped legitimate checkpoints whose spawn type was, e.g., 2.
-            // SpawnType is intentionally an opaque enum value here.
-            if (packet.SpawnType < 0)
+            if (packet.SpawnType < 0 || packet.SpawnType > 2)
                 return false;
 
             return true;

@@ -16,10 +16,8 @@ namespace SilksongCoop.Tests
     /// </summary>
     public class IssueFixesVerificationTests
     {
-        // Issue #1.6 — a positive delta may advertise a higher snapshot than the local
-        // wallet (a previous gain was missed); reconcile upward.
         [Fact]
-        public void Currency_PositiveDelta_ReconcilesToSenderSnapshot()
+        public void Currency_PositiveDelta_DoesNotAdoptUnconfirmedSenderTotal()
         {
             var service = new VitalsSyncService();
             service.InitializeState(5, 5, 9, 1, 0, initialRosaries: 100, initialShards: 0);
@@ -33,7 +31,7 @@ namespace SilksongCoop.Tests
                 TransactionId = Guid.NewGuid()
             });
 
-            Assert.Equal(120, service.SharedRosaries);
+            Assert.Equal(110, service.SharedRosaries);
         }
 
         // Issue #1.6 — a stale negative packet must not resurrect a balance that was

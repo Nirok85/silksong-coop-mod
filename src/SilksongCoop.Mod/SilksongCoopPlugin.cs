@@ -109,6 +109,7 @@ namespace SilksongCoop.Mod
         private readonly System.Collections.Generic.List<ISyncOrchestrator> _orchestrators = new System.Collections.Generic.List<ISyncOrchestrator>();
         private NetworkOrchestrator? _networkOrchestrator;
         private VitalsSyncManager? _vitalsSyncManager;
+        private readonly SaveScopeTracker _sessionSaveScope = new SaveScopeTracker();
         private InventorySyncManager? _inventorySyncManager;
         private DeathSyncManager? _deathSyncManager;
         #endregion
@@ -260,7 +261,7 @@ namespace SilksongCoop.Mod
             // Initialize available transports
             try
             {
-                UdpTransport = new LiteNetLibTransport(1, "LocalPlayer");
+                UdpTransport = new LiteNetLibTransport(1, "LocalPlayer", Application.version);
                 ActiveTransport = UdpTransport;
                 Container.Register<LiteNetLibTransport>(UdpTransport);
             }
@@ -592,6 +593,7 @@ namespace SilksongCoop.Mod
         /// </summary>
         public void PrepareForNewSession()
         {
+            _vitalsSyncManager?.OnSessionEnded();
             CloneSpawner?.ResetAllClones();
             InventorySync?.ResetSessionState();
             EnemySync?.ResetSession();
@@ -608,7 +610,8 @@ namespace SilksongCoop.Mod
         /// state is already Disconnected, so relying on that event left the partner clone,
         /// death state and spectator view behind until the next session.
         /// </summary>
-        public void DisconnectFromSession(DisconnectReason reason = DisconnectReason.GracefulDisconnect)
+        public void DisconnectFromSession(DisconnectReason reason = DisconnectReason.GracefulDisconnect,
+            bool respawnSpectator = true)
         {
             try
             {
@@ -632,6 +635,7 @@ namespace SilksongCoop.Mod
                 }
 
                 ResetDesyncTracking();
+                _vitalsSyncManager?.OnSessionEnded();
                 EventBus?.Publish(new SessionEndedEvent { Reason = reason });
                 MenuUI?.Diagnostics?.OnSessionEnded();
 
@@ -642,11 +646,10 @@ namespace SilksongCoop.Mod
                 EnemySync?.ResetSession();
                 QuestStateSync?.ResetSession();
 
-                if (recoveringFromSpectator)
+                if (recoveringFromSpectator || Spectator.IsActive)
                 {
-                    Logger.LogWarning("[Coop] Session ended while in spectator mode. Exiting spectator and respawning at a bench.");
                     ExitSpectatorMode();
-                    TriggerTeamWipe();
+                    if (respawnSpectator) TriggerTeamWipe();
                 }
 
                 RefreshLocalVisuals(false);
@@ -802,6 +805,21 @@ namespace SilksongCoop.Mod
         {
             try
             {
+                // Validate against the actual loaded scene and its respawn markers before
+                // writing a checkpoint into the local save.
+                var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+                if (!scene.isLoaded || scene.name != sceneName || GameManager.instance?.IsGameplayScene() != true)
+                    return;
+
+                bool foundMarker = false;
+                foreach (var marker in RespawnMarker.Markers)
+                {
+                    if (marker == null || marker.gameObject.scene != scene || marker.name != respawnMarker) continue;
+                    foundMarker = true;
+                    break;
+                }
+                if (!foundMarker) return;
+
                 using (RemoteApplyScope.Begin())
                 {
                     var pd = PlayerData.instance;
@@ -1308,6 +1326,7 @@ namespace SilksongCoop.Mod
 
                     SessionState.SetDisconnected(reason);
                     ResetDesyncTracking();
+                    _vitalsSyncManager?.OnSessionEnded();
                     EventBus?.Publish(new SessionEndedEvent { Reason = reason });
                     MenuUI?.Diagnostics?.OnSessionEnded();
                     // In a 3+ session the transport may disconnect several peers in one
@@ -1703,6 +1722,7 @@ namespace SilksongCoop.Mod
                         break;
                     case DeathEventType.PartnerReviveTrigger:
                     case DeathEventType.SoloBenchRespawn:
+                    case DeathEventType.BenchCheckpointUpdate:
                         CloneSpawner?.SetRemotePartnerAlive(peer, true);
                         break;
                 }
@@ -1718,6 +1738,14 @@ namespace SilksongCoop.Mod
         {
             try
             {
+                // Run before polling either transport so queued packets cannot touch a new save.
+                var game = GameManager.instance;
+                if (game != null && game.profileID > 0 && !game.IsMenuScene() &&
+                    _sessionSaveScope.Observe(game.profileID, PlayerData.instance))
+                {
+                    OnLeavingSave();
+                }
+
                 // Always poll Steam transport for callbacks (lobby invites, session requests, etc.)
                 // even when UDP is the active data transport.
                 if (SteamTransport != null && ActiveTransport != SteamTransport)
@@ -1863,6 +1891,15 @@ namespace SilksongCoop.Mod
             {
                 Logger.LogError($"[Coop] Exception in Update: {ex.Message}\n{ex.StackTrace}");
             }
+        }
+
+        internal void OnLeavingSave()
+        {
+            CancelReconnect();
+            if (SessionState != null && SessionState.Status != SessionStatus.Disconnected)
+                DisconnectFromSession(respawnSpectator: false);
+            VitalsSync?.ClearClaimedPickups();
+            _sessionSaveScope.Reset();
         }
 
         /// <summary>
