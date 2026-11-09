@@ -1234,6 +1234,7 @@ namespace SilksongCoop.Core.Networking
                                 // BUG-N9 (item 9): host requires a room code but the client
                                 // did not announce one — reject the direct-IP join. Leave any
                                 // pending authenticated handshake untouched.
+                                CoopLog.Warn("[LiteNetLibTransport] Rejecting handshake: room code required but not announced");
                             }
                             else
                             {

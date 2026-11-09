@@ -213,10 +213,15 @@ namespace SilksongCoop.Core.State
             {
                 SharedRosaries = initialRosaries;
                 SharedShellShards = initialShards;
-                // New session: peer sequences restart from 1 on both sides.
+                // New session: peer sequences restart from 1 on both sides. Currency transaction
+                // GUIDs also restart, so the dedup buffer must not carry over stale entries
+                // from a previous session (a reconnecting peer would otherwise have its
+                // legitimate transactions dropped).
                 _lastCurrencySequences.Clear();
                 _peerViewLocalRevision.Clear();
                 _localCurrencyRevisions.Clear();
+                _processedTransactions.Clear();
+                _transactionOrder.Clear();
                 _currencySequence = 0;
                 // _claimedPickups intentionally survives: a peer that connects later must be
                 // told which drops were already collected so it can remove its local copies.
@@ -478,6 +483,13 @@ namespace SilksongCoop.Core.State
             OnOutgoingCurrencyBroadcast?.Invoke(packet);
         }
 
+        private static bool IsNewerSequence(uint candidate, uint last)
+        {
+            // candidate == last is not newer; otherwise rely on modular arithmetic so a
+            // wraparound from uint.MaxValue to 0 is treated as progress.
+            return candidate != last && (int)(candidate - last) > 0;
+        }
+
         private bool IsPickupAlreadyClaimed(
             CurrencyType currency, ulong pickupKey, float x, float y, bool isLocalClaim)
         {
@@ -686,8 +698,11 @@ namespace SilksongCoop.Core.State
                     // a per-sender sequence; the value 0 keeps older/manual callers working.
                     if (packet.PickupUniqueId > 0)
                     {
+                        // Wraparound-safe: a uint sequence that has wrapped is still newer when
+                        // the signed difference is positive. A reconnect resets the sequences,
+                        // but a long-lived session must not reject everything after 2^32 sends.
                         if (_lastCurrencySequences.TryGetValue(sequenceKey, out uint lastSequence) &&
-                            packet.PickupUniqueId <= lastSequence)
+                            !IsNewerSequence(packet.PickupUniqueId, lastSequence))
                         {
                             return;
                         }

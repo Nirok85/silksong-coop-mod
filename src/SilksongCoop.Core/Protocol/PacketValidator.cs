@@ -128,6 +128,13 @@ namespace SilksongCoop.Core.Protocol
                 return false;
             }
 
+            // A single packet must not carry an absurd delta: clamping at apply time still
+            // lets a malicious peer hammer short.MaxValue swings in a tight loop.
+            if (Math.Abs(packet.DeltaAmount) > 10000)
+            {
+                return false;
+            }
+
             return true;
         }
 

@@ -543,7 +543,7 @@ namespace SilksongCoop.Mod.UI
                 GUI.Label(new Rect(x, y + 32, bannerWidth, 22), reviveText, _spectSubStyle ?? Skin.label);
 
                 // Progress bar
-                float total = Math.Max(15f, coordinator.ReviveCooldownDuration);
+                float total = Math.Clamp(coordinator.ReviveCooldownDuration, 15f, 30f);
                 float progress = Mathf.Clamp01(1f - (coordinator.RemainingSpectatorTime / total));
                 float barWidth = bannerWidth - 40f;
                 float barY = y + 58f;
@@ -1619,6 +1619,13 @@ namespace SilksongCoop.Mod.UI
                 var parts = ip.Split('.');
                 if (parts.Length >= 2 && int.TryParse(parts[1], out int octet))
                     return octet >= 16 && octet <= 31;
+            }
+            // CGNAT range 100.64.0.0/10 (RFC 6598) is commonly used by carriers and VPNs.
+            if (ip.StartsWith("100."))
+            {
+                var parts = ip.Split('.');
+                if (parts.Length >= 2 && int.TryParse(parts[1], out int octet))
+                    return octet >= 64 && octet <= 127;
             }
             return false;
         }

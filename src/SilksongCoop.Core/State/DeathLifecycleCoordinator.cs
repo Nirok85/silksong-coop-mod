@@ -115,7 +115,13 @@ namespace SilksongCoop.Core.State
             private set { lock (_lock) { _remainingSpectatorTime = value; } }
         }
 
-        public float ReviveCooldownDuration { get; set; } = 20.0f; // Configurable between 15-30s
+        private float _reviveCooldownDuration = 20.0f;
+
+        public float ReviveCooldownDuration
+        {
+            get => _reviveCooldownDuration;
+            set => _reviveCooldownDuration = Math.Clamp(value, 15f, 30f);
+        }
 
         /// <summary>
         /// Gets or sets the last known position of the remote partner for revive targeting.

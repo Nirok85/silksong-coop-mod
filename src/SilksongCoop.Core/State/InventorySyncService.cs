@@ -17,6 +17,12 @@ namespace SilksongCoop.Core.State
         private readonly HashSet<string> _unlockedItems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<Guid> _processedTransactions = new HashSet<Guid>();
         private readonly Queue<Guid> _transactionOrder = new Queue<Guid>();
+
+        // Counter pseudo-items (heart pieces, silk parts) recur across upgrade cycles and
+        // therefore cannot be deduplicated by item id. Their transaction GUIDs must not be
+        // evicted by the 500-entry FIFO: an evicted GUID would let a replayed packet
+        // re-trigger the counter increment. Counters are rare, so an unbounded set is fine.
+        private readonly HashSet<Guid> _processedCounterTransactions = new HashSet<Guid>();
         private readonly List<string> _localEquippedTools = new List<string>();
         private readonly object _syncLock = new object();
         private const int MaxTrackedTransactions = 500;
@@ -215,15 +221,24 @@ namespace SilksongCoop.Core.State
                 bool isNewItem;
                 lock (_syncLock)
                 {
-                    if (!_processedTransactions.Add(packet.TransactionId))
+                    bool isCounter = IsCounterItemId(packet.ItemId);
+
+                    // Counter GUIDs are tracked in a non-evicting set so a replayed packet
+                    // cannot re-trigger an increment after the 500-entry FIFO has moved on.
+                    var transactionSet = isCounter ? _processedCounterTransactions : _processedTransactions;
+                    if (!transactionSet.Add(packet.TransactionId))
                     {
                         return; // Duplicate transaction (retransmit/echo drop)
                     }
 
-                    RecordTransactionOrder(packet.TransactionId);
+                    if (!isCounter)
+                    {
+                        RecordTransactionOrder(packet.TransactionId);
+                    }
+
                     // BUG-B5: counter pseudo-items must not be deduplicated by item id —
                     // the same value recurs legitimately across upgrade cycles.
-                    isNewItem = IsCounterItemId(packet.ItemId) || _unlockedItems.Add(packet.ItemId);
+                    isNewItem = isCounter || _unlockedItems.Add(packet.ItemId);
                 }
 
                 if (isNewItem)
@@ -252,6 +267,7 @@ namespace SilksongCoop.Core.State
                 _unlockedItems.Clear();
                 _processedTransactions.Clear();
                 _transactionOrder.Clear();
+                _processedCounterTransactions.Clear();
                 _sequenceCounter = 0;
             }
         }
@@ -308,7 +324,8 @@ namespace SilksongCoop.Core.State
             if (transactionId == Guid.Empty) return false;
             lock (_syncLock)
             {
-                return _processedTransactions.Contains(transactionId);
+                return _processedTransactions.Contains(transactionId)
+                    || _processedCounterTransactions.Contains(transactionId);
             }
         }
 
