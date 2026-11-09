@@ -54,7 +54,8 @@ function Assert-File {
 }
 
 function Assert-SafeZip {
-    param([string]$Path)    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    param([string]$Path)
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [System.IO.Compression.ZipFile]::OpenRead($Path)
     try {
         foreach ($entry in $archive.Entries) {
