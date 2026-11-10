@@ -17,11 +17,11 @@ namespace SilksongCoop.Tests
     public class ProtocolV4SecurityTests
     {
         [Fact]
-        public void ProtocolVersion_IsTen_AndSessionKeyUsesV10DomainLabel()
+        public void ProtocolVersion_IsEleven_AndSessionKeyUsesV11DomainLabel()
         {
-            // v10 changed the transport handshake, so the revision
+            // v11 changed the currency packet layout, so the revision
             // label must move with it: peers on different layouts share no session key.
-            Assert.Equal((ushort)10, NetworkProtocol.Version);
+            Assert.Equal((ushort)11, NetworkProtocol.Version);
             Assert.Equal(NetworkProtocol.Version, LiteNetLibTransport.ProtocolVersion);
 
             const string code = "SK-PROTOCOL-FIVE";
@@ -37,7 +37,7 @@ namespace SilksongCoop.Tests
             Buffer.BlockCopy(nonce, 0, message, label.Length, nonce.Length);
 
             Assert.Equal(hmac.ComputeHash(message), key);
-            Assert.Equal("SilksongCoop-Session-v10", NetworkProtocol.SessionLabel);
+            Assert.Equal("SilksongCoop-Session-v11", NetworkProtocol.SessionLabel);
         }
 
         [Fact]

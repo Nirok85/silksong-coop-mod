@@ -102,7 +102,7 @@ namespace SilksongCoop.Tests.Networking
                 OnDataReceived?.Invoke(sender, data, 0, data.Length);
             }
 
-            public virtual void Send(
+            public virtual bool Send(
                 NetworkPeerId target,
                 byte[] data,
                 int offset,
@@ -111,6 +111,7 @@ namespace SilksongCoop.Tests.Networking
                 byte channel)
             {
                 Sent.Add((target, length));
+                return true;
             }
 
             public void Dispose() { }
@@ -124,9 +125,10 @@ namespace SilksongCoop.Tests.Networking
             public int MaxRemotePeers => 3;
             public bool SupportsHostRelay => false;
 
-            public void Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel)
+            public bool Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel)
             {
                 BroadcastCalls++;
+                return true;
             }
         }
     }

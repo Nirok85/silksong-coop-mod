@@ -196,15 +196,15 @@ namespace SilksongCoop.Core.Networking
         /// <param name="length">Number of bytes to send.</param>
         /// <param name="method">Delivery method (reliable, unreliable, or sequenced).</param>
         /// <param name="channel">Channel index for ordering.</param>
-        public void Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
+        public bool Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
-            if (!IsConnected || _peer == null) return;
+            if (!IsConnected || _peer == null) return false;
 
             // Packet loss simulation (only for unreliable or sequenced)
             if ((method == DeliveryMethod.Unreliable || method == DeliveryMethod.Sequenced) && PacketLossRate > 0)
             {
                 if (_random.NextDouble() < PacketLossRate)
-                    return; // Dropped
+                    return false; // Dropped
             }
 
             uint seq;
@@ -239,6 +239,7 @@ namespace SilksongCoop.Core.Networking
             };
 
             _peer.EnqueueIncoming(packet);
+            return true;
         }
 
         /// <summary>

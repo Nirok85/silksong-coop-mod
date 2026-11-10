@@ -1,6 +1,6 @@
 # Protocol v8
 
-Historical specification. See [protocol v10](protocol-v10.md) for the current contract.
+Historical specification. See [protocol v11](protocol-v11.md) for the current contract.
 
 ## Version negotiation
 

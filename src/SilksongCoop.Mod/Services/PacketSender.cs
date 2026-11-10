@@ -84,14 +84,10 @@ namespace SilksongCoop.Mod.Services
                 var writer = new PacketWriter(buffer);
                 packet.Serialize(ref writer);
 
-                if (target.HasValue)
-                {
-                    transport.Send(target.Value, buffer, 0, writer.Position, method, channel);
-                }
-                else
-                {
-                    transport.SendToAll(buffer, 0, writer.Position, method, channel);
-                }
+                bool accepted = target.HasValue
+                    ? transport.Send(target.Value, buffer, 0, writer.Position, method, channel)
+                    : transport.SendToAll(buffer, 0, writer.Position, method, channel);
+                if (!accepted) return false;
 
                 diagnostics?.RecordSent(writer.Position);
                 return true;

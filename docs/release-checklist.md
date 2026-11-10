@@ -57,8 +57,11 @@ Record game version, mod version, release commit SHA, OS, transport and pass/fai
 
 ## Publish
 
-- [ ] Tag `v<version>` on the tested commit SHA.
-- [ ] GitHub release with notes.
+- [ ] Tag the tested commit SHA as `vX.Y.Z` for a stable release or
+      `vX.Y.Z-beta.N` for a beta.
+- [ ] Publish the GitHub release with notes. Mark a beta as a prerelease
+      (`--prerelease` with the GitHub CLI). Use the numeric version `X.Y.Z`
+      in plugin metadata and artifact names for either release type.
 - [ ] Attach both ZIP archives and `SilksongCoop_v<version>_SHA256SUMS.txt`.
 - [ ] Announce breaking changes (Steam compares the full mod version).
 

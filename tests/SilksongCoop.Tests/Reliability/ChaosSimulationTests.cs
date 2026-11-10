@@ -1,13 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.State;
+using SilksongCoop.Tests.EndToEnd;
 using Xunit;
 
 namespace SilksongCoop.Tests.Reliability
 {
     /// <summary>
-    /// Deterministic chaos scenarios layered on the in-memory transport. The tests assert
+    /// Deterministic chaos scenarios over real UDP and the in-memory transport. The tests assert
     /// application invariants (ordering, no double damage, monotonic snapshots), not just
     /// "did not throw": a lossy, jittery link is allowed to delay data, never to corrupt
     /// already-applied state.
@@ -15,40 +17,40 @@ namespace SilksongCoop.Tests.Reliability
     public class ChaosSimulationTests
     {
         [Fact]
-        public void ReliableOrdered_UnderMockJitter_DeliversEveryPacketInOrder()
+        public void ReliableOrdered_WithDroppedDatagrams_DeliversEveryPacketInOrder()
         {
-            var (host, client) = MockNetworkTransport.CreatePair(
-                latencyMs: 60,
-                jitterMs: 120,
-                lossRate: 0f,
-                useVirtualTime: true,
-                seed: 20261109);
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
+            using var relay = new EndToEndUdpReliabilityTests.UdpRelay();
+            host.StartHost(0);
+            relay.ConfigureHost(host.BoundPort);
+            client.Connect($"127.0.0.1:{relay.Port}");
+            EndToEndUdpReliabilityTests.PumpUntil(
+                () => host.IsConnected && client.IsConnected, host, client, maxMs: 3000);
+            Assert.True(host.IsConnected && client.IsConnected);
 
             const int packetCount = 200;
             var received = new List<int>(packetCount);
-            client.OnDataReceived += (_, data, offset, length) =>
+            host.OnDataReceived += (_, data, offset, length) =>
             {
-                if (length == 4) received.Add(BitConverter.ToInt32(data, offset));
+                if (length == sizeof(int)) received.Add(BitConverter.ToInt32(data, offset));
             };
 
+            relay.DropNextClientDataFrames(8);
+            relay.DuplicateNextClientDataFrame();
             for (int i = 0; i < packetCount; i++)
             {
                 byte[] payload = BitConverter.GetBytes(i);
-                host.Send(client.LocalPeerId, payload, 0, payload.Length,
-                    DeliveryMethod.ReliableOrdered, NetworkChannels.World);
+                Assert.True(client.Send(host.LocalPeerId, payload, 0, payload.Length,
+                    DeliveryMethod.ReliableOrdered, NetworkChannels.World));
             }
 
-            for (int step = 0; step < 20 && received.Count < packetCount; step++)
-            {
-                host.AdvanceVirtualTime(100);
-                client.AdvanceVirtualTime(100);
-                host.PollEvents();
-                client.PollEvents();
-            }
-
-            Assert.Equal(packetCount, received.Count);
-            for (int i = 0; i < packetCount; i++)
-                Assert.Equal(i, received[i]);
+            EndToEndUdpReliabilityTests.PumpUntil(
+                () => received.Count == packetCount && client.ReliableBacklogCount == 0,
+                host, client, maxMs: 8000);
+            Assert.Equal(8, relay.DroppedDataFrames);
+            Assert.Equal(Enumerable.Range(0, packetCount), received);
+            Assert.Equal(0, client.ReliableBacklogCount);
         }
 
         [Fact]

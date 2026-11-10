@@ -56,7 +56,8 @@ namespace SilksongCoop.Core.Networking
         /// Sends a payload. Implementations must copy or otherwise consume the bytes before
         /// returning; callers may return <paramref name="data"/> to a pool immediately after
         /// this call. Queued/async transports must make their own copy before queueing.
+        /// Returns true if the payload was sent or accepted for delivery.
         /// </summary>
-        void Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel);
+        bool Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel);
     }
 }

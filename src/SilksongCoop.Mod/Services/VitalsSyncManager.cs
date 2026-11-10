@@ -1,6 +1,8 @@
 using System;
 using HarmonyLib;
 using System.Collections.Generic;
+using System.Linq;
+using SilksongCoop.Mod.Networking;
 using SilksongCoop.Core.Protocol;
 using SilksongCoop.Core.Events;
 using SilksongCoop.Core.Networking;
@@ -22,6 +24,7 @@ namespace SilksongCoop.Mod.Services
         private readonly DeathLifecycleCoordinator _deathCoordinator;
         private readonly EnemySyncController? _enemySync;
         private readonly Dictionary<NetworkPeerId, List<CurrencySyncPacket>> _currencyJournal = new();
+        private readonly HashSet<NetworkPeerId> _exhaustedCurrencyJournals = new();
         private readonly HashSet<NetworkPeerId> _currencyPeersReady = new();
 
         private const int MaxUnconfirmedTransactions = 4096;
@@ -88,11 +91,21 @@ namespace SilksongCoop.Mod.Services
             _walletReconcilePlayerData = null;
         }
 
-        internal void ResetCurrencyJournal() => _currencyJournal.Clear();
+        internal void ResetCurrencyJournal()
+        {
+            _currencyJournal.Clear();
+            _exhaustedCurrencyJournals.Clear();
+        }
 
         internal void OnCurrencyPeerDisconnected(NetworkPeerId peer) => _currencyPeersReady.Remove(peer);
 
-        internal void ForgetCurrencyPeer(NetworkPeerId peer) => _currencyJournal.Remove(peer);
+        internal void ForgetCurrencyPeer(NetworkPeerId peer)
+        {
+            _currencyJournal.Remove(peer);
+            _exhaustedCurrencyJournals.Remove(peer);
+        }
+
+        internal bool CanResumeCurrencyPeer(NetworkPeerId peer) => !_exhaustedCurrencyJournals.Contains(peer);
 
         internal void EnableCurrencyPeer(NetworkPeerId peer)
         {
@@ -160,11 +173,24 @@ namespace SilksongCoop.Mod.Services
 
             foreach (var pair in _currencyJournal)
             {
+                if (_exhaustedCurrencyJournals.Contains(pair.Key)) continue;
                 if (pair.Value.Count >= MaxUnconfirmedTransactions)
                 {
-                    SilksongCoopPlugin.LogWarn("[Coop] Too many unconfirmed currency transactions.");
-                    SilksongCoopPlugin.Instance.DisconnectFromSession(DisconnectReason.ConnectionFailed);
-                    return;
+                    _exhaustedCurrencyJournals.Add(pair.Key);
+                    pair.Value.Clear();
+                    pair.Value.TrimExcess();
+                    SilksongCoopPlugin.LogWarn($"[Coop] Currency journal exhausted for {pair.Key}.");
+                    if (session.RemotePeerIds.Contains(pair.Key))
+                    {
+                        if (_transportService.ActiveTransport is SteamP2PTransport steam)
+                            steam.FailReliablePeer(pair.Key);
+                        else
+                        {
+                            SilksongCoopPlugin.Instance.DisconnectFromSession(DisconnectReason.ConnectionFailed);
+                            return;
+                        }
+                    }
+                    continue;
                 }
                 pair.Value.Add(packet);
                 if (_currencyPeersReady.Contains(pair.Key)) SendCurrencyTo(pair.Key, packet);

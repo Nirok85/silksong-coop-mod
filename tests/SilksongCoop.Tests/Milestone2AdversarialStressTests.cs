@@ -255,6 +255,24 @@ namespace SilksongCoop.Tests
             await Task.WhenAll(spawnTask1, despawnTask, updateTask, interpTask);
 
             Assert.Empty(exceptions);
+            int livePeers = 0;
+            for (ulong id = 1; id <= 20; id++)
+            {
+                var peer = new NetworkPeerId(id);
+                bool exists = manager.TryGetRemoteState(peer, out var state);
+                Assert.Equal(exists, manager.IsPlayerSpawned(peer));
+                if (!exists) continue;
+
+                livePeers++;
+                Assert.Equal(peer, state.PeerId);
+                Assert.Equal(id % 2 != 0, state.IsPlayer2);
+                Assert.True(float.IsFinite(state.PositionX));
+                Assert.True(float.IsFinite(state.PositionY));
+            }
+            Assert.Equal(livePeers, manager.ActiveCloneCount);
+            for (ulong id = 1; id <= 20; id++)
+                manager.DespawnRemotePlayer(new NetworkPeerId(id));
+            Assert.Equal(0, manager.ActiveCloneCount);
         }
 
         [Fact]

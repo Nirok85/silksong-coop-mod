@@ -85,12 +85,16 @@ dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj -c Release
 ```
 
 Expected: 0 warnings (warnings are errors in Release) and all tests passing.
-The hosted CI job builds Core and runs the Core test project. The Mod job runs on
-`master` only when `SILKSONG_MOD_RUNNER_ENABLED=true` and a matching self-hosted
-runner is online. A skipped Mod job means compilation was not checked. A green
-Core job alone does not prove that the Mod compiled or that Steam/Unity behaviour
-works. Build the Mod against the game assemblies and run the manual smoke checklist
-before publishing.
+The hosted CI job builds Core and runs the Core test project. The Mod job is
+eligible on pushes to `master` and manual runs on `master` when
+`SILKSONG_MOD_RUNNER_ENABLED` is set to the exact string `true`. Otherwise,
+GitHub skips it. If the job is eligible but no matching self-hosted runner is
+online, it can stay queued. A green Core job alone does not verify Mod compilation
+or Steam/Unity behaviour. Build the Mod against the game assemblies and run the
+manual smoke checklist before publishing.
+
+Read the **Mod build status** job for the result. To require a successful Mod
+build when dispatching CI on protected `master`, enable `require_mod`.
 
 If the protocol changed, say so explicitly in the release notes — mixed
 versions refuse to connect, so both players must update.

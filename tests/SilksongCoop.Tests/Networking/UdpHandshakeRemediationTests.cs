@@ -20,6 +20,23 @@ namespace SilksongCoop.Tests.Networking
             BindingFlags.NonPublic | BindingFlags.Instance;
 
         [Fact]
+        public void V11Host_RejectsV10AndAcceptsMatchingPeer()
+        {
+            using var host = new LiteNetLibTransport(1, "Host");
+            host.StartHost(0);
+            const string code = "SK-AUDIT-VERSION";
+            host.SetRoomCode(code);
+            using var client = new RawPeer();
+
+            client.Send(BuildHandshake(2, version: 10), host.BoundPort);
+            PumpHost(host);
+            Assert.Equal(0, client.PendingBytes);
+            Assert.False(host.IsConnected);
+
+            CompleteHandshake(host, client, code, peerId: 2);
+        }
+
+        [Fact]
         public void DuplicateHandshake_CannotReplacePendingPeerId()
         {
             using var host = new LiteNetLibTransport(1, "Host");
@@ -149,14 +166,14 @@ namespace SilksongCoop.Tests.Networking
             }
         }
 
-        private static byte[] BuildHandshake(ulong peerId)
+        private static byte[] BuildHandshake(ulong peerId, ushort version = LiteNetLibTransport.ProtocolVersion)
         {
             byte[] payload = new byte[11];
             BinaryPrimitives.WriteUInt64LittleEndian(payload.AsSpan(0, 8), peerId);
             payload[8] = 1; // client carries a room code
             BinaryPrimitives.WriteUInt16LittleEndian(
                 payload.AsSpan(9, 2),
-                LiteNetLibTransport.ProtocolVersion);
+                version);
             return BuildEnvelope(0x01, 0, payload);
         }
 
@@ -202,6 +219,8 @@ namespace SilksongCoop.Tests.Networking
             {
                 _socket.Send(datagram, datagram.Length, new IPEndPoint(IPAddress.Loopback, port));
             }
+
+            public int PendingBytes => _socket.Available;
 
             public byte[] Receive()
             {

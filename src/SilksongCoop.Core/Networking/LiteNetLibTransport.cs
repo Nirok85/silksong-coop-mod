@@ -128,8 +128,6 @@ namespace SilksongCoop.Core.Networking
         private HMACSHA256? _hmac;
         private HMACSHA256? _receiveHmac;
         private uint _controlSequence;
-        private int _invalidMacCount;
-        private long _macCooldownUntil;
         private readonly Dictionary<UdpFrameType, uint> _latestControl = new();
         private readonly Dictionary<byte, (uint Latest, ulong Seen)> _unreliableReplay = new();
         private readonly Queue<(NetworkPeerId Peer, byte[] Data, DeliveryMethod Method, byte Channel)> _reliableQueue = new();
@@ -245,7 +243,9 @@ namespace SilksongCoop.Core.Networking
         private long _lastHandshakeSentMs;
 
         // Pre-allocated receive buffer to avoid per-poll GC pressure
-        private readonly byte[] _recvBuffer = new byte[2048];
+        private const int MaxDatagramSize = 2048;
+        // Leave one extra byte to identify truncation on platforms that return a prefix.
+        private readonly byte[] _recvBuffer = new byte[MaxDatagramSize + 1];
         // Reused only while connected: handshake frames may store the endpoint as a
         // dictionary key, so those paths keep a fresh IPEndPoint.
         private readonly IPEndPoint _connectedSenderEndPoint = new IPEndPoint(IPAddress.Any, 0);
@@ -394,8 +394,6 @@ namespace SilksongCoop.Core.Networking
             _latestControl.Clear();
             _unreliableReplay.Clear();
             _controlSequence = 0;
-            _invalidMacCount = 0;
-            _macCooldownUntil = 0;
             _sendSequences.Clear();
             _expectedReceiveSequences.Clear();
             _latestSequencedReceived.Clear();
@@ -723,13 +721,12 @@ namespace SilksongCoop.Core.Networking
         /// <summary>
         /// Sends data to all connected peers. Single-peer transports iterate their one peer.
         /// </summary>
-        public void Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel)
+        public bool Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
             // This transport holds a single remote peer; send directly instead of
             // materializing a ConnectedPeers snapshot on every broadcast.
             NetworkPeerId? peer = _remotePeerId;
-            if (!peer.HasValue) return;
-            Send(peer.Value, data, offset, length, method, channel);
+            return peer.HasValue && Send(peer.Value, data, offset, length, method, channel);
         }
 
         /// <summary>Legacy UDP transport holds one remote peer at a time.</summary>
@@ -747,9 +744,9 @@ namespace SilksongCoop.Core.Networking
         /// <param name="length">The number of bytes to send.</param>
         /// <param name="method">The delivery method to use.</param>
         /// <param name="channel">The channel to send on.</param>
-        public void Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
+        public bool Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
-            SendInternal(target, data, offset, length, method, channel, allowQueue: true);
+            return SendInternal(target, data, offset, length, method, channel, allowQueue: true);
         }
 
         private void SendImmediate(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
@@ -757,14 +754,21 @@ namespace SilksongCoop.Core.Networking
             SendInternal(target, data, offset, length, method, channel, allowQueue: false);
         }
 
-        private void SendInternal(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel, bool allowQueue)
+        private bool SendInternal(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel, bool allowQueue)
         {
             lock (_lock)
             {
-                if (!IsConnected || _remoteEndPoint == null || _socket == null) return;
-                if (data == null) return;
-                if (offset < 0 || length < 0 || offset + length > data.Length) return;
-                if (_remotePeerId.HasValue && target != _remotePeerId.Value) return;
+                if (!IsConnected || _remoteEndPoint == null || _socket == null) return false;
+                if (data == null) return false;
+                if (offset < 0 || length < 0 || offset > data.Length - length) return false;
+                if (_remotePeerId.HasValue && target != _remotePeerId.Value) return false;
+
+                bool includeMac = _sessionKey != null;
+                if (length > MaxDatagramSize - 8 - (includeMac ? MacSizeBytes : 0))
+                {
+                    CoopLog.Warn($"[UDP] Payload too large for a single datagram ({length} bytes).");
+                    return false;
+                }
 
                 // Backpressure instead of evicting the oldest unacknowledged packet: the
                 // receiver is still waiting for that sequence, and dropping it from the
@@ -782,11 +786,11 @@ namespace SilksongCoop.Core.Networking
                         CoopLog.Warn("[UDP] Reliable queue exhausted; disconnecting to avoid silent state loss.");
                         if (IsHost) DropPeerForTimeout(DisconnectReason.Timeout);
                         else Disconnect(DisconnectReason.ConnectionFailed);
-                        return;
+                        return false;
                     }
 
                     _reliableQueue.Enqueue((target, data.AsSpan(offset, length).ToArray(), method, channel));
-                    return;
+                    return true;
                 }
 
                 if (isReliable && _unacknowledged.Count >= MaxUnacknowledgedPackets)
@@ -804,7 +808,7 @@ namespace SilksongCoop.Core.Networking
                             $"dropping new packet on channel {channel} " +
                             $"(total dropped: {DroppedReliablePackets})");
                     }
-                    return;
+                    return false;
                 }
 
                 uint seq;
@@ -815,7 +819,6 @@ namespace SilksongCoop.Core.Networking
                 // Build envelope into a pooled buffer to avoid per-packet heap allocations
                 // (BUG-P16). The rented buffer is returned immediately for unreliable
                 // traffic; reliable traffic keeps it until the packet is acked/dropped.
-                bool includeMac = _sessionKey != null;
                 int envelopeLength = 8 + length + (includeMac ? MacSizeBytes : 0);
                 byte[] envelope = ArrayPool<byte>.Shared.Rent(envelopeLength);
                 try
@@ -837,14 +840,15 @@ namespace SilksongCoop.Core.Networking
                     // the sequence only after the envelope was built successfully.
                     CoopLog.Warn($"[LiteNetLibTransport] Failed to build envelope: {ex.Message}");
                     ReturnPooledBuffer(envelope);
-                    return;
+                    return false;
                 }
 
                 _sendSequences[sequenceKey] = seq + 1;
 
+                bool sent = false;
                 try
                 {
-                    _socket.SendTo(envelope, 0, envelopeLength, SocketFlags.None, _remoteEndPoint);
+                    sent = _socket.SendTo(envelope, 0, envelopeLength, SocketFlags.None, _remoteEndPoint) == envelopeLength;
                 }
                 catch (SocketException ex) { CoopLog.Warn($"Socket error: {ex.Message}"); }
                 catch (ObjectDisposedException ex) { CoopLog.Warn($"Socket disposed: {ex.Message}"); }
@@ -869,6 +873,7 @@ namespace SilksongCoop.Core.Networking
                     // Unreliable/sequenced: buffer is no longer needed after SendTo.
                     ReturnPooledBuffer(envelope);
                 }
+                return isReliable || sent;
             }
         }
 
@@ -932,13 +937,9 @@ namespace SilksongCoop.Core.Networking
                         try
                         {
                             int received = socket.ReceiveFrom(_recvBuffer, ref senderEp);
-                            if (received == 0) break;
                             processedDatagrams++;
                             if (received < 0) break;
-                            if (received > _recvBuffer.Length)
-                            {
-                                received = _recvBuffer.Length;
-                            }
+                            if (received > MaxDatagramSize) continue;
                             if (received >= 8) // Minimum envelope header
                             {
                                 // Basic sanity check on frame type range
@@ -949,6 +950,10 @@ namespace SilksongCoop.Core.Networking
                                 }
                                 ProcessIncomingDatagram(_recvBuffer.AsSpan(0, received), senderEp);
                             }
+                        }
+                        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.MessageSize)
+                        {
+                            processedDatagrams++;
                         }
                         catch (SocketException)
                         {
@@ -1187,18 +1192,8 @@ namespace SilksongCoop.Core.Networking
                 // direct-IP sessions) still pass through the rate limiter below.
                 if (hasMac)
                 {
-                    long now = GetTimestampMs();
-                    if (now < _macCooldownUntil) return;
                     if (!ValidateMac(datagram.Slice(0, macOffset), datagram.Slice(macOffset, MacSizeBytes)))
-                    {
-                        if (++_invalidMacCount >= 64)
-                        {
-                            _macCooldownUntil = now + 100;
-                            _invalidMacCount = 0;
-                        }
                         return;
-                    }
-                    _invalidMacCount = 0;
                 }
                 else if (macRequired)
                 {

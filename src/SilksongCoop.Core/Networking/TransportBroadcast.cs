@@ -17,7 +17,7 @@ namespace SilksongCoop.Core.Networking
         /// <summary>True when the host forwards peer-to-peer traffic (UDP relay).</summary>
         bool SupportsHostRelay { get; }
 
-        void Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel);
+        bool Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel);
     }
 
     /// <summary>
@@ -27,7 +27,7 @@ namespace SilksongCoop.Core.Networking
     /// </summary>
     public static class TransportBroadcast
     {
-        public static void SendToAll(
+        public static bool SendToAll(
             this INetworkTransport transport,
             byte[] data,
             int offset,
@@ -35,19 +35,20 @@ namespace SilksongCoop.Core.Networking
             DeliveryMethod method,
             byte channel)
         {
-            if (transport == null || data == null || length <= 0) return;
+            if (transport == null || data == null || length <= 0) return false;
 
             if (transport is IMultiPeerTransport multiPeer)
             {
-                multiPeer.Broadcast(data, offset, length, method, channel);
-                return;
+                return multiPeer.Broadcast(data, offset, length, method, channel);
             }
 
             var peers = transport.ConnectedPeers;
+            bool accepted = peers.Count > 0;
             for (int i = 0; i < peers.Count; i++)
             {
-                transport.Send(peers[i], data, offset, length, method, channel);
+                accepted &= transport.Send(peers[i], data, offset, length, method, channel);
             }
+            return accepted;
         }
     }
 }

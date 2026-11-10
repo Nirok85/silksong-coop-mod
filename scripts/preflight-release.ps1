@@ -58,6 +58,15 @@ foreach ($projectFile in @('src\SilksongCoop.Mod\SilksongCoop.Mod.csproj', 'src\
     Check ($file -eq "$modVersion.0") "$projectFile FileVersion is $modVersion.0 ($file)"
 }
 
+$protocolSource = Get-Content (Join-Path $root 'src/SilksongCoop.Core/Networking/NetworkProtocol.cs') -Raw -Encoding UTF8
+$protocolMatch = [regex]::Match($protocolSource, 'const ushort Version\s*=\s*(\d+)')
+Check $protocolMatch.Success 'wire protocol version is declared'
+if ($protocolMatch.Success) {
+    $protocolVersion = $protocolMatch.Groups[1].Value
+    Check ($protocolSource -match ([regex]::Escape("SilksongCoop-Session-v$protocolVersion") + '"')) "session label matches protocol v$protocolVersion"
+    Check (Test-Path -LiteralPath (Join-Path $root "docs/protocol-v$protocolVersion.md") -PathType Leaf) "protocol v$protocolVersion is documented"
+}
+
 Write-Host '==> Changelog and README' -ForegroundColor Cyan
 $changelog = Get-Content (Join-Path $root 'CHANGELOG.md') -Raw -Encoding UTF8
 Check ($changelog -match [regex]::Escape("## [$modVersion]")) "CHANGELOG.md has a [$modVersion] section"

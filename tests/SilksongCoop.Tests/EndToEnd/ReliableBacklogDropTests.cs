@@ -14,7 +14,7 @@ namespace SilksongCoop.Tests.EndToEnd
     public class ReliableBacklogDropTests
     {
         [Fact]
-        public void FilledBacklog_IsObservableThroughTheDiagnosticsCounter()
+        public void FilledBacklog_RejectsNewSendsAndIncrementsDiagnosticsCounter()
         {
             using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
             using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
@@ -30,11 +30,12 @@ namespace SilksongCoop.Tests.EndToEnd
             byte[] payload = BitConverter.GetBytes(123456);
             for (int i = 0; i < 700; i++)
             {
-                client.Send(host.LocalPeerId, payload, 0, payload.Length, DeliveryMethod.ReliableOrdered, 1);
+                bool accepted = client.Send(host.LocalPeerId, payload, 0, payload.Length, DeliveryMethod.ReliableOrdered, 1);
+                Assert.Equal(i < NetworkLimits.ReliableBacklogCap, accepted);
             }
 
-            Assert.True(client.ReliableBacklogCount >= 512);
-            Assert.True(client.DroppedReliablePackets > 0);
+            Assert.Equal(NetworkLimits.ReliableBacklogCap, client.ReliableBacklogCount);
+            Assert.Equal(700 - NetworkLimits.ReliableBacklogCap, client.DroppedReliablePackets);
             Assert.True(client is IReliableDropDiagnostics);
         }
 

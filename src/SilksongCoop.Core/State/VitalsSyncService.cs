@@ -396,6 +396,7 @@ namespace SilksongCoop.Core.State
             if (deltaAmount == 0) return;
             if (transactionId == Guid.Empty) return;
 
+            deltaAmount = Math.Clamp(deltaAmount, -PacketValidator.MaxReasonableCurrency, PacketValidator.MaxReasonableCurrency);
             int currentWallet = 0;
             uint packetSequence = 0;
             bool duplicatePickup = false;
@@ -461,7 +462,7 @@ namespace SilksongCoop.Core.State
                 Header = new PacketHeader(PacketType.CurrencySync, 3, 0, NetworkClock.NowMs),
                 Currency = currency,
                 TotalWalletAmount = currentWallet,
-                DeltaAmount = (short)Math.Clamp(deltaAmount, short.MinValue, short.MaxValue),
+                DeltaAmount = deltaAmount,
                 PickupUniqueId = packetSequence,
                 TransactionId = transactionId,
                 PickupKey = pickupKey,

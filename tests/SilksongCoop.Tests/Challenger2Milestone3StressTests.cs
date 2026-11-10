@@ -168,30 +168,35 @@ namespace SilksongCoop.Tests
             Assert.Equal(serviceNormal.SharedRosaries, serviceReversed.SharedRosaries);
         }
 
-        [Fact]
-        public void CommutativeDelta_ShortIntMaxBoundary_ClampingPreservesMathematicalRange()
+        [Theory]
+        [InlineData(40000)]
+        [InlineData(-40000)]
+        public void CurrencyDelta_OutsideInt16_RoundTripsAndMatchesBothWallets(int delta)
         {
-            var service = new VitalsSyncService();
-            service.InitializeState(5, 5, 9, 1, 0, initialRosaries: 0, initialShards: 0);
+            var sender = new VitalsSyncService();
+            var receiver = new VitalsSyncService();
+            sender.InitializeState(5, 5, 9, 1, 0, initialRosaries: 50000, initialShards: 0);
+            receiver.InitializeState(5, 5, 9, 1, 0, initialRosaries: 50000, initialShards: 0);
 
             CurrencySyncPacket? capturedPacket = null;
-            service.OnOutgoingCurrencyBroadcast += p => capturedPacket = p;
-
-            // Maximum short delta (+32767)
-            var txMax = Guid.NewGuid();
-            service.OnLocalCurrencyChanged(CurrencyType.Rosaries, short.MaxValue, 0, txMax);
-
-            Assert.Equal(32767, service.SharedRosaries);
+            sender.OnOutgoingCurrencyBroadcast += packet => capturedPacket = packet;
+            var transaction = Guid.NewGuid();
+            sender.OnLocalCurrencyChanged(CurrencyType.Rosaries, delta, 0, transaction);
             Assert.NotNull(capturedPacket);
-            Assert.Equal((short)32767, capturedPacket.Value.DeltaAmount);
 
-            // Minimum short delta (-32768)
-            var txMin = Guid.NewGuid();
-            service.OnLocalCurrencyChanged(CurrencyType.Rosaries, short.MinValue, 0, txMin);
+            var writer = new PacketWriter(new byte[64]);
+            capturedPacket.Value.Serialize(ref writer);
+            var reader = new PacketReader(writer.WrittenSpan);
+            var received = CurrencySyncPacket.Deserialize(ref reader);
+            Assert.Equal(0, reader.Remaining);
+            Assert.True(PacketValidator.ValidateCurrencySync(received));
+            Assert.Equal(delta, received.DeltaAmount);
+            Assert.Equal(transaction, received.TransactionId);
 
-            // 32767 - 32768 = -1 -> clamped at 0
-            Assert.Equal(0, service.SharedRosaries);
-            Assert.Equal((short)-32768, capturedPacket.Value.DeltaAmount);
+            receiver.HandleCurrencyPacket(new NetworkPeerId(1), received);
+            receiver.HandleCurrencyPacket(new NetworkPeerId(1), received);
+            Assert.Equal(50000 + delta, sender.SharedRosaries);
+            Assert.Equal(sender.SharedRosaries, receiver.SharedRosaries);
         }
 
         #endregion

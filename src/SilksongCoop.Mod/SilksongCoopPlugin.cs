@@ -46,7 +46,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "3.3.8";
+        public const string PluginVersion = "3.3.9";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -1494,13 +1494,15 @@ namespace SilksongCoop.Mod
 
             foreach (var peer in SessionState.RemotePeerIds)
             {
-                if (!_readySent.Contains(peer) &&
-                    PacketSender.SendTo(ActiveTransport, peer, new PeerReadyPacket
+                if (!_readySent.Contains(peer))
+                {
+                    if (!PacketSender.SendTo(ActiveTransport, peer, new PeerReadyPacket
                     {
                         Header = new PacketHeader(PacketType.PeerReady, NetworkChannels.Currency, 0, NetworkClock.NowMs),
                         SaveInstance = _walletSaveInstance
                     }, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, PacketHeader.HeaderSize + 16))
-                {
+                        continue;
+
                     _readySent.Add(peer);
                 }
 
@@ -1508,6 +1510,18 @@ namespace SilksongCoop.Mod
                 {
                     bool existingPeer = _walletPeerInstances.TryGetValue(peer, out var previousSave);
                     bool resumedPeer = existingPeer && previousSave == saveInstance;
+                    if (resumedPeer && _vitalsSyncManager?.CanResumeCurrencyPeer(peer) == false)
+                    {
+                        Logger.LogWarning($"[Coop] Cannot resume wallet sync for {peer}: currency journal exhausted.");
+                        if (ActiveTransport is SteamP2PTransport steam)
+                            steam.FailReliablePeer(peer);
+                        else
+                        {
+                            DisconnectFromSession(DisconnectReason.ConnectionFailed);
+                            return;
+                        }
+                        continue;
+                    }
                     _walletPeerInstances[peer] = saveInstance;
                     if (!resumedPeer)
                     {

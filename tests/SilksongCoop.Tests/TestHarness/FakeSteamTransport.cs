@@ -80,13 +80,14 @@ namespace SilksongCoop.Tests.TestHarness
         public byte LastReceivedChannel { get; private set; }
         public int SimulatedRttMs { get; set; } = 30;
 
-        public void Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
+        public bool Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
-            if (!_connected || _peer == null) return;
+            if (!_connected || _peer == null) return false;
             var copy = new byte[length];
             Array.Copy(data, offset, copy, 0, length);
             _peer.LastReceivedChannel = channel;
             _peer.OnDataReceived?.Invoke(LocalPeerId, copy, 0, copy.Length);
+            return true;
         }
 
         public void Dispose() => Disconnect();

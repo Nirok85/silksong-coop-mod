@@ -162,6 +162,7 @@ namespace SilksongCoop.Mod.UI
                 richText = true,
                 wordWrap = true,
             };
+            style.clipping = TextClipping.Clip;
             float nextY = TopMargin;
             for (int i = 0; i < _active.Count; i++)
             {
@@ -195,9 +196,14 @@ namespace SilksongCoop.Mod.UI
                 // toast never starts off-screen; the text wraps inside the reduced width.
                 float availableWidth = Mathf.Max(1f, Screen.width - RightMargin * 2f);
                 float toastWidth = Mathf.Min(ToastWidth, availableWidth);
-                float x = Mathf.Max(RightMargin, Screen.width - toastWidth - RightMargin + slide);
+                float x = Mathf.Max(0f, Screen.width - toastWidth - RightMargin + slide);
                 float y = nextY;
-                float toastHeight = Mathf.Max(ToastHeight, style.CalcHeight(t.Content, Mathf.Max(1f, toastWidth - 8f)) + 8f);
+                float textWidth = Mathf.Max(1f, toastWidth - 8f);
+                float desiredHeight = Mathf.Max(ToastHeight, style.CalcHeight(t.Content, textWidth) + 8f);
+                float remainingHeight = Screen.height - TopMargin - y;
+                if (remainingHeight < ToastHeight) break;
+                if (i > 0 && desiredHeight > remainingHeight) break;
+                float toastHeight = Mathf.Min(desiredHeight, remainingHeight);
                 nextY += toastHeight + ToastSpacing;
 
                 // Background
@@ -212,7 +218,7 @@ namespace SilksongCoop.Mod.UI
 
                 // Text
                 GUI.color = text;
-                var textRect = new Rect(x + 4f, y, toastWidth - 8f, toastHeight);
+                var textRect = new Rect(x + 4f, y, textWidth, toastHeight);
                 GUI.Label(textRect, t.Content, style);
             }
 

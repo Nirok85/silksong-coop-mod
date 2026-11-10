@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      require_mod:
+        description: Fail if the protected Mod build does not run successfully
+        type: boolean
+        default: false
 
 # A newer commit on the same branch makes the previous run obsolete. This frees both
 # hosted minutes and the single self-hosted Mod runner for the latest revision.
@@ -185,3 +190,34 @@ jobs:
           ManagedDir: ${{ vars.SILKSONG_MANAGED_DIR }}
         shell: pwsh
         run: ./scripts/preflight-release.ps1
+
+  mod-status:
+    name: Mod build status
+    if: always()
+    needs: mod
+    runs-on: ubuntu-latest
+    env:
+      MOD_RESULT: ${{ needs.mod.result }}
+      REQUIRE_MOD: ${{ inputs.require_mod }}
+    steps:
+      - name: Report Mod build coverage
+        shell: bash
+        run: |
+          case "$MOD_RESULT" in
+            success)
+              echo "Mod compiled against game assemblies and passed release preflight." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            skipped)
+              echo "Mod build skipped. It requires a protected master push or dispatch and an enabled Silksong runner." >> "$GITHUB_STEP_SUMMARY"
+              if [ "$REQUIRE_MOD" = true ]; then
+                echo "::error::A Mod build was requested but the protected runner gate is closed."
+                exit 1
+              fi
+              echo "::notice::Mod compilation was skipped."
+              ;;
+            *)
+              echo "Mod build result: $MOD_RESULT" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::Mod build result: $MOD_RESULT"
+              exit 1
+              ;;
+          esac

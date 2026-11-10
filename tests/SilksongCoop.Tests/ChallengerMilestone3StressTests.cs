@@ -364,9 +364,9 @@ namespace SilksongCoop.Tests
         [InlineData(short.MaxValue)]
         [InlineData(short.MinValue)]
         [InlineData(0)]
-        [InlineData(100000)] // Exceeds short.MaxValue, must clamp
-        [InlineData(-100000)] // Exceeds short.MinValue, must clamp
-        public void ExtremeCurrencyDeltas_ClampingAndRejection(int delta)
+        [InlineData(100000)]
+        [InlineData(-100000)]
+        public void ExtremeCurrencyDeltas_PreserveAmount(int delta)
         {
             var vitals = new VitalsSyncService();
             vitals.InitializeState(5, 5, 9, 1, 0, 10000, 10000);
@@ -387,9 +387,7 @@ namespace SilksongCoop.Tests
             {
                 Assert.NotNull(capturedPacket);
                 Assert.Equal(txId, capturedPacket.Value.TransactionId);
-                // DeltaAmount in packet is short clamped
-                short expectedClampedDelta = (short)Math.Clamp(delta, short.MinValue, short.MaxValue);
-                Assert.Equal(expectedClampedDelta, capturedPacket.Value.DeltaAmount);
+                Assert.Equal(delta, capturedPacket.Value.DeltaAmount);
             }
         }
 

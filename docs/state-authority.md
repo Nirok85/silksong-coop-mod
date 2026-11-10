@@ -5,7 +5,7 @@ receiver resolves conflicts, and which failures are accepted by design. When cod
 and this document disagree, the code is wrong unless the document is updated in
 the same change.
 
-## Current development build (protocol v10)
+## Current development build (protocol v11)
 
 | State | Writer(s) | Receiver rule | Conflict resolution |
 |---|---|---|---|
@@ -22,9 +22,10 @@ the same change.
 
 ## What "authoritative" means here
 
-There is **no** host-authoritative arbitration for arbitrary state: the mod does
-not vote, does not compare peers, and does not reject a peer's vitals, currency,
-world events or deaths merely because the local peer is the host.
+Each peer can send vitals, currency, and death updates under the rules above.
+The host authors world events and persistent world values. A client accepts
+those packets only from its primary host peer and only when the packet's
+`OriginPeerId` matches the sender's peer ID.
 
 The host is authoritative for **enemy HP in its current scene**, and the primary
 peer (`SessionState.RemotePeerId`) is the source of that authority for a client —
@@ -148,8 +149,8 @@ These rules currently cover:
 
 ## Revision rules
 
-See [protocol v10](protocol-v10.md) for the current wire contract. Revision comparisons use modular arithmetic within the host stream.
-In v10, the wire origin must equal the authenticated host transport peer ID.
+See [protocol v11](protocol-v11.md) for the current wire contract. Revision comparisons use modular arithmetic within the host stream.
+The wire origin must equal the authenticated host transport peer ID.
 Receivers discard replays of their own updates. Persistent-state replay uses
 header sequence `0` and preserves values last changed locally in the save.
 

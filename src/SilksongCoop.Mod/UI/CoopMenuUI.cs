@@ -16,18 +16,7 @@ namespace SilksongCoop.Mod.UI
     /// </summary>
     public class CoopMenuUI : MonoBehaviour
     {
-        private bool _isVisible;
-        private float _menuOpenedAt;
-
-        public bool IsVisible
-        {
-            get => _isVisible;
-            set
-            {
-                if (value && !_isVisible) _menuOpenedAt = Time.unscaledTime;
-                _isVisible = value;
-            }
-        }
+        public bool IsVisible { get; set; }
 
         private enum Tab { Host, Join, Status, Settings }
 
@@ -76,7 +65,6 @@ namespace SilksongCoop.Mod.UI
         private bool _watermarkConnected;
         private SessionStatus _watermarkStatus;
         private NetworkPeerId? _watermarkPeerId;
-        private string _watermarkRoomCode = "";
 
         // Disconnect confirmation
         private bool _showDisconnectConfirm = false;
@@ -307,9 +295,6 @@ namespace SilksongCoop.Mod.UI
             if (!IsVisible) return;
 
             UpdateWindowLayout();
-            float menuAlpha = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((Time.unscaledTime - _menuOpenedAt) / 0.18f));
-            GUI.backgroundColor = new Color(previousBackgroundColor.r, previousBackgroundColor.g, previousBackgroundColor.b, previousBackgroundColor.a * menuAlpha);
-            GUI.contentColor = new Color(previousContentColor.r, previousContentColor.g, previousContentColor.b, previousContentColor.a * menuAlpha);
             _windowRect = GUI.Window(_windowId, _windowRect, DrawWindowContents, "");
 
             // Keep the window fully on-screen so the close button stays reachable.
@@ -352,13 +337,11 @@ namespace SilksongCoop.Mod.UI
             bool connected = _sessionState != null && _sessionState.IsConnected;
             SessionStatus status = _sessionState?.Status ?? SessionStatus.Disconnected;
             NetworkPeerId? peerId = _sessionState?.RemotePeerId;
-            string roomCode = _currentRoomCode ?? string.Empty;
 
             bool identityChanged = !_watermarkInitialized ||
                                    connected != _watermarkConnected ||
                                    status != _watermarkStatus ||
-                                   peerId != _watermarkPeerId ||
-                                   !string.Equals(roomCode, _watermarkRoomCode, StringComparison.Ordinal);
+                                   peerId != _watermarkPeerId;
 
             if (!identityChanged && now < _nextWatermarkRefreshTime) return;
 
@@ -366,7 +349,6 @@ namespace SilksongCoop.Mod.UI
             _watermarkConnected = connected;
             _watermarkStatus = status;
             _watermarkPeerId = peerId;
-            _watermarkRoomCode = roomCode;
             _nextWatermarkRefreshTime = now + WatermarkRefreshInterval;
 
             if (connected)
@@ -381,9 +363,7 @@ namespace SilksongCoop.Mod.UI
             }
             else if (status == SessionStatus.Hosting)
             {
-                _watermarkText = !string.IsNullOrEmpty(roomCode)
-                    ? Loc.T("Hosting: {0}", roomCode)
-                    : Loc.T("Hosting (waiting for partner...)");
+                _watermarkText = Loc.T("Hosting (waiting for partner...)");
                 _watermarkColor = SilksongSkin.Gold;
             }
             else if (status == SessionStatus.Connecting)
@@ -871,13 +851,17 @@ namespace SilksongCoop.Mod.UI
             if (recent.Count > 0)
             {
                 GUILayout.Label(Loc.T("RECENT"), _styleSubtitle ?? Skin.label);
+                int roomNumber = 0;
                 foreach (var entry in recent)
                 {
                     bool steamEntry = IsSteamLobbyTarget(entry);
-                    string label = steamEntry ? $"[Steam] {entry}" : entry;
+                    bool roomEntry = !steamEntry && RoomCodeCodec.TryDecode(entry, out _, out _);
+                    string label = roomEntry
+                        ? $"{Loc.T("Room Code")} #{++roomNumber}"
+                        : steamEntry ? $"[Steam] {entry}" : entry;
                     if (GUILayout.Button(label, GUILayout.Height(24)))
                     {
-                        _inputAddressOrCode = entry;
+                        _inputAddressOrCode = roomEntry ? string.Empty : entry;
                         if (steamEntry)
                             JoinSteamSession(entry);
                         else

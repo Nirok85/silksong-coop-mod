@@ -173,7 +173,50 @@ namespace SilksongCoop.Tests.EndToEnd
             Assert.Equal(1, delivered);
         }
 
-        private static void PumpUntil(Func<bool> condition, LiteNetLibTransport host, LiteNetLibTransport client, int maxMs)
+        [Fact]
+        public void OversizeAndInvalidMacFrames_DoNotBlockValidReliableTraffic()
+        {
+            using var host = new LiteNetLibTransport(1, "Host");
+            using var client = new LiteNetLibTransport(2, "Client");
+            using var relay = new UdpRelay();
+            host.StartHost(0);
+            relay.ConfigureHost(host.BoundPort);
+            var code = RoomCodeCodec.EncodeWithSecret(IPAddress.Loopback, relay.Port);
+            host.SetRoomCode(code);
+            client.Connect(code);
+            PumpUntil(() => host.IsConnected && client.IsConnected, host, client, maxMs: 3000);
+            Assert.True(host.IsConnected && client.IsConnected);
+
+            const int maxAuthenticatedPayload = 2048 - 8 - 16;
+            var payload = new byte[maxAuthenticatedPayload + 1];
+            Assert.False(client.Send(host.LocalPeerId, payload, 0, payload.Length,
+                DeliveryMethod.ReliableOrdered, NetworkChannels.World));
+            Assert.Equal(0, client.ReliableBacklogCount);
+
+            // Inject on the connected endpoint. 64 bad MACs previously stopped valid
+            // traffic for 100 ms. The oversize frame must also leave the receive loop alive.
+            var badMac = new byte[8 + 16];
+            badMac[0] = 0x03;
+            badMac[7] = 1;
+            for (int i = 0; i < 64; i++) relay.InjectToHost(badMac);
+            relay.InjectToHost(new byte[4096]);
+
+            var lengths = new List<int>();
+            host.OnDataReceived += (_, _, _, length) => lengths.Add(length);
+            Assert.True(client.Send(host.LocalPeerId, payload, 0, maxAuthenticatedPayload,
+                DeliveryMethod.ReliableOrdered, NetworkChannels.World));
+            // Poll until the relay has forwarded the first valid send. Do not poll the
+            // client, so a retransmission cannot hide a rejected first attempt.
+            var deadline = DateTime.UtcNow.AddMilliseconds(2000);
+            while (lengths.Count == 0 && DateTime.UtcNow < deadline)
+            {
+                host.PollEvents();
+                Thread.Sleep(1);
+            }
+            Assert.Equal(new[] { maxAuthenticatedPayload }, lengths);
+        }
+
+        internal static void PumpUntil(Func<bool> condition, LiteNetLibTransport host, LiteNetLibTransport client, int maxMs)
         {
             var deadline = DateTime.UtcNow.AddMilliseconds(maxMs);
             while (!condition() && DateTime.UtcNow < deadline)
@@ -195,7 +238,7 @@ namespace SilksongCoop.Tests.EndToEnd
         /// Minimal UDP relay between one client and the host. Used to force a deterministic
         /// packet loss without touching production transport code.
         /// </summary>
-        private sealed class UdpRelay : IDisposable
+        internal sealed class UdpRelay : IDisposable
         {
             private readonly Socket _socket;
             private readonly Thread _thread;
@@ -203,6 +246,11 @@ namespace SilksongCoop.Tests.EndToEnd
             private volatile IPEndPoint? _clientEndpoint;
             private IPEndPoint _hostEndpoint = new IPEndPoint(IPAddress.Loopback, 0);
             private int _dropClientDataFrames;
+            private int _droppedDataFrames;
+
+            public int DroppedDataFrames => Volatile.Read(ref _droppedDataFrames);
+
+            public void InjectToHost(byte[] frame) => _socket.SendTo(frame, _hostEndpoint);
             private int _duplicateNextClientDataFrame;
 
             public void DuplicateNextClientDataFrame() => Interlocked.Exchange(ref _duplicateNextClientDataFrame, 1);
@@ -258,6 +306,7 @@ namespace SilksongCoop.Tests.EndToEnd
                             Volatile.Read(ref _dropClientDataFrames) > 0)
                         {
                             Interlocked.Decrement(ref _dropClientDataFrames);
+                            Interlocked.Increment(ref _droppedDataFrames);
                             continue;
                         }
 

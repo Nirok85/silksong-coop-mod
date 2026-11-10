@@ -9,6 +9,7 @@
 #   - every manifest hash matches the file on disk;
 #   - the plugin-only archive contains the two mod DLLs;
 #   - the full archive contains BepInEx, the two mod DLLs and the injector files;
+#   - archive paths are safe and unique on Windows;
 #   - no proprietary game assemblies leaked into either archive.
 [CmdletBinding()]
 param(
@@ -90,7 +91,37 @@ function Get-EntryNames {
     param([string]$ZipPath)
     $zip = [IO.Compression.ZipFile]::OpenRead($ZipPath)
     try {
-        return @($zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+        $seen = [System.Collections.Generic.Dictionary[string,bool]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($entry in $zip.Entries) {
+            $name = $entry.FullName.Replace('\', '/')
+            $canonical = $name.TrimEnd('/')
+            $segments = $canonical.Split('/')
+            $unsafe = $name.EndsWith('//') -or $segments -contains '' -or ($segments | Where-Object {
+                $_ -eq '.' -or $_ -eq '..' -or
+                $_ -match '^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(\.|$)' -or $_ -match '[<>:"|?*\x00-\x1F]|[. ]$'
+            })
+            $symlink = (($entry.ExternalAttributes -shr 16) -band 0xF000) -eq 0xA000
+            if ($unsafe -or $symlink) {
+                Check $false "unsafe ZIP entry in $([IO.Path]::GetFileName($ZipPath)): $name"
+                continue
+            }
+            if ($seen.ContainsKey($canonical)) {
+                Check $false "duplicate ZIP entry in $([IO.Path]::GetFileName($ZipPath)): $name"
+                continue
+            }
+            $seen.Add($canonical, $name.EndsWith("/"))
+            $name
+        }
+        foreach ($name in $seen.Keys) {
+            $ancestor = $name
+            while (($slash = $ancestor.LastIndexOf('/')) -ge 0) {
+                $ancestor = $ancestor.Substring(0, $slash)
+                if ($seen.ContainsKey($ancestor) -and -not $seen[$ancestor]) {
+                    Check $false "file used as ZIP directory in $([IO.Path]::GetFileName($ZipPath)): $ancestor"
+                    break
+                }
+            }
+        }
     }
     finally {
         $zip.Dispose()

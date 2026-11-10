@@ -196,9 +196,9 @@ namespace SilksongCoop.Mod.Networking
         /// <summary>
         /// Reliable sends refused by Steam are queued locally until the SDK accepts them.
         /// </summary>
-        private readonly Queue<PendingSend> _pendingReliable = new();
+        private readonly Dictionary<CSteamID, Queue<PendingSend>> _pendingReliable = new();
         private const int MaxPendingReliable = 4096;
-        private bool _reliableQueueOverflow;
+        private readonly HashSet<CSteamID> _failedReliablePeers = new();
 
         private readonly struct PendingSend
         {
@@ -206,17 +206,27 @@ namespace SilksongCoop.Mod.Networking
             public readonly byte[] Data;
             public readonly byte Channel;
             public readonly long Generation;
+            public readonly long QueuedAtMs;
 
-            public PendingSend(CSteamID peer, byte[] data, byte channel, long generation)
+            public PendingSend(CSteamID peer, byte[] data, byte channel, long generation, long queuedAtMs)
             {
                 Peer = peer;
                 Data = data;
                 Channel = channel;
                 Generation = generation;
+                QueuedAtMs = queuedAtMs;
             }
         }
 
-        public int ReliableBacklogCount => _pendingReliable.Count;
+        public int ReliableBacklogCount
+        {
+            get
+            {
+                int total = 0;
+                foreach (var queue in _pendingReliable.Values) total += queue.Count;
+                return total;
+            }
+        }
 
         public static BepInEx.Logging.ManualLogSource? Logger { get; set; }
 
@@ -330,6 +340,7 @@ namespace SilksongCoop.Mod.Networking
             _lobbyId = CSteamID.Nil;
             MarkConnectedPeersDirty();
             _requestedLobbyId = 0;
+            ResetReliableQueues();
             _sessionGeneration++;
             _lobbyRequestGeneration = -1;
             var call = SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, _maxPlayers);
@@ -385,6 +396,7 @@ namespace SilksongCoop.Mod.Networking
             MarkConnectedPeersDirty();
             _connectionAttemptStartMs = NowMs();
             _requestedLobbyId = lobbyIdVal;
+            ResetReliableQueues();
             _lobbyRequestGeneration = ++_sessionGeneration;
             SteamMatchmaking.JoinLobby(new CSteamID(lobbyIdVal));
         }
@@ -405,6 +417,7 @@ namespace SilksongCoop.Mod.Networking
         /// </summary>
         public void Disconnect()
         {
+            ResetReliableQueues();
             _sessionGeneration++;
             _lobbyRequestGeneration = -1;
             _requestedLobbyId = 0;
@@ -728,6 +741,7 @@ namespace SilksongCoop.Mod.Networking
             MarkConnectedPeersDirty();
             for (int i = 0; i < removed.Count; i++)
             {
+                RemoveQueuedReliable(removed[i].SteamId);
                 try { SteamNetworking.CloseP2PSessionWithUser(removed[i].SteamId); } catch { /* best-effort */ }
                 if (notify && removed[i].Notified)
                 {
@@ -743,25 +757,30 @@ namespace SilksongCoop.Mod.Networking
         /// <summary>
         /// Sends data to all connected peers. Steam currently holds one remote peer.
         /// </summary>
-        public void Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel)
+        public bool Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
-            if (!IsSteamAvailable) return;
-            if (data == null || offset < 0 || length < 0 || offset + length > data.Length) return;
+            if (!IsSteamAvailable) return false;
+            if (data == null || offset < 0 || length < 0 || offset > data.Length - length) return false;
 
             // Iterate the primary and additional peers directly: building a ConnectedPeers
             // list here allocated on every broadcast tick.
+            bool hasTargets = false;
+            bool accepted = true;
             if (IsConnected && _remoteSteamId != CSteamID.Nil)
             {
-                SendToPeer(_remoteSteamId, data, offset, length, method, channel);
+                hasTargets = true;
+                accepted &= SendToPeer(_remoteSteamId, data, offset, length, method, channel);
             }
 
             foreach (var pair in _additionalPeers)
             {
                 if (pair.Value.Notified)
                 {
-                    SendToPeer(pair.Value.SteamId, data, offset, length, method, channel);
+                    hasTargets = true;
+                    accepted &= SendToPeer(pair.Value.SteamId, data, offset, length, method, channel);
                 }
             }
+            return hasTargets && accepted;
         }
 
         /// <summary>Current Steam transport holds one primary peer plus additional lobby members.</summary>
@@ -779,10 +798,10 @@ namespace SilksongCoop.Mod.Networking
         /// <param name="length">Number of bytes to send.</param>
         /// <param name="method">Delivery method (reliable or unreliable).</param>
         /// <param name="channel">Channel index (0–255).</param>
-        public void Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
+        public bool Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
-            if (!IsSteamAvailable) return;
-            if (data == null || offset < 0 || length < 0 || offset + length > data.Length) return;
+            if (!IsSteamAvailable) return false;
+            if (data == null || offset < 0 || length < 0 || offset > data.Length - length) return false;
 
             CSteamID targetId;
             if (_remoteSteamId != CSteamID.Nil && target.Value == _remoteSteamId.m_SteamID && IsConnected)
@@ -795,41 +814,46 @@ namespace SilksongCoop.Mod.Networking
             }
             else
             {
-                return;
+                return false;
             }
 
-            SendToPeer(targetId, data, offset, length, method, channel);
+            return SendToPeer(targetId, data, offset, length, method, channel);
         }
 
         /// <summary>
         /// Frames and sends one payload to a resolved Steam peer. Callers must already have
         /// validated the target; all framing and protocol-prefix behavior lives here.
         /// </summary>
-        private void SendToPeer(CSteamID targetId, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
+        private bool SendToPeer(CSteamID targetId, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
             // Both callers validate availability and the source buffer before entering
             // this per-peer helper; do not call SteamAPI.IsSteamRunning() once per peer.
-            if (data == null || offset < 0 || length < 0 || offset + length > data.Length) return;
+            if (data == null || offset < 0 || length < 0 || offset > data.Length - length) return false;
+
+            if (_failedReliablePeers.Contains(targetId)) return false;
 
             bool reliable = method == DeliveryMethod.ReliableOrdered ||
                             method == DeliveryMethod.ReliableUnordered;
             if (!reliable)
-            {
-                TrySendToPeer(targetId, data, offset, length, channel, EP2PSend.k_EP2PSendUnreliableNoDelay);
-                return;
-            }
+                return TrySendToPeer(targetId, data, offset, length, channel, EP2PSend.k_EP2PSendUnreliableNoDelay);
 
-            if (_pendingReliable.Count == 0 &&
+            _pendingReliable.TryGetValue(targetId, out var queue);
+            if ((queue == null || queue.Count == 0) &&
                 TrySendToPeer(targetId, data, offset, length, channel, EP2PSend.k_EP2PSendReliable))
-                return;
+                return true;
 
-            if (_pendingReliable.Count >= MaxPendingReliable)
+            if (queue == null)
+                _pendingReliable.Add(targetId, queue = new Queue<PendingSend>());
+
+            if (queue.Count >= MaxPendingReliable)
             {
-                Logger?.LogWarning("[Steam] Reliable queue exhausted; ending the session.");
-                _reliableQueueOverflow = true;
-                return;
+                Logger?.LogWarning("[Steam] Peer reliable queue exhausted; disconnecting the peer.");
+                _failedReliablePeers.Add(targetId);
+                return false;
             }
-            _pendingReliable.Enqueue(new PendingSend(targetId, data.AsSpan(offset, length).ToArray(), channel, _sessionGeneration));
+
+            queue.Enqueue(new PendingSend(targetId, data.AsSpan(offset, length).ToArray(), channel, _sessionGeneration, NowMs()));
+            return true;
         }
 
         private bool TrySendToPeer(CSteamID targetId, byte[] data, int offset, int length, byte channel, EP2PSend sendType)
@@ -852,30 +876,82 @@ namespace SilksongCoop.Mod.Networking
             }
         }
 
+        private void ResetReliableQueues()
+        {
+            _pendingReliable.Clear();
+            _failedReliablePeers.Clear();
+        }
+
         private void RemoveQueuedReliable(CSteamID peer)
         {
-            for (int i = _pendingReliable.Count; i > 0; i--)
+            _pendingReliable.Remove(peer);
+            _failedReliablePeers.Remove(peer);
+        }
+
+        internal void FailReliablePeer(NetworkPeerId peer) =>
+            _failedReliablePeers.Add(new CSteamID(peer.Value));
+
+        private void DisconnectFailedReliablePeers()
+        {
+            if (_failedReliablePeers.Count == 0) return;
+            var failed = new List<CSteamID>(_failedReliablePeers);
+            foreach (var peer in failed)
             {
-                var pending = _pendingReliable.Dequeue();
-                if (pending.Peer != peer) _pendingReliable.Enqueue(pending);
+                if (!_failedReliablePeers.Remove(peer)) continue;
+                if (peer != _remoteSteamId && !_additionalPeers.ContainsKey(peer.m_SteamID)) continue;
+
+                if (peer == _remoteSteamId)
+                {
+                    ClosePrimaryPeerSession(IsHost ? DisconnectReason.Timeout : DisconnectReason.ConnectionFailed);
+                }
+                else
+                {
+                    try { SteamNetworking.CloseP2PSessionWithUser(peer); } catch { /* best-effort */ }
+                    NotifyAdditionalPeerDisconnected(peer, DisconnectReason.ConnectionFailed);
+                }
             }
+        }
+
+        private void ClosePrimaryPeerSession(DisconnectReason reason)
+        {
+            if (!IsHost)
+            {
+                // Leaving the lobby also invalidates every additional full-mesh
+                // peer; clear them before promoting anything to the primary slot.
+                ClearAdditionalPeers(reason, notify: true);
+                if (_lobbyId != CSteamID.Nil)
+                {
+                    try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
+                    _lobbyId = CSteamID.Nil;
+                }
+            }
+            if (_remoteSteamId != CSteamID.Nil)
+            {
+                try { SteamNetworking.CloseP2PSessionWithUser(_remoteSteamId); } catch { /* best-effort */ }
+            }
+            NotifyPeerDisconnected(reason);
         }
 
         private void FlushReliableQueue()
         {
-            for (int i = 0; i < 64 && _pendingReliable.Count > 0; i++)
+            foreach (var pair in _pendingReliable)
             {
-                var item = _pendingReliable.Peek();
-                if (item.Generation != _sessionGeneration ||
-                    (item.Peer != _remoteSteamId && !_additionalPeers.ContainsKey(item.Peer.m_SteamID)))
+                var queue = pair.Value;
+                for (int i = 0; i < 64 && queue.Count > 0; i++)
                 {
-                    _pendingReliable.Dequeue();
-                    continue;
+                    var item = queue.Peek();
+                    if (item.Generation == _sessionGeneration &&
+                        !TrySendToPeer(item.Peer, item.Data, 0, item.Data.Length, item.Channel, EP2PSend.k_EP2PSendReliable))
+                    {
+                        if (NowMs() - item.QueuedAtMs >= SteamHeartbeatTimeoutMs)
+                        {
+                            Logger?.LogWarning("[Steam] Peer reliable queue stalled; disconnecting the peer.");
+                            _failedReliablePeers.Add(item.Peer);
+                        }
+                        break;
+                    }
+                    queue.Dequeue();
                 }
-
-                if (!TrySendToPeer(item.Peer, item.Data, 0, item.Data.Length, item.Channel, EP2PSend.k_EP2PSendReliable))
-                    break;
-                _pendingReliable.Dequeue();
             }
         }
 
@@ -983,25 +1059,8 @@ namespace SilksongCoop.Mod.Networking
                 {
                     Logger?.LogWarning("[Steam] Peer heartbeat timed out");
 
-                    // A host keeps its lobby: the plugin reports "still hosting" and the
-                    // partner can rejoin the same lobby after fixing the connection. Only a
-                    // client leaves, because its lobby membership belongs to the host.
-                    if (!IsHost)
-                    {
-                        // Leaving the lobby also invalidates every additional full-mesh
-                        // peer; clear them before promoting anything to the primary slot.
-                        ClearAdditionalPeers(DisconnectReason.Timeout, notify: true);
-                        if (_lobbyId != CSteamID.Nil)
-                        {
-                            try { SteamMatchmaking.LeaveLobby(_lobbyId); } catch { /* best-effort */ }
-                            _lobbyId = CSteamID.Nil;
-                        }
-                    }
-                    if (_remoteSteamId != CSteamID.Nil)
-                    {
-                        try { SteamNetworking.CloseP2PSessionWithUser(_remoteSteamId); } catch { /* best-effort */ }
-                    }
-                    NotifyPeerDisconnected(DisconnectReason.Timeout);
+                    // The host keeps its lobby so the partner can rejoin.
+                    ClosePrimaryPeerSession(DisconnectReason.Timeout);
                     return;
                 }
             }
@@ -1041,13 +1100,7 @@ namespace SilksongCoop.Mod.Networking
                 }
             }
 
-            if (_reliableQueueOverflow)
-            {
-                _reliableQueueOverflow = false;
-                _pendingReliable.Clear();
-                SilksongCoopPlugin.Instance?.DisconnectFromSession(DisconnectReason.ConnectionFailed);
-                return;
-            }
+            DisconnectFailedReliablePeers();
             FlushReliableQueue();
 
             // 2. Poll only the channels used by the protocol (2-4) and reuse buffer.
@@ -1603,6 +1656,7 @@ namespace SilksongCoop.Mod.Networking
             _additionalRejectedPeers.Clear();
             ClearAdditionalPeers(DisconnectReason.GracefulDisconnect, notify: false);
             _requestedLobbyId = callback.m_steamIDLobby.m_SteamID;
+            ResetReliableQueues();
             _lobbyRequestGeneration = ++_sessionGeneration;
             SilksongCoopPlugin.Instance?.SetActiveTransport(this);
             SilksongCoopPlugin.Instance?.PrepareForNewSession();

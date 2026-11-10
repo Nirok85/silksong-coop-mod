@@ -19,7 +19,7 @@ namespace SilksongCoop.Core.Protocol.Packets
         public PacketHeader Header;
         public CurrencyType Currency;
         public int TotalWalletAmount;
-        public short DeltaAmount;
+        public int DeltaAmount;
         public uint PickupUniqueId;
         public Guid TransactionId;
 
@@ -43,7 +43,7 @@ namespace SilksongCoop.Core.Protocol.Packets
             writer.WriteHeader(Header);
             writer.WriteByte((byte)Currency);
             writer.WriteInt32(TotalWalletAmount);
-            writer.WriteInt16(DeltaAmount);
+            writer.WriteInt32(DeltaAmount);
             writer.WriteUInt32(PickupUniqueId);
             writer.WriteGuid(TransactionId);
             writer.WriteUInt64(PickupKey);
@@ -63,7 +63,7 @@ namespace SilksongCoop.Core.Protocol.Packets
                 Header = reader.ReadHeader(),
                 Currency = (CurrencyType)reader.ReadByte(),
                 TotalWalletAmount = reader.ReadInt32(),
-                DeltaAmount = reader.ReadInt16(),
+                DeltaAmount = reader.ReadInt32(),
                 PickupUniqueId = reader.ReadUInt32(),
                 TransactionId = reader.ReadGuid(),
                 PickupKey = reader.ReadUInt64(),
