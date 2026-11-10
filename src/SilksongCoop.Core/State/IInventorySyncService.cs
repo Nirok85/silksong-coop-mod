@@ -19,8 +19,8 @@ namespace SilksongCoop.Core.State
         event Action<string, ItemCategory>? OnRemoteItemUnlocked;
         event Action<ItemUnlockPacket>? OnOutgoingItemUnlockPacket;
 
-        void OnLocalItemDiscovered(string itemId, ItemCategory category, Guid? transactionId = null);
-        void OnLocalItemDiscovered(int itemNumericId, ItemCategory category, Guid? transactionId = null);
+        void OnLocalItemDiscovered(string itemId, ItemCategory category, Guid? transactionId = null, bool force = false);
+        void OnLocalItemDiscovered(int itemNumericId, ItemCategory category, Guid? transactionId = null, bool force = false);
         void HandleItemUnlockPacket(NetworkPeerId sender, ItemUnlockPacket packet);
         void SetLocalEquippedCrest(string crestId);
         void SetLocalEquippedTools(IEnumerable<string> toolIds);

@@ -77,6 +77,11 @@ namespace SilksongCoop.Mod.Services
         {
             if (transport == null) return false;
 
+            bool isReliable = method == DeliveryMethod.ReliableOrdered ||
+                              method == DeliveryMethod.ReliableUnordered;
+            if (isReliable && transport.ReliableBacklogCount >= NetworkLimits.ReliableBacklogCap)
+                return false;
+
             byte[]? buffer = null;
             try
             {

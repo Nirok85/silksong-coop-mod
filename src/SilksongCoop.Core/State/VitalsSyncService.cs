@@ -29,6 +29,8 @@ namespace SilksongCoop.Core.State
         // A join snapshot seeds the starting balance. Once a currency has changed,
         // only transactions can update it because snapshots have no causal watermark.
         private readonly HashSet<CurrencyType> _activeCurrencies = new();
+        private int _sharedRosaries;
+        private int _sharedShellShards;
 
         // Physical drops exist in BOTH simulations (each client kills the same enemy and
         // spawns its own copy). A shared key lets the second pickup be credited only once.
@@ -48,8 +50,8 @@ namespace SilksongCoop.Core.State
         public int SharedMaxHealth { get; private set; } = 5;
         public int SharedMaxSilkSpools { get; private set; } = 1;
         public int SharedNeedleUpgradeLevel { get; private set; } = 0;
-        public int SharedRosaries { get; private set; } = 0;
-        public int SharedShellShards { get; private set; } = 0;
+        public int SharedRosaries { get => Math.Max(0, _sharedRosaries); private set => _sharedRosaries = value; }
+        public int SharedShellShards { get => Math.Max(0, _sharedShellShards); private set => _sharedShellShards = value; }
 
         // Remote (partner) vitals for HUD display. Updated from incoming VitalsSync packets.
         private int _remoteHealth;
@@ -427,17 +429,17 @@ namespace SilksongCoop.Core.State
                     // call sites pass 0, which means "derive from the delta".
                     if (currency == CurrencyType.Rosaries)
                     {
-                        int next = (int)Math.Clamp((long)SharedRosaries + deltaAmount, 0, PacketValidator.MaxReasonableCurrency);
+                        int next = _sharedRosaries + deltaAmount;
                         if (newTotal > 0) next = Math.Min(newTotal, PacketValidator.MaxReasonableCurrency);
-                        SharedRosaries = next;
-                        currentWallet = SharedRosaries;
+                        _sharedRosaries = next;
+                        currentWallet = Math.Max(0, _sharedRosaries);
                     }
                     else
                     {
-                        int next = (int)Math.Clamp((long)SharedShellShards + deltaAmount, 0, PacketValidator.MaxReasonableCurrency);
+                        int next = _sharedShellShards + deltaAmount;
                         if (newTotal > 0) next = Math.Min(newTotal, PacketValidator.MaxReasonableCurrency);
-                        SharedShellShards = next;
-                        currentWallet = SharedShellShards;
+                        _sharedShellShards = next;
+                        currentWallet = Math.Max(0, _sharedShellShards);
                     }
                 }
             }
@@ -702,21 +704,30 @@ namespace SilksongCoop.Core.State
                     }
 
                     bool isRosaries = packet.Currency == CurrencyType.Rosaries;
-                    int previousWallet = isRosaries ? SharedRosaries : SharedShellShards;
+                    int previousInternal = isRosaries ? _sharedRosaries : _sharedShellShards;
+                    int previousClamped = Math.Max(0, previousInternal);
                     if (delta != 0)
                     {
                         _activeCurrencies.Add(packet.Currency);
-                        updatedWallet = (int)Math.Clamp((long)previousWallet + delta, 0, PacketValidator.MaxReasonableCurrency);
+                        int next = previousInternal + delta;
+                        if (next > PacketValidator.MaxReasonableCurrency) next = PacketValidator.MaxReasonableCurrency;
+                        if (isRosaries) _sharedRosaries = next;
+                        else _sharedShellShards = next;
+                        updatedWallet = Math.Max(0, next);
                     }
                     else if (!claimedPickup && !_activeCurrencies.Contains(packet.Currency))
                     {
-                        updatedWallet = Math.Max(previousWallet, packet.TotalWalletAmount);
+                        // Initial/reconnect sync: adopt the peer's total. Do not favour the
+                        // larger balance, otherwise a spend that never reached the peer is
+                        // silently restored (issue #2).
+                        int next = Math.Clamp(packet.TotalWalletAmount, 0, PacketValidator.MaxReasonableCurrency);
+                        if (isRosaries) _sharedRosaries = next;
+                        else _sharedShellShards = next;
+                        updatedWallet = next;
                     }
-                    else updatedWallet = previousWallet;
+                    else updatedWallet = Math.Max(0, isRosaries ? _sharedRosaries : _sharedShellShards);
 
-                    if (isRosaries) SharedRosaries = updatedWallet;
-                    else SharedShellShards = updatedWallet;
-                    appliedDelta = updatedWallet - previousWallet;
+                    appliedDelta = updatedWallet - previousClamped;
                 }
 
                 if (appliedDelta != 0)

@@ -1404,9 +1404,24 @@ namespace SilksongCoop.Mod.State
 
             // Replay packets reserve header sequence zero. Catch-up must not overwrite
             // a value that was last changed in this save.
-            return packet.Header.TickSequence == 0 &&
-                   _persistentStates.TryGetValue(packet.ItemKey, out var local) &&
-                   local.OriginPeerId == _revisionOrigin;
+            if (packet.Header.TickSequence == 0 &&
+                _persistentStates.TryGetValue(packet.ItemKey, out var local) &&
+                local.OriginPeerId == _revisionOrigin)
+            {
+                return true;
+            }
+
+            // Concurrent edits to the same object: a remote change must not overwrite a
+            // local change that is at least as recent. This makes the newer writer win
+            // instead of both sides accepting each other's value.
+            if (_persistentLastValue.TryGetValue(packet.ItemKey, out var localLast) &&
+                localLast.OriginPeerId == _revisionOrigin &&
+                packet.Header.Timestamp <= localLast.Header.Timestamp)
+            {
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -2020,15 +2035,25 @@ namespace SilksongCoop.Mod.State
                 if (target == null) continue;
 
                 // Defense in depth for claims cached by older code paths: the host will
-                // not apply a deferred client death that carries no damage proof.
+                // not apply a deferred client death that carries no damage proof, nor one
+                // whose damage is insufficient to kill the enemy as it is loaded now.
                 if (_plugin?.SessionState?.IsHost == true &&
-                    pending.FromRemoteClaim &&
-                    pending.Damage <= 0)
+                    pending.FromRemoteClaim)
                 {
-                    SilksongCoopPlugin.LogWarn(
-                        $"[EnemySync] Dropped deferred death claim for {pending.Entry.EnemyKey}: no damage");
-                    (resolved ??= new List<ulong>()).Add(pair.Key);
-                    continue;
+                    bool reject = pending.Damage <= 0;
+                    if (!reject && target != null)
+                    {
+                        int currentHp = target.hp;
+                        if (currentHp > 0 && pending.Damage < currentHp)
+                            reject = true;
+                    }
+                    if (reject)
+                    {
+                        SilksongCoopPlugin.LogWarn(
+                            $"[EnemySync] Dropped deferred death claim for {pending.Entry.EnemyKey}: insufficient damage");
+                        (resolved ??= new List<ulong>()).Add(pair.Key);
+                        continue;
+                    }
                 }
 
                 if (_service.TryAcceptSnapshot(
@@ -2037,7 +2062,7 @@ namespace SilksongCoop.Mod.State
                         pending.Entry.IsDead,
                         pending.Timestamp))
                 {
-                    ApplyEnemyState(pending.Entry.EnemyKey, target, pending.Entry.Hp, pending.Entry.IsDead, authoritative: true);
+                    ApplyEnemyState(pending.Entry.EnemyKey, target!, pending.Entry.Hp, pending.Entry.IsDead, authoritative: true);
                 }
 
                 (resolved ??= new List<ulong>()).Add(pair.Key);

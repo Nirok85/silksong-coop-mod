@@ -299,22 +299,49 @@ namespace SilksongCoop.Mod.Services
                         if (entry.Kind == QuestFlagKind.Bool &&
                             _boolFields.TryGetValue(entry.Key, out var boolAccessor))
                         {
-                            boolAccessor.Set(playerData, entry.BoolValue);
-                            _before?.SetBool(entry.Key, entry.BoolValue);
-                            for (int p = 0; p < _pendingFlushes.Count; p++)
-                                _pendingFlushes[p].SetBool(entry.Key, entry.BoolValue);
-                            _lastSnapshot?.SetBool(entry.Key, entry.BoolValue);
-                            applied++;
+                            // Quest flags are monotonic: a true flag must not be cleared by a
+                            // stale remote packet. Only apply when the remote value advances.
+                            bool current = boolAccessor.Get(playerData);
+                            if (entry.BoolValue && !current)
+                            {
+                                boolAccessor.Set(playerData, true);
+                                _before?.SetBool(entry.Key, true);
+                                for (int p = 0; p < _pendingFlushes.Count; p++)
+                                    _pendingFlushes[p].SetBool(entry.Key, true);
+                                _lastSnapshot?.SetBool(entry.Key, true);
+                                applied++;
+                            }
+                            else if (!entry.BoolValue && !current)
+                            {
+                                // Both sides agree it is false; keep baselines in sync.
+                                _before?.SetBool(entry.Key, false);
+                                for (int p = 0; p < _pendingFlushes.Count; p++)
+                                    _pendingFlushes[p].SetBool(entry.Key, false);
+                                _lastSnapshot?.SetBool(entry.Key, false);
+                            }
                         }
                         else if (entry.Kind == QuestFlagKind.Int &&
                                  _intFields.TryGetValue(entry.Key, out var intAccessor))
                         {
-                            intAccessor.Set(playerData, entry.IntValue);
-                            _before?.SetInt(entry.Key, entry.IntValue);
-                            for (int p = 0; p < _pendingFlushes.Count; p++)
-                                _pendingFlushes[p].SetInt(entry.Key, entry.IntValue);
-                            _lastSnapshot?.SetInt(entry.Key, entry.IntValue);
-                            applied++;
+                            int current = intAccessor.Get(playerData);
+                            // Quest stages only move forward; a lower stage must not roll
+                            // back a newer local/remote one.
+                            if (entry.IntValue > current)
+                            {
+                                intAccessor.Set(playerData, entry.IntValue);
+                                _before?.SetInt(entry.Key, entry.IntValue);
+                                for (int p = 0; p < _pendingFlushes.Count; p++)
+                                    _pendingFlushes[p].SetInt(entry.Key, entry.IntValue);
+                                _lastSnapshot?.SetInt(entry.Key, entry.IntValue);
+                                applied++;
+                            }
+                            else if (entry.IntValue == current)
+                            {
+                                _before?.SetInt(entry.Key, current);
+                                for (int p = 0; p < _pendingFlushes.Count; p++)
+                                    _pendingFlushes[p].SetInt(entry.Key, current);
+                                _lastSnapshot?.SetInt(entry.Key, current);
+                            }
                         }
                     }
                 }

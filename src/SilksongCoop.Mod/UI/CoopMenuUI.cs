@@ -805,14 +805,14 @@ namespace SilksongCoop.Mod.UI
 
                 // UDP button (large, prominent)
                 GUI.color = SilksongSkin.Gold;
-                if (GUILayout.Button(Loc.T("HOST  UDP  (Direct IP)"), GUILayout.Height(38)))
+                if (GUILayout.Button(Loc.T("HOST  UDP  (Room Code)"), GUILayout.Height(38)))
                 {
                     GUI.color = Color.white;
                     HostUdpSession();
                 }
                 GUI.color = Color.white;
 
-                GUILayout.Label(Loc.T("Best with Radmin VPN or LAN. Share your IP:port with your partner."), _styleSubtitle ?? Skin.label);
+                GUILayout.Label(Loc.T("Best with Radmin VPN or LAN. Share the full room code with your partner."), _styleSubtitle ?? Skin.label);
                 GUILayout.Space(10);
 
                 // Steam button

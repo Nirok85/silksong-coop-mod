@@ -929,7 +929,7 @@ namespace SilksongCoop.Mod
                 {
                     if (pd.GetBool(boolName))
                     {
-                        InventorySync.OnLocalItemDiscovered(boolName, ItemCategory.Ability);
+                        InventorySync.OnLocalItemDiscovered(boolName, ItemCategory.Ability, force: true);
                     }
                 }
 
@@ -943,7 +943,7 @@ namespace SilksongCoop.Mod
                         {
                             if (tool != null && !string.IsNullOrEmpty(tool.name))
                             {
-                                InventorySync.OnLocalItemDiscovered(tool.name, ItemCategory.Tool);
+                                InventorySync.OnLocalItemDiscovered(tool.name, ItemCategory.Tool, force: true);
                             }
                         }
                     }
@@ -956,7 +956,7 @@ namespace SilksongCoop.Mod
                 // 3. Current crest
                 if (!string.IsNullOrEmpty(pd.CurrentCrestID))
                 {
-                    InventorySync.OnLocalItemDiscovered(pd.CurrentCrestID, ItemCategory.Crest);
+                    InventorySync.OnLocalItemDiscovered(pd.CurrentCrestID, ItemCategory.Crest, force: true);
                 }
 
                 // 4. Heart pieces & silk parts (BUG-B5: counters bypass the unlock dedup —
@@ -1009,6 +1009,7 @@ namespace SilksongCoop.Mod
                         // game resets it). Cap so a baseline can never award a second mask.
                         int merged = Math.Max(playerData.heartPieces, Math.Clamp(baseline, 0, 3));
                         playerData.heartPieces = merged;
+                        _lastHeartPiecesBroadcast = merged;
                     }
                     return;
                 }
@@ -1018,6 +1019,7 @@ namespace SilksongCoop.Mod
                     {
                         int merged = Math.Max(playerData.silkParts, Math.Clamp(baseline, 0, 2));
                         playerData.silkParts = merged;
+                        _lastSilkPartsBroadcast = merged;
                     }
                     return;
                 }
@@ -1050,6 +1052,7 @@ namespace SilksongCoop.Mod
                             HeroController.instance?.AddToMaxHealth(1);
                         }
                         playerData.heartPieces = next;
+                        _lastHeartPiecesBroadcast = next;
                     }
                     return;
                 }
@@ -1077,6 +1080,7 @@ namespace SilksongCoop.Mod
                             HeroController.instance?.AddToMaxSilk(1);
                         }
                         playerData.silkParts = next;
+                        _lastSilkPartsBroadcast = next;
                     }
                     return;
                 }

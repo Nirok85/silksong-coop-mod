@@ -96,9 +96,14 @@ namespace SilksongCoop.Core.State
         /// <param name="itemNumericId">Numeric item identifier.</param>
         /// <param name="category">Item category.</param>
         /// <param name="transactionId">Optional transaction ID for deduplication.</param>
-        public void OnLocalItemDiscovered(int itemNumericId, ItemCategory category, Guid? transactionId = null)
+        public void OnLocalItemDiscovered(int itemNumericId, ItemCategory category, Guid? transactionId = null, bool force = false)
         {
-            OnLocalItemDiscovered(itemNumericId.ToString(), category, transactionId);
+            OnLocalItemDiscovered(itemNumericId.ToString(), category, transactionId, force);
+        }
+
+        public void OnLocalInitialItemDiscovered(int itemNumericId, ItemCategory category, Guid? transactionId = null)
+        {
+            OnLocalItemDiscovered(itemNumericId, category, transactionId, force: true);
         }
 
         /// <summary>
@@ -107,7 +112,7 @@ namespace SilksongCoop.Core.State
         /// <param name="itemId">String item identifier.</param>
         /// <param name="category">Item category.</param>
         /// <param name="transactionId">Optional transaction ID for deduplication.</param>
-        public void OnLocalItemDiscovered(string itemId, ItemCategory category, Guid? transactionId = null)
+        public void OnLocalItemDiscovered(string itemId, ItemCategory category, Guid? transactionId = null, bool force = false)
         {
             try
             {
@@ -123,7 +128,14 @@ namespace SilksongCoop.Core.State
                 lock (_syncLock)
                 {
                     if (_processedTransactions.Contains(tx)) return;
-                    if (!_unlockedItems.Add(itemId)) return;
+                    if (force)
+                    {
+                        _unlockedItems.Add(itemId);
+                    }
+                    else
+                    {
+                        if (!_unlockedItems.Add(itemId)) return;
+                    }
 
                     RecordTransaction(tx);
                     seq = ++_sequenceCounter;
@@ -146,6 +158,11 @@ namespace SilksongCoop.Core.State
             {
                 Log($"[InventorySyncService] OnLocalItemDiscovered error: {ex.Message}");
             }
+        }
+
+        public void OnLocalInitialItemDiscovered(string itemId, ItemCategory category, Guid? transactionId = null)
+        {
+            OnLocalItemDiscovered(itemId, category, transactionId, force: true);
         }
 
         /// <summary>

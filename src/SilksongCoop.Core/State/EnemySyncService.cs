@@ -559,13 +559,15 @@ namespace SilksongCoop.Core.State
                     entry = new Entry { HasState = false };
                 }
 
-                if (entry.Dead && !dead) return false;
-
                 if (entry.LastSnapshotTimestamp != 0)
                 {
                     int diff = unchecked((int)(timestamp - entry.LastSnapshotTimestamp));
                     if (diff <= 0) return false;
                 }
+
+                // A host snapshot is authoritative: a client that prematurely marked the
+                // enemy dead must not block a newer host snapshot that says it is alive.
+                bool resurrect = entry.Dead && !dead;
 
                 // A snapshot generated before the local player's last hit cannot contain
                 // that hit. Applying its higher HP would visually resurrect the enemy until
@@ -574,8 +576,11 @@ namespace SilksongCoop.Core.State
                 bool localHitSinceSnapshot = entry.LastLocalHitOrder > entry.LastSnapshotOrder;
                 int previousHp = entry.HasState ? entry.LastHp : int.MaxValue;
                 int acceptedHp = dead ? 0 : hp;
-                if (!dead && localHitSinceSnapshot)
+                if (!dead && localHitSinceSnapshot && !resurrect)
                     acceptedHp = Math.Min(entry.LastHp, Math.Max(0, hp));
+
+                bool accepted = resurrect || dead || !localHitSinceSnapshot || acceptedHp < previousHp;
+                if (!accepted) return false;
 
                 entry.HasState = true;
                 entry.LastSnapshotTimestamp = timestamp;
@@ -585,7 +590,7 @@ namespace SilksongCoop.Core.State
                 entry.Dead = dead;
                 entry.LastHp = acceptedHp;
                 _enemies[enemyKey] = entry;
-                return dead || !localHitSinceSnapshot || acceptedHp < previousHp;
+                return true;
             }
         }
     }

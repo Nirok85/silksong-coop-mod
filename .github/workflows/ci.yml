@@ -122,9 +122,8 @@ jobs:
     # runner is not safe. The gap for fork PRs is documented in
     # docs/release-checklist.md - a maintainer must build the branch before merging.
     if: >-
-      ${{ vars.ENABLE_MOD_CI == 'true' &&
-          (github.event_name != 'pull_request' ||
-           github.event.pull_request.head.repo.full_name == github.repository) }}
+      ${{ github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: [self-hosted, linux, silksong]
     timeout-minutes: 30
     environment: silksong-mod-build

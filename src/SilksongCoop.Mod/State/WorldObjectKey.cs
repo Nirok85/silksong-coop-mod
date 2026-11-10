@@ -213,13 +213,13 @@ namespace SilksongCoop.Mod.State
             int type = pickup is ShellShard ? 1 : 0;
 
             Vector3 pos = pickup.transform.position;
-            float x = Mathf.Round(pos.x * 10f) / 10f;
-            float y = Mathf.Round(pos.y * 10f) / 10f;
+            float x = Mathf.Round(pos.x * 100f) / 100f;
+            float y = Mathf.Round(pos.y * 100f) / 100f;
 
             string raw = string.Concat(
                 pickup.gameObject.scene.name, "|", type.ToString(), "|",
-                x.ToString("F1", System.Globalization.CultureInfo.InvariantCulture), "|",
-                y.ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
+                x.ToString("F2", System.Globalization.CultureInfo.InvariantCulture), "|",
+                y.ToString("F2", System.Globalization.CultureInfo.InvariantCulture));
 
             return HashString(raw);
         }
