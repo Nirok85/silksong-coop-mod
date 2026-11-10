@@ -16,8 +16,8 @@ namespace SilksongCoop.Tests.EndToEnd
         [Fact]
         public void FilledBacklog_IsObservableThroughTheDiagnosticsCounter()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");

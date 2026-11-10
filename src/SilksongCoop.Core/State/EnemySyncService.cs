@@ -565,9 +565,9 @@ namespace SilksongCoop.Core.State
                     if (diff <= 0) return false;
                 }
 
-                // A host snapshot is authoritative: a client that prematurely marked the
-                // enemy dead must not block a newer host snapshot that says it is alive.
-                bool resurrect = entry.Dead && !dead;
+                // The Unity enemy death path is irreversible. A newer live snapshot
+                // cannot resurrect a target whose death has already been applied.
+                if (entry.Dead && !dead) return false;
 
                 // A snapshot generated before the local player's last hit cannot contain
                 // that hit. Applying its higher HP would visually resurrect the enemy until
@@ -576,10 +576,10 @@ namespace SilksongCoop.Core.State
                 bool localHitSinceSnapshot = entry.LastLocalHitOrder > entry.LastSnapshotOrder;
                 int previousHp = entry.HasState ? entry.LastHp : int.MaxValue;
                 int acceptedHp = dead ? 0 : hp;
-                if (!dead && localHitSinceSnapshot && !resurrect)
+                if (!dead && localHitSinceSnapshot)
                     acceptedHp = Math.Min(entry.LastHp, Math.Max(0, hp));
 
-                bool accepted = resurrect || dead || !localHitSinceSnapshot || acceptedHp < previousHp;
+                bool accepted = dead || !localHitSinceSnapshot || acceptedHp < previousHp;
                 if (!accepted) return false;
 
                 entry.HasState = true;

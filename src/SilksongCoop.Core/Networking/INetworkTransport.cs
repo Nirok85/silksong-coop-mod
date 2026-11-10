@@ -50,6 +50,7 @@ namespace SilksongCoop.Core.Networking
         void StartHost(int port = 7777);
         void Connect(string addressOrCode);
         void Disconnect();
+        /// <summary>Dispatches transport callbacks on the caller's thread. The game calls this on Unity's main thread.</summary>
         void PollEvents();
         /// <summary>
         /// Sends a payload. Implementations must copy or otherwise consume the bytes before

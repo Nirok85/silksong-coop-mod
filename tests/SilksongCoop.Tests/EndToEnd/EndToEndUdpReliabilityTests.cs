@@ -18,8 +18,8 @@ namespace SilksongCoop.Tests.EndToEnd
         [Fact]
         public void Client_Reconnects_ToTheSameHost_AndExchangesData()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             int hostPort = host.BoundPort;
@@ -66,8 +66,8 @@ namespace SilksongCoop.Tests.EndToEnd
         [Fact]
         public void DroppedReliableDatagram_IsRetransmittedExactlyOnce()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
             using var relay = new UdpRelay();
 
             host.StartHost(0);
@@ -109,6 +109,70 @@ namespace SilksongCoop.Tests.EndToEnd
             }
         }
 
+        [Fact]
+        public void AuthenticatedBackpressure_RetriesDroppedFramesAndDrainsInOrder()
+        {
+            using var host = new LiteNetLibTransport(1, "Host");
+            using var client = new LiteNetLibTransport(2, "Client") { QueueReliableWhenBusy = true };
+            using var relay = new UdpRelay();
+            host.StartHost(0);
+            relay.ConfigureHost(host.BoundPort);
+            var code = RoomCodeCodec.EncodeWithSecret(IPAddress.Loopback, relay.Port);
+            host.SetRoomCode(code);
+            client.Connect(code);
+            PumpUntil(() => host.IsConnected && client.IsConnected, host, client, maxMs: 3000);
+            Assert.True(host.IsConnected && client.IsConnected);
+
+            var delivered = new List<int>();
+            host.OnDataReceived += (_, data, offset, length) =>
+            {
+                if (length == sizeof(int)) delivered.Add(BitConverter.ToInt32(data, offset));
+            };
+
+            relay.DropNextClientDataFrames(16);
+            int total = NetworkLimits.ReliableBacklogCap + 32;
+            for (int i = 0; i < total; i++)
+            {
+                var payload = BitConverter.GetBytes(i);
+                client.Send(host.LocalPeerId, payload, 0, payload.Length,
+                    DeliveryMethod.ReliableOrdered, NetworkChannels.World);
+            }
+
+            Assert.Equal(NetworkLimits.ReliableBacklogCap, client.ReliableBacklogCount);
+            PumpUntil(() => delivered.Count == total && client.ReliableBacklogCount == 0,
+                host, client, maxMs: 8000);
+            Assert.Equal(System.Linq.Enumerable.Range(0, total), delivered);
+            Assert.Equal(0, client.DroppedReliablePackets);
+        }
+
+        [Fact]
+        public void AuthenticatedUnreliableDatagram_IsAppliedOnlyOnce()
+        {
+            using var host = new LiteNetLibTransport(1, "Host");
+            using var client = new LiteNetLibTransport(2, "Client");
+            using var relay = new UdpRelay();
+            host.StartHost(0);
+            relay.ConfigureHost(host.BoundPort);
+            var code = RoomCodeCodec.EncodeWithSecret(IPAddress.Loopback, relay.Port);
+            host.SetRoomCode(code);
+            client.Connect(code);
+            PumpUntil(() => host.IsConnected && client.IsConnected, host, client, maxMs: 3000);
+            Assert.True(host.IsConnected && client.IsConnected);
+
+            int delivered = 0;
+            host.OnDataReceived += (_, _, _, _) => delivered++;
+            relay.DuplicateNextClientDataFrame();
+            client.Send(host.LocalPeerId, new byte[] { 42 }, 0, 1,
+                DeliveryMethod.Unreliable, NetworkChannels.Transform);
+            PumpUntil(() => delivered > 0, host, client, maxMs: 1000);
+            for (int i = 0; i < 10; i++)
+            {
+                host.PollEvents();
+                Thread.Sleep(5);
+            }
+            Assert.Equal(1, delivered);
+        }
+
         private static void PumpUntil(Func<bool> condition, LiteNetLibTransport host, LiteNetLibTransport client, int maxMs)
         {
             var deadline = DateTime.UtcNow.AddMilliseconds(maxMs);
@@ -139,6 +203,9 @@ namespace SilksongCoop.Tests.EndToEnd
             private volatile IPEndPoint? _clientEndpoint;
             private IPEndPoint _hostEndpoint = new IPEndPoint(IPAddress.Loopback, 0);
             private int _dropClientDataFrames;
+            private int _duplicateNextClientDataFrame;
+
+            public void DuplicateNextClientDataFrame() => Interlocked.Exchange(ref _duplicateNextClientDataFrame, 1);
 
             public UdpRelay()
             {
@@ -195,6 +262,9 @@ namespace SilksongCoop.Tests.EndToEnd
                         }
 
                         _socket.SendTo(buffer, 0, length, SocketFlags.None, _hostEndpoint);
+                        if (length > 0 && buffer[0] == 0x03 &&
+                            Interlocked.Exchange(ref _duplicateNextClientDataFrame, 0) != 0)
+                            _socket.SendTo(buffer, 0, length, SocketFlags.None, _hostEndpoint);
                     }
                     catch (SocketException)
                     {

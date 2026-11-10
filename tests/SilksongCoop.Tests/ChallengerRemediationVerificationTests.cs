@@ -16,8 +16,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_DisconnectInsideDataCallback_QueueOf50Packets_GracefullyAbortsWithoutException()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");
@@ -63,8 +63,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_DisconnectInsideOnPeerConnected_GracefullyAbortsWithoutException()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
 
@@ -96,8 +96,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_DisconnectInsideOnPeerDisconnected_MultipleDisconnectCalls_Idempotent()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");
@@ -141,8 +141,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public async Task LiteNetLibTransport_HighContention_ConcurrentSendPollDisconnectRestart_Stress()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");

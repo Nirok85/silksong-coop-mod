@@ -33,7 +33,7 @@
 - [ ] Core job green.
 - [ ] Mod job green, or a maintainer recorded a manual Mod build of the exact
       release commit (SHA, game version, OS and result). The Mod job is skipped when
-      `ENABLE_MOD_CI` is not enabled; a green Core job alone is not a release gate.
+      the trusted `master` job is unavailable; a green Core job alone is not a release gate.
       Same-repository PRs run it automatically; fork PRs are excluded because
       untrusted code must not run on the self-hosted runner, so build them manually.
 - [ ] No workflow scope issues (the workflow file needs a token with the `workflow` scope to push).
@@ -67,3 +67,15 @@ Record game version, mod version, release commit SHA, OS, transport and pass/fai
 
 - [ ] Keep the previous release artifacts and checksums available.
 - [ ] Document rollback steps.
+
+
+## Live checks against the installed game
+
+Use disposable copies of saves on both clients.
+
+- Connect during scene loading. Check initial vitals, inventory, wallet and checkpoint after the save loads.
+- Switch rooms in quick succession and revive while the partner changes scenes. Check clone visibility and spawn position.
+- Spend currency during an outage, reconnect to the same room and check each expense appears once on both peers.
+- Open inventory and collect an upgrade remotely. Check the apply hook emits no echo.
+- Invite, cancel, rejoin and disconnect in Steam. Verify stale lobby callbacks, timeout, kick, clone cleanup and plugin unload.
+- Exercise a real three-player lobby, then remove one guest and check surviving peers.

@@ -135,6 +135,14 @@ namespace SilksongCoop.Core.Protocol
                 return false;
             }
 
+            // A paired NaN denotes an unknown location. Other non-finite values are invalid.
+            if (!float.IsNaN(packet.PickupX) || !float.IsNaN(packet.PickupY))
+            {
+                if (!(Math.Abs(packet.PickupX) <= MaxPositionValue &&
+                      Math.Abs(packet.PickupY) <= MaxPositionValue))
+                    return false;
+            }
+
             return true;
         }
 
@@ -216,7 +224,9 @@ namespace SilksongCoop.Core.Protocol
             if (Math.Abs(packet.OriginX) > MaxPositionValue || Math.Abs(packet.OriginY) > MaxPositionValue)
                 return false;
 
-            return true;
+            float directionLengthSquared = packet.DirectionX * packet.DirectionX +
+                                           packet.DirectionY * packet.DirectionY;
+            return Math.Abs(directionLengthSquared - 1f) <= 0.01f && packet.Parameter == 0;
         }
 
         /// <summary>

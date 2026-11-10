@@ -86,7 +86,7 @@ dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj -c Release
 
 Expected: 0 warnings (warnings are errors in Release) and all tests passing.
 The hosted CI job builds Core and runs the Core test project; the Mod job is
-conditional on `ENABLE_MOD_CI` and a self-hosted runner. A green Core job alone
+limited to trusted `master` runs on the self-hosted runner. A green Core job alone
 does not prove that the Mod compiled or that Steam/Unity behaviour works. Build the
 Mod against the game assemblies and run the manual smoke checklist before publishing.
 

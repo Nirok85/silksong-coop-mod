@@ -34,12 +34,15 @@ namespace SilksongCoop.Core.State
 
         // Physical drops exist in BOTH simulations (each client kills the same enemy and
         // spawns its own copy). A shared key lets the second pickup be credited only once.
+        public const ulong PersistentPickupBit = 1UL << 63;
+
         private struct ClaimedPickup
         {
             public ulong Key;
             public float X;
             public float Y;
             public CurrencyType Currency;
+            public bool ObservedLocally;
         }
 
         private readonly List<ClaimedPickup> _claimedPickups = new List<ClaimedPickup>();
@@ -178,7 +181,7 @@ namespace SilksongCoop.Core.State
         /// <param name="needleLevel">Initial needle upgrade level.</param>
         /// <param name="initialRosaries">Initial rosaries currency.</param>
         /// <param name="initialShards">Initial shell shards currency.</param>
-        public void InitializeState(int initialHealth, int initialMaxHealth, int initialSilk, int initialMaxSilkSpools, int needleLevel, int initialRosaries, int initialShards)
+        public void InitializeState(int initialHealth, int initialMaxHealth, int initialSilk, int initialMaxSilkSpools, int needleLevel, int initialRosaries, int initialShards, bool preserveWallet = false)
         {
             lock (_stateLock)
             {
@@ -202,6 +205,7 @@ namespace SilksongCoop.Core.State
                 // this line keeps the invariant even if the dictionary is cleared here)
                 _primaryRemotePeer = null;
             }
+            if (preserveWallet) return;
             lock (_transactionLock)
             {
                 SharedRosaries = initialRosaries;
@@ -414,7 +418,7 @@ namespace SilksongCoop.Core.State
                     }
                     else
                     {
-                        TrackClaimedPickup(currency, pickupKey, pickupX, pickupY);
+                        TrackClaimedPickup(currency, pickupKey, pickupX, pickupY, observedLocally: true);
                     }
                 }
 
@@ -429,14 +433,14 @@ namespace SilksongCoop.Core.State
                     // call sites pass 0, which means "derive from the delta".
                     if (currency == CurrencyType.Rosaries)
                     {
-                        int next = _sharedRosaries + deltaAmount;
+                        int next = (int)Math.Clamp((long)_sharedRosaries + deltaAmount, int.MinValue, PacketValidator.MaxReasonableCurrency);
                         if (newTotal > 0) next = Math.Min(newTotal, PacketValidator.MaxReasonableCurrency);
                         _sharedRosaries = next;
                         currentWallet = Math.Max(0, _sharedRosaries);
                     }
                     else
                     {
-                        int next = _sharedShellShards + deltaAmount;
+                        int next = (int)Math.Clamp((long)_sharedShellShards + deltaAmount, int.MinValue, PacketValidator.MaxReasonableCurrency);
                         if (newTotal > 0) next = Math.Min(newTotal, PacketValidator.MaxReasonableCurrency);
                         _sharedShellShards = next;
                         currentWallet = Math.Max(0, _sharedShellShards);
@@ -488,14 +492,15 @@ namespace SilksongCoop.Core.State
         }
 
         private void TrackClaimedPickup(
-            CurrencyType currency, ulong pickupKey, float x, float y)
+            CurrencyType currency, ulong pickupKey, float x, float y, bool observedLocally = false)
         {
             _claimedPickups.Add(new ClaimedPickup
             {
                 Key = pickupKey,
                 X = x,
                 Y = y,
-                Currency = currency
+                Currency = currency,
+                ObservedLocally = observedLocally
             });
 
             while (_claimedPickups.Count > MaxTrackedPickupKeys)
@@ -580,17 +585,41 @@ namespace SilksongCoop.Core.State
             }
         }
 
-        /// <summary>
-        /// Removes one peer's vitals (disconnect). Promotes the next peer to primary if
-        /// the departing peer was the one mirrored by the legacy Remote* properties.
-        /// </summary>
-        public void RemoveRemotePeer(NetworkPeerId peer)
+        public void ResetCurrencyPeer(NetworkPeerId peer)
         {
             lock (_transactionLock)
             {
                 _lastCurrencySequences.Remove((peer, CurrencyType.Rosaries));
                 _lastCurrencySequences.Remove((peer, CurrencyType.ShellShards));
             }
+        }
+
+        public (int Rosaries, int Shards) GetWalletBalances()
+        {
+            lock (_transactionLock)
+                return (_sharedRosaries, _sharedShellShards);
+        }
+
+        public void SeedWallet(CurrencyType currency, int total, long pendingLocalDelta)
+        {
+            int visible;
+            lock (_transactionLock)
+            {
+                int value = (int)Math.Clamp(total + pendingLocalDelta, int.MinValue, PacketValidator.MaxReasonableCurrency);
+                if (currency == CurrencyType.Rosaries) _sharedRosaries = value;
+                else _sharedShellShards = value;
+                visible = Math.Max(0, value);
+            }
+
+            OnSharedCurrencyChanged?.Invoke(currency, 0, visible);
+        }
+
+        /// <summary>
+        /// Removes one peer's vitals (disconnect). Promotes the next peer to primary if
+        /// the departing peer was the one mirrored by the legacy Remote* properties.
+        /// </summary>
+        public void RemoveRemotePeer(NetworkPeerId peer)
+        {
             lock (_stateLock)
             {
                 if (!_remoteVitals.Remove(peer)) return;
@@ -709,8 +738,7 @@ namespace SilksongCoop.Core.State
                     if (delta != 0)
                     {
                         _activeCurrencies.Add(packet.Currency);
-                        int next = previousInternal + delta;
-                        if (next > PacketValidator.MaxReasonableCurrency) next = PacketValidator.MaxReasonableCurrency;
+                        int next = (int)Math.Clamp((long)previousInternal + delta, int.MinValue, PacketValidator.MaxReasonableCurrency);
                         if (isRosaries) _sharedRosaries = next;
                         else _sharedShellShards = next;
                         updatedWallet = Math.Max(0, next);
@@ -798,7 +826,6 @@ namespace SilksongCoop.Core.State
                     currentShards = SharedShellShards;
                 }
 
-                if (currentRosaries > 0)
                 {
                     var tx = Guid.NewGuid();
                     uint seq;
@@ -821,7 +848,6 @@ namespace SilksongCoop.Core.State
                     OnOutgoingCurrencyBroadcast?.Invoke(packet);
                 }
 
-                if (currentShards > 0)
                 {
                     var tx = Guid.NewGuid();
                     uint seq;
@@ -903,6 +929,35 @@ namespace SilksongCoop.Core.State
             {
                 Log($"[VitalsSyncService] BroadcastClaimedPickups error: {ex.Message}");
             }
+        }
+
+        public void MarkPickupObserved(CurrencyType currency, ulong key)
+        {
+            lock (_transactionLock)
+            {
+                for (int i = 0; i < _claimedPickups.Count; i++)
+                {
+                    var pickup = _claimedPickups[i];
+                    if (pickup.Currency != currency || pickup.Key != key) continue;
+                    pickup.ObservedLocally = true;
+                    _claimedPickups[i] = pickup;
+                    break;
+                }
+            }
+        }
+
+        public void OnPickupSceneLoaded()
+        {
+            ClaimedPickup[] retained;
+            lock (_transactionLock)
+            {
+                _claimedPickups.RemoveAll(pickup => pickup.ObservedLocally &&
+                    (pickup.Key & PersistentPickupBit) == 0);
+                retained = _claimedPickups.ToArray();
+            }
+
+            foreach (var pickup in retained)
+                OnRemotePickupClaimed?.Invoke(pickup.Currency, pickup.Key, pickup.X, pickup.Y);
         }
 
         /// <summary>

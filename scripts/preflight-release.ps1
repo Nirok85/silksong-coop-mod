@@ -10,7 +10,8 @@
 param(
     [switch]$SkipTests,
     [switch]$AllowDirty,
-    [switch]$NoRestore
+    [switch]$NoRestore,
+    [switch]$MetadataOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -81,7 +82,13 @@ else {
     Check ([string]::IsNullOrWhiteSpace(($status -join "`n"))) 'git working tree is clean'
 }
 
-Write-Host '==> Build (warnings as errors)' -ForegroundColor Cyan
+if ($MetadataOnly) {
+    if ($failures.Count -gt 0) { exit 1 }
+    Write-Host "Release metadata verified for $modVersion."
+    exit 0
+}
+
+Write-Host '==> Build (warnings as errors)'  -ForegroundColor Cyan
 $buildArgs = @(
     (Join-Path $root 'SilksongCoop.sln'),
     '-c', 'Release',
@@ -119,6 +126,12 @@ else {
     else {
         Write-Host '  [ok]   tests passed' -ForegroundColor Green
     }
+}
+
+if ($buildSucceeded -and -not [string]::IsNullOrWhiteSpace($env:ManagedDir)) {
+    Write-Host '==> Game binding metadata' -ForegroundColor Cyan
+    & dotnet run --project (Join-Path $root 'tools/SilksongCoop.BindingCheck') -c Release -- $env:ManagedDir
+    if ($LASTEXITCODE -ne 0) { $failures.Add('game binding metadata check failed') }
 }
 
 Write-Host '==> Built DLL version' -ForegroundColor Cyan

@@ -21,12 +21,14 @@ namespace SilksongCoop.Mod
         /// <summary>
         /// Enters spectator mode after local player death, hiding the hero and disabling physics.
         /// </summary>
-        public void EnterSpectatorMode()
+        public void EnterSpectatorMode() => TryEnterSpectatorMode();
+
+        internal bool TryEnterSpectatorMode()
         {
             try
             {
                 var hero = HeroController.instance;
-                if (hero != null && hero.gameObject != null)
+                if (hero == null || hero.gameObject == null) return false;
                 {
                     hero.AffectedByGravity(false);
                     hero.RelinquishControl();
@@ -64,10 +66,13 @@ namespace SilksongCoop.Mod
                 camTarget?.StartFreeMode(false);
 
                 SessionState?.SetSpectating();
+                return true;
             }
             catch (Exception ex)
             {
                 Logger.LogError($"[Coop] Failed entering spectator mode: {ex.Message}\n{ex.StackTrace}");
+                ExitSpectatorMode();
+                return false;
             }
         }
 
@@ -452,8 +457,6 @@ namespace SilksongCoop.Mod
 
                 DeathCoordinator?.ResetAfterBenchRespawn();
                 DeathCoordinator?.BroadcastEpochSync();
-                // A bench reload resets the world's enemies/drops.
-                VitalsSync?.ClearClaimedPickups();
                 SessionState?.ReturnToActive();
 
                 var hero = HeroController.instance;

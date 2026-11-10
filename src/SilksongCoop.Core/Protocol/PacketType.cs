@@ -11,11 +11,14 @@ namespace SilksongCoop.Core.Protocol
 
         // Vitals & Progression (0x20 - 0x2F)
         VitalsSync          = 0x20,
+        PeerReady           = 0x21,
 
         // Economy & Inventory (0x30 - 0x3F)
         CurrencySync        = 0x30,
         ItemUnlock          = 0x31,
         ItemUnlockSync      = ItemUnlock,
+        CurrencyReceipt     = 0x32,
+        WalletSeed          = 0x33,
 
         // Death & Respawn Lifecycle (0x40 - 0x4F)
         PlayerDeath         = 0x40,

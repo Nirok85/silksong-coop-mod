@@ -15,6 +15,21 @@ namespace SilksongCoop.Mod.Hooks
         // re-entrancy guard was replaced by RemoteApplyScope.IsActive, but the field was
         // never removed and always read as false. Removed to avoid misleading consumers.
 
+        [HarmonyPostfix]
+        [HarmonyPriority(Priority.Last)]
+        [HarmonyPatch(typeof(CurrencyManager), "LateUpdate")]
+        public static void PostfixCurrencyLateUpdate()
+        {
+            try
+            {
+                SilksongCoopPlugin.Instance?.OnCurrencyQueueDrained();
+            }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[CurrencyHooks] Reconciliation failed: {ex.Message}");
+            }
+        }
+
         /// <summary>
         /// Hook that fires after currency changes to broadcast the update to the remote player.
         /// </summary>
@@ -29,7 +44,7 @@ namespace SilksongCoop.Mod.Hooks
             {
                 if (amount == 0) return;
                 if (RemoteApplyScope.IsActive) return;
-                if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
+                if (SilksongCoopPlugin.Instance?.CanTrackCurrency != true) return;
                 if (SilksongCoopPlugin.Instance?.VitalsSync == null) return;
 
                 // Guard against scene transitions
@@ -46,6 +61,7 @@ namespace SilksongCoop.Mod.Hooks
                 SilksongCoopPlugin.Instance.VitalsSync.OnLocalCurrencyChanged(
                     coreType, amount, projectedTotal, Guid.NewGuid(),
                     pickupKey, PickupContext.CurrentX, PickupContext.CurrentY);
+                SilksongCoopPlugin.Instance.ScheduleWalletReconcile();
             }
             catch (Exception ex)
             {

@@ -55,7 +55,7 @@ namespace SilksongCoop.Tests
             var writer = new PacketWriter(buffer);
             original.Serialize(ref writer);
 
-            Assert.Equal(41, writer.Position); // 12 header + 29 payload = 41 bytes
+            Assert.Equal(45, writer.Position); // 12 header + 29 payload = 41 bytes
 
             var reader = new PacketReader(writer.WrittenSpan);
             var deserialized = TransformSyncPacket.Deserialize(ref reader);

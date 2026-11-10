@@ -67,7 +67,7 @@ namespace SilksongCoop.Mod.Hooks
         {
             PickupContext.End();
             if (RemoteApplyScope.IsActive) return;
-            if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
+            if (SilksongCoopPlugin.Instance?.CanTrackCurrency != true) return;
 
             ulong key = WorldObjectKey.ComputePickup(__instance);
             if (key == 0) return;

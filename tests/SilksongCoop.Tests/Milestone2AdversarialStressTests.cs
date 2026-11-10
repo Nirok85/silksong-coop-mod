@@ -254,20 +254,7 @@ namespace SilksongCoop.Tests
 
             await Task.WhenAll(spawnTask1, despawnTask, updateTask, interpTask);
 
-            // Print exception types if any
-            var exCounts = new Dictionary<string, int>();
-            foreach (var ex in exceptions)
-            {
-                string key = ex.GetType().Name;
-                exCounts[key] = exCounts.GetValueOrDefault(key) + 1;
-            }
-
-            // Assert that if thread safety is required, exceptions must be 0, or record finding
-            // Dictionary is not thread-safe: exceptions like InvalidOperationException are expected
-            // when multiple threads concurrently enumerate and mutate _clones.
-            bool hadConcurrencyExceptions = !exceptions.IsEmpty;
-            // Record whether Dictionary threw InvalidOperationException under concurrent access
-            Assert.True(true, $"Concurrency test completed. Exception count: {exceptions.Count}");
+            Assert.Empty(exceptions);
         }
 
         [Fact]

@@ -82,6 +82,17 @@ jobs:
           path: '**/results.trx'
           if-no-files-found: error
 
+  release-metadata:
+    name: Release metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check release metadata
+        shell: pwsh
+        run: ./scripts/preflight-release.ps1 -MetadataOnly
+
   benchmarks:
     name: Benchmarks - dry smoke
     if: github.event_name == 'workflow_dispatch'
@@ -117,18 +128,15 @@ jobs:
     # and cannot be committed or downloaded on a hosted runner, so the Mod project can
     # only be compiled on the self-hosted runner that has Silksong installed.
     #
-    # Same-repository PRs run this job automatically (their branches are as trusted as
-    # master). Fork PRs stay excluded: executing untrusted PR code on a self-hosted
-    # runner is not safe. The gap for fork PRs is documented in
-    # docs/release-checklist.md - a maintainer must build the branch before merging.
-    if: >-
-      ${{ github.event_name != 'pull_request' ||
-           github.event.pull_request.head.repo.full_name == github.repository }}
+    # Only the protected master branch may execute on the persistent game runner.
+    if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: [self-hosted, linux, silksong]
     timeout-minutes: 30
     environment: silksong-mod-build
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -170,11 +178,8 @@ jobs:
           test -f "$MANAGED_DIR/UnityEngine.CoreModule.dll" || { echo "::error::UnityEngine.CoreModule.dll not found in $MANAGED_DIR"; exit 1; }
           test -f "$MANAGED_DIR/TeamCherry.TK2D.dll" || { echo "::error::TeamCherry.TK2D.dll not found in $MANAGED_DIR"; exit 1; }
 
-      - name: Build Mod (warnings as errors)
+      - name: Run full release preflight against game assemblies
         env:
-          MANAGED_DIR: ${{ vars.SILKSONG_MANAGED_DIR }}
-        run: >-
-          dotnet build src/SilksongCoop.Mod/SilksongCoop.Mod.csproj
-          -c Release
-          -p:TreatWarningsAsErrors=true
-          -p:ManagedDir="$MANAGED_DIR"
+          ManagedDir: ${{ vars.SILKSONG_MANAGED_DIR }}
+        shell: pwsh
+        run: ./scripts/preflight-release.ps1

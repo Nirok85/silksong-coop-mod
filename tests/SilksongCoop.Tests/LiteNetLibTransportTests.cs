@@ -16,8 +16,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_LoopbackHandshake_ConnectsBothPeersAndSetsBoundPort()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0); // Auto-bind ephemeral port
             Assert.True(host.BoundPort > 0);
@@ -45,8 +45,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_ReliableOrdered_DeliversInSequenceAndAcknowledges()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");
@@ -90,8 +90,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_DisconnectInsidePeerDisconnectedCallback_DoesNotThrow()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");
@@ -132,7 +132,7 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_SendAfterDisconnect_HandledSafelyWithoutException()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
             host.StartHost(0);
             host.Disconnect();
 
@@ -144,7 +144,7 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_MalformedDatagramShortHeader_IgnoredWithoutCrash()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
             host.StartHost(0);
 
             // Send raw UDP packet smaller than minimum envelope header (8 bytes)
@@ -160,8 +160,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_UnreliableDelivery_TransmitsDataAcrossPeers()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");
@@ -199,8 +199,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_SequencedDelivery_DiscardsOutdatedSequences()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");
@@ -246,8 +246,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_PingPong_CalculatesRoundTripTime()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");
@@ -270,8 +270,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_ReconnectSession_ResetsSequencesAndReestablishesCleanly()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");
@@ -347,8 +347,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public async Task LiteNetLibTransport_ConcurrentSendAndPoll_ThreadSafety()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");
@@ -441,8 +441,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_ReliableUnordered_DeliversAndDrainsBacklog()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");
@@ -507,7 +507,7 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_StaleGenerationEvent_IsNotDispatched()
         {
-            using var transport = new LiteNetLibTransport(1, "Host");
+            using var transport = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
             transport.StartHost(0);
 
             int disconnected = 0;

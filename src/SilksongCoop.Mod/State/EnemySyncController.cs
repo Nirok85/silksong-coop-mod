@@ -993,7 +993,7 @@ namespace SilksongCoop.Mod.State
                 EventType = eventType,
                 PositionX = transform.position.x,
                 PositionY = transform.position.y,
-                StateRevision = _packetSequence,
+                StateRevision = _packetSequence == 0 ? ++_packetSequence : _packetSequence,
                 OriginPeerId = _revisionOrigin
             };
 
@@ -1109,6 +1109,10 @@ namespace SilksongCoop.Mod.State
 
         private void SendWorldPacket(WorldEventPacket packet)
         {
+            var transport = _plugin?.ActiveTransport;
+            if (transport == null || !transport.IsHost || packet.OriginPeerId != _revisionOrigin) return;
+            packet.OriginPeerId = transport.LocalPeerId.Value;
+
             byte[] buffer = ArrayPool<byte>.Shared.Rent(64);
             try
             {
@@ -1152,7 +1156,6 @@ namespace SilksongCoop.Mod.State
             }
             else
             {
-                RecordWorldEventForReplay(packet);
                 _appliedWorldRevisions.Record(packet.ObjectKey, packet.StateRevision, packet.OriginPeerId);
             }
         }
@@ -1229,7 +1232,7 @@ namespace SilksongCoop.Mod.State
             if (!_pendingWorldEvents.TryGetValue(packet.ObjectKey, out var cached) ||
                 cached.StateRevision == 0 || packet.StateRevision == 0 ||
                 cached.OriginPeerId != packet.OriginPeerId ||
-                packet.StateRevision > cached.StateRevision)
+                RevisionLedger.IsNewer(packet.StateRevision, cached.StateRevision))
             {
                 _pendingWorldEvents[packet.ObjectKey] = packet;
                 _pendingWorldEventSenders[packet.ObjectKey] = sender;
@@ -1262,7 +1265,6 @@ namespace SilksongCoop.Mod.State
                 bool allowProximity = _pendingWorldEventSenders.TryGetValue(pair.Key, out var sender) &&
                                       IsSenderInLocalScene(sender);
                 if (!TryApplyWorldEvent(pair.Value, allowProximity)) continue;
-                RecordWorldEventForReplay(pair.Value);
                 _appliedWorldRevisions.Record(pair.Key, pair.Value.StateRevision, pair.Value.OriginPeerId);
                 (applied ??= new List<ulong>()).Add(pair.Key);
             }
@@ -1324,7 +1326,7 @@ namespace SilksongCoop.Mod.State
                 ItemKey = key,
                 ValueType = valueType,
                 Value = value,
-                StateRevision = _packetSequence,
+                StateRevision = _packetSequence == 0 ? ++_packetSequence : _packetSequence,
                 OriginPeerId = _revisionOrigin
             };
 
@@ -1391,7 +1393,6 @@ namespace SilksongCoop.Mod.State
             }
             else
             {
-                RecordPersistentStateForReplay(packet);
                 _appliedPersistentRevisions.Record(packet.ItemKey, packet.StateRevision, packet.OriginPeerId);
             }
         }
@@ -1401,25 +1402,6 @@ namespace SilksongCoop.Mod.State
             if (packet.OriginPeerId == _revisionOrigin) return true;
             if (_appliedPersistentRevisions.IsStale(packet.ItemKey, packet.StateRevision, packet.OriginPeerId))
                 return true;
-
-            // Replay packets reserve header sequence zero. Catch-up must not overwrite
-            // a value that was last changed in this save.
-            if (packet.Header.TickSequence == 0 &&
-                _persistentStates.TryGetValue(packet.ItemKey, out var local) &&
-                local.OriginPeerId == _revisionOrigin)
-            {
-                return true;
-            }
-
-            // Concurrent edits to the same object: a remote change must not overwrite a
-            // local change that is at least as recent. This makes the newer writer win
-            // instead of both sides accepting each other's value.
-            if (_persistentLastValue.TryGetValue(packet.ItemKey, out var localLast) &&
-                localLast.OriginPeerId == _revisionOrigin &&
-                packet.Header.Timestamp <= localLast.Header.Timestamp)
-            {
-                return true;
-            }
 
             return false;
         }
@@ -1505,7 +1487,7 @@ namespace SilksongCoop.Mod.State
             if (!_pendingPersistentStates.TryGetValue(packet.ItemKey, out var cached) ||
                 cached.StateRevision == 0 || packet.StateRevision == 0 ||
                 cached.OriginPeerId != packet.OriginPeerId ||
-                packet.StateRevision > cached.StateRevision)
+                RevisionLedger.IsNewer(packet.StateRevision, cached.StateRevision))
             {
                 _pendingPersistentStates[packet.ItemKey] = packet;
             }
@@ -1582,7 +1564,6 @@ namespace SilksongCoop.Mod.State
                 }
 
                 if (!TryApplyPersistentState(pair.Value)) continue;
-                RecordPersistentStateForReplay(pair.Value);
                 _appliedPersistentRevisions.Record(pair.Key, pair.Value.StateRevision, pair.Value.OriginPeerId);
                 (applied ??= new List<ulong>()).Add(pair.Key);
             }
@@ -1696,6 +1677,10 @@ namespace SilksongCoop.Mod.State
 
         private void SendPersistentPacket(PersistentStatePacket packet)
         {
+            var transport = _plugin?.ActiveTransport;
+            if (transport == null || !transport.IsHost || packet.OriginPeerId != _revisionOrigin) return;
+            packet.OriginPeerId = transport.LocalPeerId.Value;
+
             byte[] buffer = ArrayPool<byte>.Shared.Rent(64);
             try
             {
@@ -1868,7 +1853,11 @@ namespace SilksongCoop.Mod.State
             if (target == null && !scannedNow)
                 target = FindPickup(ScanPickups(), currency, key);
 
-            if (target != null) target.Disable(0f);
+            if (target != null)
+            {
+                target.Disable(0f);
+                _plugin?.VitalsSync?.MarkPickupObserved(currency, key);
+            }
         }
 
         private static CurrencyObjectBase? FindPickup(
@@ -1943,6 +1932,8 @@ namespace SilksongCoop.Mod.State
             _enemyIndexDirty = true;
             ClearWorldObjectCaches();
             _service.Reset();
+            if (_plugin?.SessionState?.IsConnected == true)
+                _plugin.VitalsSync?.OnPickupSceneLoaded();
 
             // WorldEvent records are permanent (breakables/gates survive scene loads), so
             // they intentionally survive a scene change and remain available for late-join

@@ -17,6 +17,7 @@ namespace SilksongCoop.Core.Protocol.Packets
         public const ushort FlagSwimming = 1 << 7;
 
         public PacketHeader Header;
+        public uint SceneGeneration;
         public float PositionX;
         public float PositionY;
         public float VelocityX;
@@ -38,6 +39,7 @@ namespace SilksongCoop.Core.Protocol.Packets
         public void Serialize(ref PacketWriter writer)
         {
             writer.WriteHeader(Header);
+            writer.WriteUInt32(SceneGeneration);
             writer.WriteFloat(PositionX);
             writer.WriteFloat(PositionY);
             writer.WriteFloat(VelocityX);
@@ -59,6 +61,7 @@ namespace SilksongCoop.Core.Protocol.Packets
             var packet = new TransformSyncPacket
             {
                 Header = reader.ReadHeader(),
+                SceneGeneration = reader.ReadUInt32(),
                 PositionX = reader.ReadFloat(),
                 PositionY = reader.ReadFloat(),
                 VelocityX = reader.ReadFloat(),

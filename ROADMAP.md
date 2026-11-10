@@ -4,7 +4,7 @@
 > Этот файл остаётся историческим списком из 15 пунктов; актуальные приоритеты
 > и статусы ведутся в новом документе.
 
-**Актуально на:** v3.3.4 + полное исправление аудита 2026-11-09 (972/972 тестов, 0 ошибок, 0 предупреждений компилятора; NU1900 — сеть; Mod собран против реальных сборок игры). Опубликовано: [GitHub Release v3.3.4](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.4); список исправлений — в `docs/audit-fixes-3.3.4.md`.
+**Актуально на:** [v3.3.7](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.7), протокол v10.
 **Цель:** превратить мод из «рабочей беты» в эталонный кооперативный мод для Unity-игр.
 
 ---
@@ -53,7 +53,7 @@ flush'ы, гонка `CreateLobby` в Steam. Добавлены счётчик �
 ## Статус на v3.3.0
 
 **Сделано (из этого плана):**
-- **#13 CI/CD.** Workflow лежит в `.github/workflows/ci.yml`, собирает Core с warnings-as-errors и запускает тестовый проект (не `--no-build`). Job сборки Mod включается переменной `ENABLE_MOD_CI=true` и выполняется на self-hosted runner с метками `self-hosted, linux, silksong`, используя `SILKSONG_MANAGED_DIR`; без переменной джоба пропускается.
+- **#13 CI/CD.** Workflow лежит в `.github/workflows/ci.yml`, собирает Core с warnings-as-errors и запускает тестовый проект (не `--no-build`). Job сборки Mod запускается для `master` и выполняется на self-hosted runner с метками `self-hosted, linux, silksong`, используя `SILKSONG_MANAGED_DIR`.
 - **Лицензирование.** `LICENSE` (MIT), `THIRD-PARTY-NOTICES.md` и `LICENSES/` входят в оба релизных архива.
 - **#15 Перформанс — частично.** F11-оверлей показывает реальный RTT и потери, убраны per-frame аллокации (кэш `GUIStyle`, кэш `Renderer.materials`, `ArrayPool<byte>` в сетевых hot-path). Формального бюджета и бенчмарк-сцены пока нет.
 - **Синхронизация мира.** HP врагов/боссов, смерти, разрушаемые стены, `Gate.Open()` и дедупликация физических дропов валюты реализованы в v2.1.0–v2.2.1.
@@ -181,7 +181,7 @@ flush'ы, гонка `CreateLobby` в Steam. Добавлены счётчик �
 ### 13. CI/CD: GitHub Actions
 **Проблема:** релизы собираются вручную локально — риск «забыть пересобрать» или расхождения DLL.
 **Действие:**
-- Workflow `ci.yml`: push/PR → сборка Core с warnings-as-errors и запуск Core-тестов; Mod-джоба включается `ENABLE_MOD_CI` и работает на self-hosted runner.
+- Workflow `ci.yml`: push/PR → сборка Core с warnings-as-errors и запуск Core-тестов; Mod-джоба запускается только для `master` и работает на self-hosted runner.
 - Публикация артефактов: результаты тестов (`trx`) на каждый push/PR.
 **Критерий приёмки:** push в `master` проходит Core-job; Mod-job собирается на self-hosted runner без локальной сборки.
 

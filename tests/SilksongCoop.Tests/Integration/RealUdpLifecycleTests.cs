@@ -24,8 +24,8 @@ namespace SilksongCoop.Tests.Integration
         [InlineData(null, false)]
         public void RealUdp_RequiresMatchingGameVersion(string? clientVersion, bool shouldConnect)
         {
-            using var host = new LiteNetLibTransport(1, "Host", "1.0.30000");
-            using var client = new LiteNetLibTransport(2, "Client", clientVersion);
+            using var host = new LiteNetLibTransport(1, "Host", "1.0.30000") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client", clientVersion) { RequireRoomCode = false };
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");
 
@@ -46,8 +46,8 @@ namespace SilksongCoop.Tests.Integration
         [Fact]
         public void RealUdp_AllGameChannels_DeliverPayloadsBothWays()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             AssertConnect(host, client, ConnectTimeout);
@@ -98,8 +98,8 @@ namespace SilksongCoop.Tests.Integration
         [Fact]
         public void RealUdp_ReliableBurst_ArrivesInOrderWithoutLoss()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             AssertConnect(host, client, ConnectTimeout);
@@ -130,8 +130,8 @@ namespace SilksongCoop.Tests.Integration
         [Fact]
         public void RealUdp_ClientReconnect_SameHostSessionAcceptsNewHandshake()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             int port = host.BoundPort;
@@ -180,9 +180,9 @@ namespace SilksongCoop.Tests.Integration
         [Fact]
         public void RealUdp_SecondClient_IsRejectedWhileSinglePeerSessionIsActive()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var first = new LiteNetLibTransport(2, "First");
-            using var second = new LiteNetLibTransport(3, "Second");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var first = new LiteNetLibTransport(2, "First") { RequireRoomCode = false };
+            using var second = new LiteNetLibTransport(3, "Second") { RequireRoomCode = false };
 
             host.StartHost(0);
             int port = host.BoundPort;
@@ -220,8 +220,8 @@ namespace SilksongCoop.Tests.Integration
         [Fact]
         public void RealUdp_HostRestart_NewEndpointAcceptsClientAndClearsOldIdentity()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             AssertConnect(host, client, ConnectTimeout);

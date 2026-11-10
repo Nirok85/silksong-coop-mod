@@ -13,7 +13,7 @@
 Silksong Co-op is a **trust-based peer-to-peer** mod. 
 
 - **Handshake**: HMAC-SHA256 challenge-response using a room code as a pre-shared key. 
-- **Post-handshake**: optional MAC authentication for datagrams when a session key is derived.
+- **Post-handshake**: directional 128-bit MACs and replay checks in authenticated UDP sessions.
 - **No global server**: connections go directly between peers (UDP) or via Steam P2P.
 
 If you do not trust the person you are connecting to, assume they can influence shared game state.
@@ -48,7 +48,7 @@ If you believe you've found a security vulnerability:
 
 ## Known Limitations (by design)
 
-- **No host-authoritative arbitration**: any authenticated peer can send world/event/vitals/currency packets. The mod validates formats and uses idempotency, but does not vote or reject arbitrary actions from peers.
+- **Scoped host authority**: only the connected host can author world and persistent updates. Currency, vitals, inventory and quest synchronization still trust authenticated participants.
 - **Quest flags are writable by connected peers**: the allowlisted `PlayerData` bool/int values are applied and persisted by the game. Only play co-op with people you trust, or set `[Gameplay] SyncQuestFlags = false`. Back up saves before long sessions.
-- **Direct IP joins are allowed**: for convenience, direct connections are possible without a room-code secret unless explicitly restricted.
+- **Direct IP is opt-in**: the UDP host requires a room code by default. Disabling that requirement removes transport authentication.
 - **Trust required**: there is no anti-cheat. Only connect to people you trust.

@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using SilksongCoop.Mod;
+using SilksongCoop.Core.Networking;
 
 namespace SilksongCoop.Mod.UI
 {
@@ -24,7 +24,18 @@ namespace SilksongCoop.Mod.UI
         /// When false, entries are kept in memory only and nothing is written to PlayerPrefs
         /// (the Windows registry). Controlled by the [Network] SaveConnectionHistory config.
         /// </summary>
-        public bool PersistEnabled { get; set; } = true;
+        private bool _persistEnabled;
+
+        public bool PersistEnabled
+        {
+            get => _persistEnabled;
+            set
+            {
+                _persistEnabled = value;
+                if (!value)
+                    DeletePersisted();
+            }
+        }
 
         /// <summary>
         /// Returns the list of recent connection targets, most recent first.
@@ -69,7 +80,11 @@ namespace SilksongCoop.Mod.UI
         public void Clear()
         {
             _entries.Clear();
+            DeletePersisted();
+        }
 
+        private static void DeletePersisted()
+        {
             // Always delete the persisted key, regardless of the current toggle, so the
             // on-disk state matches the in-memory state.
             try
@@ -101,11 +116,13 @@ namespace SilksongCoop.Mod.UI
                     var trimmed = p.Trim();
                     if (!string.IsNullOrEmpty(trimmed) &&
                         trimmed.Length <= MaxTargetLength &&
+                        !RoomCodeCodec.TryDecode(trimmed, out _, out _) &&
                         _entries.Count < MaxEntries)
                     {
                         _entries.Add(trimmed);
                     }
                 }
+                Save();
             }
             catch (Exception ex)
             {
@@ -119,8 +136,12 @@ namespace SilksongCoop.Mod.UI
 
             try
             {
-                string raw = string.Join(Separator.ToString(), _entries);
-                UnityEngine.PlayerPrefs.SetString(PrefsKey, raw);
+                var persistable = _entries.FindAll(target => !RoomCodeCodec.TryDecode(target, out _, out _));
+                string raw = string.Join(Separator.ToString(), persistable);
+                if (raw.Length == 0)
+                    UnityEngine.PlayerPrefs.DeleteKey(PrefsKey);
+                else
+                    UnityEngine.PlayerPrefs.SetString(PrefsKey, raw);
                 UnityEngine.PlayerPrefs.Save();
             }
             catch (Exception ex)

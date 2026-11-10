@@ -46,6 +46,8 @@ namespace SilksongCoop.Mod.Services
         private readonly NetworkPeerId[] _singleRecipient = new NetworkPeerId[1];
         private NetworkPeerId? _singleRecipientPeer;
 
+        private readonly Action<PeerDisconnectedEvent> _peerDisconnectedHandler;
+
         public NetworkOrchestrator(
             ISessionService sessionService,
             ITransportService transportService,
@@ -61,14 +63,17 @@ namespace SilksongCoop.Mod.Services
             _interestManager = new InterestManager { DefaultRadius = 50f, Hysteresis = 8f };
 
             _peerConnectedHandler = _ => OnPeerConnected();
+            _peerDisconnectedHandler = _ => _interestManager.Clear();
             _sessionEndedHandler = _ => OnSessionEnded();
             _eventBus.Subscribe(_peerConnectedHandler);
+            _eventBus.Subscribe(_peerDisconnectedHandler);
             _eventBus.Subscribe(_sessionEndedHandler);
         }
 
         public void Dispose()
         {
             _eventBus.Unsubscribe(_peerConnectedHandler);
+            _eventBus.Unsubscribe(_peerDisconnectedHandler);
             _eventBus.Unsubscribe(_sessionEndedHandler);
         }
 
@@ -85,6 +90,7 @@ namespace SilksongCoop.Mod.Services
         public void OnSessionEnded()
         {
             _interestManager.Clear();
+            _clipHashCache.Clear();
             _tickRate.Reset();
             _lastFarTransformSend = float.NegativeInfinity;
         }
@@ -126,6 +132,8 @@ namespace SilksongCoop.Mod.Services
             var recipients = GetRecipients(transport, session);
             if (recipients.Count == 0) return;
 
+            var plugin = SilksongCoopPlugin.Instance;
+            if (plugin == null || !plugin.CanSendSceneTransform) return;
             var hero = HeroController.instance;
             if (hero == null || hero.gameObject == null) return;
 
@@ -190,7 +198,8 @@ namespace SilksongCoop.Mod.Services
                     StateFlags = flags,
                     AnimationClipHash = clipHash,
                     NormalizedTime = normalizedTime,
-                    SceneNameHash = localSceneHash
+                    SceneNameHash = localSceneHash,
+                    SceneGeneration = plugin.SceneGeneration
                 };
 
                 _interestManager.UpdateEntity(

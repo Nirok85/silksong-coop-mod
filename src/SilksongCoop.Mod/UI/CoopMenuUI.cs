@@ -141,7 +141,7 @@ namespace SilksongCoop.Mod.UI
 
             // Issue #2.6: connection targets used to be written to the Windows registry
             // (PlayerPrefs) unconditionally, with no way to opt out.
-            _history.PersistEnabled = SilksongCoopPlugin.Instance?.SaveConnectionHistoryConfig?.Value ?? true;
+            _history.PersistEnabled = SilksongCoopPlugin.Instance?.SaveConnectionHistoryConfig?.Value ?? false;
 
             // Only show the first-run card until the player dismisses it once.
             _showOnboarding = !(SilksongCoopPlugin.Instance?.OnboardingCompletedConfig?.Value ?? true);
@@ -214,6 +214,13 @@ namespace SilksongCoop.Mod.UI
                 {
                     _sessionState.SteamLobbyId = lobbyVal;
                 }
+            }
+
+            if (_sessionState?.Status == SessionStatus.Disconnected)
+            {
+                _currentRoomCode = string.Empty;
+                _currentHostAddress = string.Empty;
+                _copyFlashText = string.Empty;
             }
 
             // Update diagnostics
@@ -1479,12 +1486,8 @@ namespace SilksongCoop.Mod.UI
 
                 // Copy the room code (not just IP:port) — it is what the guest needs and
                 // it was previously never shown anywhere in the UI.
-                GUIUtility.systemCopyBuffer = code;
-                _copyFlashUntil = Time.unscaledTime + 2f;
-                _copyFlashText = code;
-
                 _diagnostics.OnSessionStarted();
-                _toasts.ShowSuccess(Loc.T("Hosting on {0} — room code {1} copied!", _currentHostAddress, code));
+                _toasts.ShowSuccess(Loc.T("UDP room is ready."));
                 _activeTab = Tab.Status;
             }
             catch (Exception ex)
@@ -1710,7 +1713,7 @@ namespace SilksongCoop.Mod.UI
                 _currentHostAddress = "";
 
                 _sessionState?.SetConnecting(_udpTransport.LocalPeerId, connectAddress);
-                _toasts.ShowInfo(Loc.T("Connecting to {0}...", connectAddress));
+                _toasts.ShowInfo(Loc.T("Connecting..."));
                 _activeTab = Tab.Status;
             }
             catch (Exception ex)

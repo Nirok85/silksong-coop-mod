@@ -194,10 +194,29 @@ namespace SilksongCoop.Mod.Networking
         public int PacketLossPercent => _packetLossPercent;
 
         /// <summary>
-        /// Steam's reliable send is handled by the Steam client; there is no local backlog
-        /// that the mod can inspect.
+        /// Reliable sends refused by Steam are queued locally until the SDK accepts them.
         /// </summary>
-        public int ReliableBacklogCount => 0;
+        private readonly Queue<PendingSend> _pendingReliable = new();
+        private const int MaxPendingReliable = 4096;
+        private bool _reliableQueueOverflow;
+
+        private readonly struct PendingSend
+        {
+            public readonly CSteamID Peer;
+            public readonly byte[] Data;
+            public readonly byte Channel;
+            public readonly long Generation;
+
+            public PendingSend(CSteamID peer, byte[] data, byte channel, long generation)
+            {
+                Peer = peer;
+                Data = data;
+                Channel = channel;
+                Generation = generation;
+            }
+        }
+
+        public int ReliableBacklogCount => _pendingReliable.Count;
 
         public static BepInEx.Logging.ManualLogSource? Logger { get; set; }
 
@@ -477,6 +496,7 @@ namespace SilksongCoop.Mod.Networking
         private void NotifyPeerDisconnected(DisconnectReason reason)
         {
             var peer = _remoteSteamId;
+            RemoveQueuedReliable(peer);
             bool wasNotified = _peerConnectNotified;
             _remoteSteamId = CSteamID.Nil;
             MarkConnectedPeersDirty();
@@ -638,6 +658,7 @@ namespace SilksongCoop.Mod.Networking
         private void NotifyAdditionalPeerDisconnected(CSteamID peer, DisconnectReason reason)
         {
             if (!_additionalPeers.TryGetValue(peer.m_SteamID, out var entry)) return;
+            RemoveQueuedReliable(peer);
             _additionalPeers.Remove(peer.m_SteamID);
             MarkConnectedPeersDirty();
 
@@ -790,30 +811,71 @@ namespace SilksongCoop.Mod.Networking
             // this per-peer helper; do not call SteamAPI.IsSteamRunning() once per peer.
             if (data == null || offset < 0 || length < 0 || offset + length > data.Length) return;
 
-            EP2PSend sendType = (method == DeliveryMethod.Unreliable || method == DeliveryMethod.Sequenced)
-                ? EP2PSend.k_EP2PSendUnreliableNoDelay
-                : EP2PSend.k_EP2PSendReliable;
+            bool reliable = method == DeliveryMethod.ReliableOrdered ||
+                            method == DeliveryMethod.ReliableUnordered;
+            if (!reliable)
+            {
+                TrySendToPeer(targetId, data, offset, length, channel, EP2PSend.k_EP2PSendUnreliableNoDelay);
+                return;
+            }
 
+            if (_pendingReliable.Count == 0 &&
+                TrySendToPeer(targetId, data, offset, length, channel, EP2PSend.k_EP2PSendReliable))
+                return;
+
+            if (_pendingReliable.Count >= MaxPendingReliable)
+            {
+                Logger?.LogWarning("[Steam] Reliable queue exhausted; ending the session.");
+                _reliableQueueOverflow = true;
+                return;
+            }
+            _pendingReliable.Enqueue(new PendingSend(targetId, data.AsSpan(offset, length).ToArray(), channel, _sessionGeneration));
+        }
+
+        private bool TrySendToPeer(CSteamID targetId, byte[] data, int offset, int length, byte channel, EP2PSend sendType)
+        {
             int framedLength = ProtocolPrefixSize + length;
             if (framedLength > _sendBuffer.Length)
                 _sendBuffer = new byte[framedLength];
 
-            // Protocol revision first; older builds sent an unprefixed packet, which the
-            // receiver now rejects before dispatching it to the game layer.
             _protocolPrefix.CopyTo(_sendBuffer, 0);
             Buffer.BlockCopy(data, offset, _sendBuffer, ProtocolPrefixSize, length);
 
             try
             {
-                bool sent = SteamNetworking.SendP2PPacket(targetId, _sendBuffer, (uint)framedLength, sendType, channel);
-                if (!sent && method == DeliveryMethod.ReliableOrdered)
-                {
-                    Logger?.LogWarning($"Failed to send P2P packet to {targetId.m_SteamID} on channel {channel}");
-                }
+                return SteamNetworking.SendP2PPacket(targetId, _sendBuffer, (uint)framedLength, sendType, channel);
             }
             catch (Exception ex)
             {
                 Logger?.LogWarning($"[Steam] SendP2P exception: {ex.Message}");
+                return false;
+            }
+        }
+
+        private void RemoveQueuedReliable(CSteamID peer)
+        {
+            for (int i = _pendingReliable.Count; i > 0; i--)
+            {
+                var pending = _pendingReliable.Dequeue();
+                if (pending.Peer != peer) _pendingReliable.Enqueue(pending);
+            }
+        }
+
+        private void FlushReliableQueue()
+        {
+            for (int i = 0; i < 64 && _pendingReliable.Count > 0; i++)
+            {
+                var item = _pendingReliable.Peek();
+                if (item.Generation != _sessionGeneration ||
+                    (item.Peer != _remoteSteamId && !_additionalPeers.ContainsKey(item.Peer.m_SteamID)))
+                {
+                    _pendingReliable.Dequeue();
+                    continue;
+                }
+
+                if (!TrySendToPeer(item.Peer, item.Data, 0, item.Data.Length, item.Channel, EP2PSend.k_EP2PSendReliable))
+                    break;
+                _pendingReliable.Dequeue();
             }
         }
 
@@ -978,6 +1040,15 @@ namespace SilksongCoop.Mod.Networking
                     }
                 }
             }
+
+            if (_reliableQueueOverflow)
+            {
+                _reliableQueueOverflow = false;
+                _pendingReliable.Clear();
+                SilksongCoopPlugin.Instance?.DisconnectFromSession(DisconnectReason.ConnectionFailed);
+                return;
+            }
+            FlushReliableQueue();
 
             // 2. Poll only the channels used by the protocol (2-4) and reuse buffer.
             // Channels are visited round-robin with a per-channel cap, so a single noisy

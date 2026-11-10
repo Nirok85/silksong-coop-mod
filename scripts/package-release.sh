@@ -119,7 +119,30 @@ fi
 
 WIN="$WORK/win"
 mkdir -p "$WIN"
-(cd "$WIN" && unzip -q "$BEPINEX_SRC")
+python3 - "$BEPINEX_SRC" "$WIN" <<'PYZIP'
+import pathlib
+import stat
+import sys
+import zipfile
+
+archive_path, destination = sys.argv[1:]
+with zipfile.ZipFile(archive_path) as archive:
+    seen = set()
+    for entry in archive.infolist():
+        name = entry.orig_filename
+        parts = name.rstrip("/").split("/")
+        mode = stat.S_IFMT(entry.external_attr >> 16)
+        if (not name or name != entry.filename or "\\" in name or
+                any(part in ("", ".", "..") or ":" in part or
+                    part.endswith((".", " ")) for part in parts) or
+                mode not in (0, stat.S_IFREG, stat.S_IFDIR)):
+            raise SystemExit(f"Unsafe BepInEx ZIP entry: {name!r}")
+        key = "/".join(parts).casefold()
+        if key in seen:
+            raise SystemExit(f"Duplicate BepInEx ZIP entry: {name!r}")
+        seen.add(key)
+    archive.extractall(pathlib.Path(destination))
+PYZIP
 mkdir -p "$WIN/BepInEx/plugins/SilksongCoop" "$WIN/BepInEx/config"
 cp "$MOD_BIN/SilksongCoop.Mod.dll" "$CORE_BIN/SilksongCoop.Core.dll" "$WIN/BepInEx/plugins/SilksongCoop/"
 cp "$ROOT/assets/com.silksong.coop.cfg" "$WIN/BepInEx/config/"

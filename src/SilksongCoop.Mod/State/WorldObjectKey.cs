@@ -205,7 +205,7 @@ namespace SilksongCoop.Mod.State
             {
                 ulong stable = StableObjectKey.PickupFromPersistent(
                     persistent.GetSceneName(), persistent.GetId());
-                if (stable != 0) return stable;
+                if (stable != 0) return stable | VitalsSyncService.PersistentPickupBit;
             }
 
             // CurrencyObjectBase.CurrencyType is protected, so distinguish the two concrete
@@ -221,7 +221,7 @@ namespace SilksongCoop.Mod.State
                 x.ToString("F2", System.Globalization.CultureInfo.InvariantCulture), "|",
                 y.ToString("F2", System.Globalization.CultureInfo.InvariantCulture));
 
-            return HashString(raw);
+            return HashString(raw) & ~VitalsSyncService.PersistentPickupBit;
         }
 
         /// <summary>

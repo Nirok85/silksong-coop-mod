@@ -12,10 +12,10 @@ namespace SilksongCoop.Core.Networking
     public static class NetworkProtocol
     {
         /// <summary>Current wire protocol revision.</summary>
-        public const ushort Version = 9;
+        public const ushort Version = 10;
 
         /// <summary>Label mixed into the HMAC session key for this revision.</summary>
-        public const string SessionLabel = "SilksongCoop-Session-v9";
+        public const string SessionLabel = "SilksongCoop-Session-v10";
 
         /// <summary>Deterministic build tag shared by both game transports.</summary>
         public static ulong GameVersionTag(string? version) => string.IsNullOrEmpty(version)

@@ -354,9 +354,19 @@ namespace SilksongCoop.Mod.Clones
         /// <see cref="EnemySyncController"/> from the sender's authoritative HealthManager
         /// hit; the clone only plays dash-trail effects here.
         /// </summary>
+        private float _nextUpdateWarningAt;
+
         public void TriggerAction(ActionType action, byte variant, float originX, float originY)
         {
             if (!_isInSameScene) return;
+
+            if (float.IsFinite(originX) && float.IsFinite(originY))
+            {
+                const float maxActionDistance = 12f;
+                float dx = transform.position.x - originX;
+                float dy = transform.position.y - originY;
+                if (dx * dx + dy * dy > maxActionDistance * maxActionDistance) return;
+            }
 
             if (action == ActionType.AirDash || action == ActionType.HarpoonDash)
             {
@@ -560,7 +570,11 @@ namespace SilksongCoop.Mod.Clones
             }
             catch (Exception ex)
             {
-                SilksongCoopPlugin.LogWarn($"[RemotePlayerController] Update error for peer {_peerId}: {ex.Message}");
+                if (Time.unscaledTime >= _nextUpdateWarningAt)
+                {
+                    _nextUpdateWarningAt = Time.unscaledTime + 5f;
+                    SilksongCoopPlugin.LogWarn($"[RemotePlayerController] Update error for peer {_peerId}: {ex.Message}");
+                }
             }
         }
 

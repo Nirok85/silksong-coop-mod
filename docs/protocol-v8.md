@@ -1,5 +1,7 @@
 # Protocol v8
 
+Historical specification. See [protocol v10](protocol-v10.md) for the current contract.
+
 ## Version negotiation
 
 `NetworkProtocol.Version` is 8 and `NetworkProtocol.SessionLabel` is

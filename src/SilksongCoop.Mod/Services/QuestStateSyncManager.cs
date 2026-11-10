@@ -68,6 +68,7 @@ namespace SilksongCoop.Mod.Services
         // snapshot is cheap and idempotent, so send one after the backlog drains.
         private long _observedDroppedReliable;
         private bool _resyncPending;
+        private readonly Dictionary<string, QuestFlagValue> _authoredChanges = new(StringComparer.Ordinal);
 
         public QuestStateSyncManager(SilksongCoopPlugin plugin)
         {
@@ -255,25 +256,16 @@ namespace SilksongCoop.Mod.Services
         /// Re-sends every tracked allowlisted flag. Used after the transport dropped a
         /// reliable packet, where a diff is not enough because the lost change is unknown.
         /// </summary>
-        private void SendFullSnapshot()
+        private void SendFullSnapshot() => ReplayAuthoredChanges();
+
+        public void ClearAuthoredChanges() => _authoredChanges.Clear();
+
+        public void ReplayAuthoredChanges(NetworkPeerId? peer = null)
         {
-            QuestFlagSnapshot current;
-            try
-            {
-                current = Capture();
-            }
-            catch (Exception ex)
-            {
-                SilksongCoopPlugin.LogWarn($"[QuestSync] Full resync capture failed: {ex.Message}");
-                return;
-            }
-
-            var changes = new List<QuestFlagChange>(current.Count);
-            foreach (var pair in current.Values)
+            var changes = new List<QuestFlagChange>(_authoredChanges.Count);
+            foreach (var pair in _authoredChanges)
                 changes.Add(new QuestFlagChange(pair.Key, pair.Value));
-
-            SilksongCoopPlugin.LogInfo($"[QuestSync] Re-sending {changes.Count} flag(s) after a reliable drop");
-            SendChanges(changes);
+            SendChanges(changes, peer);
         }
 
         /// <summary>
@@ -305,6 +297,7 @@ namespace SilksongCoop.Mod.Services
                             if (entry.BoolValue && !current)
                             {
                                 boolAccessor.Set(playerData, true);
+                                _authoredChanges.Remove(entry.Key);
                                 _before?.SetBool(entry.Key, true);
                                 for (int p = 0; p < _pendingFlushes.Count; p++)
                                     _pendingFlushes[p].SetBool(entry.Key, true);
@@ -329,6 +322,7 @@ namespace SilksongCoop.Mod.Services
                             if (entry.IntValue > current)
                             {
                                 intAccessor.Set(playerData, entry.IntValue);
+                                _authoredChanges.Remove(entry.Key);
                                 _before?.SetInt(entry.Key, entry.IntValue);
                                 for (int p = 0; p < _pendingFlushes.Count; p++)
                                     _pendingFlushes[p].SetInt(entry.Key, entry.IntValue);
@@ -417,11 +411,14 @@ namespace SilksongCoop.Mod.Services
             return snapshot;
         }
 
-        private void SendChanges(List<QuestFlagChange> changes)
+        private void SendChanges(List<QuestFlagChange> changes, NetworkPeerId? target = null)
         {
             if (changes.Count == 0 || !CanSync) return;
 
             var transport = _plugin.ActiveTransport!;
+            if (!target.HasValue)
+                foreach (var change in changes)
+                    _authoredChanges[change.Key] = change.Value;
             var entries = new List<QuestFlagEntry>(Math.Min(changes.Count, QuestStatePacket.MaxEntries));
             int encodedSize = QuestStatePacket.EncodedOverhead;
 
@@ -446,7 +443,7 @@ namespace SilksongCoop.Mod.Services
                 if (entries.Count >= QuestStatePacket.MaxEntries ||
                     encodedSize + entrySize > QuestStatePacket.MaxEncodedBytes)
                 {
-                    SendBatch(transport, entries);
+                    SendBatch(transport, entries, target);
                     entries.Clear();
                     encodedSize = QuestStatePacket.EncodedOverhead;
                 }
@@ -468,10 +465,10 @@ namespace SilksongCoop.Mod.Services
             }
 
             if (entries.Count > 0)
-                SendBatch(transport, entries);
+                SendBatch(transport, entries, target);
         }
 
-        private void SendBatch(INetworkTransport transport, List<QuestFlagEntry> entries)
+        private void SendBatch(INetworkTransport transport, List<QuestFlagEntry> entries, NetworkPeerId? target)
         {
             var packet = new QuestStatePacket
             {
@@ -480,9 +477,12 @@ namespace SilksongCoop.Mod.Services
                 Entries = entries.ToArray()
             };
 
-            PacketSender.SendToAll(
-                transport, packet, DeliveryMethod.ReliableOrdered, NetworkChannels.World,
-                QuestStatePacket.MaxEncodedBytes, diagnostics: null, logContext: "[QuestSync]");
+            if (target.HasValue)
+                PacketSender.SendTo(transport, target.Value, packet, DeliveryMethod.ReliableOrdered,
+                    NetworkChannels.World, QuestStatePacket.MaxEncodedBytes);
+            else
+                PacketSender.SendToAll(transport, packet, DeliveryMethod.ReliableOrdered,
+                    NetworkChannels.World, QuestStatePacket.MaxEncodedBytes, diagnostics: null, logContext: "[QuestSync]");
         }
 
         private void CacheQuestFields()

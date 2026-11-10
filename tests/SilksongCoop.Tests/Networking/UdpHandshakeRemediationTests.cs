@@ -47,7 +47,7 @@ namespace SilksongCoop.Tests.Networking
 
             byte[] signature = new ConnectionAuthenticator()
                 .ComputeSignature(nonce, "SK-AUDIT-PENDING-PEER");
-            client.Send(BuildEnvelope(0x09, 0, signature), host.BoundPort);
+            client.Send(BuildResponse(nonce, firstPeer, signature), host.BoundPort);
 
             for (int i = 0; i < 100 && !host.IsConnected; i++)
             {
@@ -128,7 +128,7 @@ namespace SilksongCoop.Tests.Networking
             byte[] nonce = challenge.AsSpan(8, 16).ToArray();
 
             byte[] signature = new ConnectionAuthenticator().ComputeSignature(nonce, code);
-            client.Send(BuildEnvelope(0x09, 0, signature), host.BoundPort);
+            client.Send(BuildResponse(nonce, peerId, signature), host.BoundPort);
 
             for (int i = 0; i < 100 && !host.IsConnected; i++)
             {
@@ -160,10 +160,19 @@ namespace SilksongCoop.Tests.Networking
             return BuildEnvelope(0x01, 0, payload);
         }
 
+        private static byte[] BuildResponse(byte[] nonce, ulong peer, byte[] signature)
+        {
+            var payload = new byte[56];
+            nonce.CopyTo(payload, 0);
+            BinaryPrimitives.WriteUInt64LittleEndian(payload.AsSpan(16), peer);
+            signature.CopyTo(payload, 24);
+            return BuildEnvelope(0x09, 0, payload);
+        }
+
         private static byte[] BuildBadMacData()
         {
             byte[] frame = BuildEnvelope(0x03, 0x01, new byte[] { 0x53, 0x4B, 0x01 });
-            Array.Resize(ref frame, frame.Length + 8);
+            Array.Resize(ref frame, frame.Length + 16);
             return frame;
         }
 

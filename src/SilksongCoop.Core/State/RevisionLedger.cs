@@ -16,10 +16,11 @@ namespace SilksongCoop.Core.State
         private readonly Dictionary<(ulong Key, ulong Origin), uint> _applied =
             new Dictionary<(ulong Key, ulong Origin), uint>();
 
+        private readonly object _gate = new object();
         private readonly HashSet<ulong> _keys = new HashSet<ulong>();
 
         /// <summary>Number of objects with a recorded revision (diagnostics/tests).</summary>
-        public int Count => _keys.Count;
+        public int Count { get { lock (_gate) return _keys.Count; } }
 
         /// <summary>
         /// True when the packet describes a state that was already applied or is older than
@@ -28,8 +29,8 @@ namespace SilksongCoop.Core.State
         public bool IsStale(ulong key, uint revision, ulong origin)
         {
             if (revision == 0) return false;
-            if (!_applied.TryGetValue((key, origin), out uint last)) return false;
-            return revision <= last;
+            lock (_gate)
+                return _applied.TryGetValue((key, origin), out uint last) && !IsNewer(revision, last);
         }
 
         /// <summary>Records an applied revision. Revision 0 carries no ordering.</summary>
@@ -37,17 +38,25 @@ namespace SilksongCoop.Core.State
         {
             if (revision == 0) return;
 
-            if (!_applied.TryGetValue((key, origin), out uint last) || revision > last)
+            lock (_gate)
             {
-                _applied[(key, origin)] = revision;
-                _keys.Add(key);
+                if (!_applied.TryGetValue((key, origin), out uint last) || IsNewer(revision, last))
+                {
+                    _applied[(key, origin)] = revision;
+                    _keys.Add(key);
+                }
             }
         }
 
+        public static bool IsNewer(uint candidate, uint previous) => unchecked((int)(candidate - previous)) > 0;
+
         public void Clear()
         {
-            _applied.Clear();
-            _keys.Clear();
+            lock (_gate)
+            {
+                _applied.Clear();
+                _keys.Clear();
+            }
         }
     }
 }

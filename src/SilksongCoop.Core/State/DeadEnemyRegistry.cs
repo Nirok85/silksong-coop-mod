@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 
 namespace SilksongCoop.Core.State
 {
@@ -47,6 +48,7 @@ namespace SilksongCoop.Core.State
             new Dictionary<ulong, DeadEnemyRecord>();
         private readonly Queue<ulong> _order = new Queue<ulong>();
         private readonly int _capacity;
+        private readonly object _gate = new object();
 
         public DeadEnemyRegistry(int capacity = DefaultCapacity)
         {
@@ -57,13 +59,21 @@ namespace SilksongCoop.Core.State
         }
 
         /// <summary>Number of currently retained death records.</summary>
-        public int Count => _records.Count;
+        public int Count { get { lock (_gate) return _records.Count; } }
 
-        /// <summary>Live view used by snapshot catch-up.</summary>
-        public IReadOnlyDictionary<ulong, DeadEnemyRecord> Records => _records;
+        /// <summary>Stable, read-only snapshot used by catch-up.</summary>
+        public IReadOnlyDictionary<ulong, DeadEnemyRecord> Records
+        {
+            get
+            {
+                lock (_gate)
+                    return new ReadOnlyDictionary<ulong, DeadEnemyRecord>(
+                        new Dictionary<ulong, DeadEnemyRecord>(_records));
+            }
+        }
 
         /// <summary>Whether a death is already recorded for <paramref name="key"/>.</summary>
-        public bool Contains(ulong key) => _records.ContainsKey(key);
+        public bool Contains(ulong key) { lock (_gate) return _records.ContainsKey(key); }
 
         /// <summary>
         /// Records a death. Re-registering the same key updates its position/flags without
@@ -71,27 +81,30 @@ namespace SilksongCoop.Core.State
         /// </summary>
         public void Register(ulong key, float x, float y, bool isBoss, bool isSequenceBoss = false)
         {
-            if (key == 0) return;
-
-            if (!_records.ContainsKey(key))
+            lock (_gate)
             {
-                while (_records.Count >= _capacity)
+                if (key == 0) return;
+
+                if (!_records.ContainsKey(key))
                 {
-                    if (!EvictOne()) break;
+                    while (_records.Count >= _capacity)
+                    {
+                        if (!EvictOne()) break;
+                    }
+
+                    _order.Enqueue(key);
+                }
+                else if (_records.TryGetValue(key, out var existing))
+                {
+                    // Never downgrade a boss/sequence record when the same key is later
+                    // reported from a context without that information (for example a
+                    // snapshot applied after the boss-sequence lookup went away).
+                    isBoss |= existing.IsBoss;
+                    isSequenceBoss |= existing.IsSequenceBoss;
                 }
 
-                _order.Enqueue(key);
+                _records[key] = new DeadEnemyRecord(x, y, isBoss, isSequenceBoss);
             }
-            else if (_records.TryGetValue(key, out var existing))
-            {
-                // Never downgrade a boss/sequence record when the same key is later
-                // reported from a context without that information (for example a
-                // snapshot applied after the boss-sequence lookup went away).
-                isBoss |= existing.IsBoss;
-                isSequenceBoss |= existing.IsSequenceBoss;
-            }
-
-            _records[key] = new DeadEnemyRecord(x, y, isBoss, isSequenceBoss);
         }
 
         /// <summary>
@@ -140,27 +153,30 @@ namespace SilksongCoop.Core.State
         /// <returns>The number of records that were removed.</returns>
         public int DropRespawnable()
         {
-            if (_records.Count == 0) return 0;
-
-            var survivors = new List<KeyValuePair<ulong, DeadEnemyRecord>>();
-            foreach (var pair in _records)
+            lock (_gate)
             {
-                if (pair.Value.IsBoss)
-                    survivors.Add(pair);
+                if (_records.Count == 0) return 0;
+
+                var survivors = new List<KeyValuePair<ulong, DeadEnemyRecord>>();
+                foreach (var pair in _records)
+                {
+                    if (pair.Value.IsBoss)
+                        survivors.Add(pair);
+                }
+
+                int removed = _records.Count - survivors.Count;
+                if (removed == 0) return 0;
+
+                _records.Clear();
+                _order.Clear();
+                for (int i = 0; i < survivors.Count; i++)
+                {
+                    _records[survivors[i].Key] = survivors[i].Value;
+                    _order.Enqueue(survivors[i].Key);
+                }
+
+                return removed;
             }
-
-            int removed = _records.Count - survivors.Count;
-            if (removed == 0) return 0;
-
-            _records.Clear();
-            _order.Clear();
-            for (int i = 0; i < survivors.Count; i++)
-            {
-                _records[survivors[i].Key] = survivors[i].Value;
-                _order.Enqueue(survivors[i].Key);
-            }
-
-            return removed;
         }
 
         /// <summary>
@@ -171,36 +187,42 @@ namespace SilksongCoop.Core.State
         /// </summary>
         public List<ulong> DropSequenceBosses()
         {
-            var removed = new List<ulong>();
-            if (_records.Count == 0) return removed;
-
-            var survivors = new List<KeyValuePair<ulong, DeadEnemyRecord>>();
-            foreach (var pair in _records)
+            lock (_gate)
             {
-                if (pair.Value.IsSequenceBoss)
-                    removed.Add(pair.Key);
-                else
-                    survivors.Add(pair);
+                var removed = new List<ulong>();
+                if (_records.Count == 0) return removed;
+
+                var survivors = new List<KeyValuePair<ulong, DeadEnemyRecord>>();
+                foreach (var pair in _records)
+                {
+                    if (pair.Value.IsSequenceBoss)
+                        removed.Add(pair.Key);
+                    else
+                        survivors.Add(pair);
+                }
+
+                if (removed.Count == 0) return removed;
+
+                _records.Clear();
+                _order.Clear();
+                for (int i = 0; i < survivors.Count; i++)
+                {
+                    _records[survivors[i].Key] = survivors[i].Value;
+                    _order.Enqueue(survivors[i].Key);
+                }
+
+                return removed;
             }
-
-            if (removed.Count == 0) return removed;
-
-            _records.Clear();
-            _order.Clear();
-            for (int i = 0; i < survivors.Count; i++)
-            {
-                _records[survivors[i].Key] = survivors[i].Value;
-                _order.Enqueue(survivors[i].Key);
-            }
-
-            return removed;
         }
 
         /// <summary>Removes every death record.</summary>
         public void Clear()
         {
-            _records.Clear();
-            _order.Clear();
+            lock (_gate)
+            {
+                _records.Clear();
+                _order.Clear();
+            }
         }
     }
 }

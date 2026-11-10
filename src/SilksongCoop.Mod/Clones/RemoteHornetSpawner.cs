@@ -423,7 +423,8 @@ namespace SilksongCoop.Mod.Clones
             {
                 if (_activeClones.TryGetValue(peerId, out var controller) && controller != null)
                 {
-                    controller.SyncAnimation(clipHash, normalizedTime);
+                    if (controller.IsPresentInScene)
+                        controller.SyncAnimation(clipHash, normalizedTime);
                 }
             }
             catch (Exception ex)

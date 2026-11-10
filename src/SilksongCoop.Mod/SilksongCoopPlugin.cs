@@ -46,7 +46,7 @@ namespace SilksongCoop.Mod
         #region Plugin Constants and Static Members
         public const string PluginGuid = "com.silksong.coop";
         public const string PluginName = "Silksong Co-op Multiplayer";
-        public const string PluginVersion = "3.3.6";
+        public const string PluginVersion = "3.3.7";
 
         public static SilksongCoopPlugin? Instance { get; private set; }
         /// <summary>
@@ -94,6 +94,37 @@ namespace SilksongCoop.Mod
         public BepInEx.Configuration.ConfigEntry<string>? LanguageConfig;
         public BepInEx.Configuration.ConfigEntry<bool>? OnboardingCompletedConfig;
         #endregion
+
+        private readonly Dictionary<NetworkPeerId, RemoteSceneSequence> _remoteScenes = new();
+        private readonly HashSet<NetworkPeerId> _readySent = new();
+        private readonly Dictionary<NetworkPeerId, Guid> _readyForCatchUp = new();
+        private readonly Dictionary<NetworkPeerId, Guid> _walletPeerInstances = new();
+        private string? _walletRoom;
+        private PlayerData? _walletSave;
+        private Guid _walletSaveInstance;
+        private bool _awaitingWalletSeed;
+        private readonly HashSet<NetworkPeerId> _initialStateSent = new();
+        private readonly Queue<(NetworkPeerId Peer, byte[] Data)> _deferredGamePackets = new();
+        private readonly Dictionary<NetworkPeerId, BenchCheckpointSyncPacket> _pendingCheckpoints = new();
+        private bool _initializedVitalsForConnection;
+        private BenchCheckpointSyncPacket? _lastBenchCheckpoint;
+        private PlayerData? _benchSave;
+
+        internal bool CanTrackCurrency => SessionState?.IsConnected == true ||
+            (_walletSave != null && ReferenceEquals(_walletSave, PlayerData.instance) &&
+             (_reconnectPending || (SessionState?.CurrentRoomCode != null &&
+                                    SessionState.CurrentRoomCode == _walletRoom)));
+        private uint _sceneGeneration;
+        private int? _departedSceneHandle;
+
+        private bool IsSaveReady => PlayerData.instance != null &&
+                                    GameManager.instance?.IsGameplayScene() == true &&
+                                    UnityEngine.SceneManagement.SceneManager.GetActiveScene().isLoaded &&
+                                    _departedSceneHandle != UnityEngine.SceneManagement.SceneManager.GetActiveScene().handle;
+
+        internal bool CanSendSceneTransform => IsSaveReady;
+
+        internal uint SceneGeneration => _sceneGeneration;
 
         public INetworkTransport? ActiveTransport { get; private set; }
         public SteamP2PTransport? SteamTransport { get; private set; }
@@ -220,7 +251,7 @@ namespace SilksongCoop.Mod
                 MaxReconnectAttemptsConfig = Config.Bind("Network", "MaxReconnectAttempts", 5, "Maximum number of automatic reconnection attempts (1-10)");
                 SteamMaxPlayersConfig = Config.Bind("Network", "SteamMaxPlayers", 2,
                     "Maximum Steam lobby size including yourself (2-8). Values above 2 enable the experimental full-mesh mode; death/revive and the partner HUD are still optimized for two players.");
-                SaveConnectionHistoryConfig = Config.Bind("Network", "SaveConnectionHistory", true, "Persist the last five connection targets in PlayerPrefs (Windows registry)");
+                SaveConnectionHistoryConfig = Config.Bind("Network", "SaveConnectionHistory", false, "Persist recent non-secret addresses and Steam lobby IDs in PlayerPrefs");
                 SyncQuestFlagsConfig = Config.Bind("Gameplay", "SyncQuestFlags", true,
                     "Replicate quest-related PlayerData bool/int flags changed during NPC dialogue (best-effort; disable if a quest misbehaves)");
                 LanguageConfig = Config.Bind("UI", "Language", "Auto",
@@ -261,7 +292,7 @@ namespace SilksongCoop.Mod
             // Initialize available transports
             try
             {
-                UdpTransport = new LiteNetLibTransport(1, "LocalPlayer", Application.version);
+                UdpTransport = new LiteNetLibTransport(1, "LocalPlayer", Application.version) { QueueReliableWhenBusy = true };
                 ActiveTransport = UdpTransport;
                 Container.Register<LiteNetLibTransport>(UdpTransport);
             }
@@ -593,6 +624,7 @@ namespace SilksongCoop.Mod
         /// </summary>
         public void PrepareForNewSession()
         {
+            ResetPeerReadiness();
             _vitalsSyncManager?.OnSessionEnded();
             CloneSpawner?.ResetAllClones();
             InventorySync?.ResetSessionState();
@@ -624,6 +656,7 @@ namespace SilksongCoop.Mod
                 // synchronously from Disconnect(), and the transport handler must not run
                 // the same teardown twice.
                 SessionState?.SetDisconnected(reason);
+                ResetPeerReadiness();
 
                 try
                 {
@@ -700,7 +733,7 @@ namespace SilksongCoop.Mod
         {
             try
             {
-                if (ActiveTransport == null || SessionState?.IsConnected != true) return;
+                if (ActiveTransport == null || SessionState?.IsConnected != true || !CanSendSceneTransform) return;
                 var hero = HeroController.instance;
                 Vector2 pos = (hero != null) ? (Vector2)hero.transform.position : Vector2.zero;
                 Vector2 dir = (hero != null && hero.cState.facingRight) ? Vector2.right : Vector2.left;
@@ -710,6 +743,7 @@ namespace SilksongCoop.Mod
                 {
                     Header = new PacketHeader(PacketType.ActionTrigger, 0, _actionTick, NetworkClock.NowMs),
                     Action = action,
+                    SceneGeneration = _sceneGeneration,
                     ActionSequenceId = _actionTick,
                     OriginX = pos.x,
                     OriginY = pos.y,
@@ -754,44 +788,24 @@ namespace SilksongCoop.Mod
         /// <param name="facingRight">True if facing right at the bench.</param>
         public void BroadcastBenchCheckpoint(string sceneName, string respawnMarker, int spawnType, bool facingRight)
         {
-            try
-            {
-                if (ActiveTransport == null || SessionState?.IsConnected != true || !SessionState.RemotePeerId.HasValue) return;
+            var pd = PlayerData.instance;
+            if (pd == null) return;
 
-                var packet = new BenchCheckpointSyncPacket
-                {
-                    Header = new PacketHeader(PacketType.BenchCheckpointSync, 0, 0, NetworkClock.NowMs),
-                    SceneName = sceneName,
-                    RespawnMarker = respawnMarker,
-                    SpawnType = spawnType,
-                    FacingRight = facingRight
-                };
-
-                // BUG-C1: scene and marker names can exceed 128 bytes — a stack buffer
-                // threw in EnsureCapacity and silently aborted the sync (P3: heap buffer
-                // passed directly, no extra ToArray copy).
-                byte[] buffer = ArrayPool<byte>.Shared.Rent(512);
-                try
-                {
-                    var writer = new PacketWriter(buffer);
-                    packet.Serialize(ref writer);
-                    ActiveTransport.Send(
-                        SessionState.RemotePeerId.Value,
-                        buffer,
-                        0,
-                        writer.Position,
-                        DeliveryMethod.ReliableOrdered,
-                        NetworkChannels.Death);
-                }
-                finally
-                {
-                    ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
-                }
-            }
-            catch (Exception ex)
+            var packet = new BenchCheckpointSyncPacket
             {
-                Logger.LogWarning($"[Coop] Failed broadcasting bench checkpoint: {ex.Message}");
-            }
+                Header = new PacketHeader(PacketType.BenchCheckpointSync, NetworkChannels.Death, 0, NetworkClock.NowMs),
+                SceneName = sceneName,
+                RespawnMarker = respawnMarker,
+                SpawnType = spawnType,
+                FacingRight = facingRight
+            };
+            if (!PacketValidator.ValidateBenchCheckpoint(packet)) return;
+            _lastBenchCheckpoint = packet;
+            _benchSave = pd;
+            _pendingCheckpoints.Clear();
+            if (ActiveTransport != null && SessionState?.IsConnected == true)
+                PacketSender.SendToAll(ActiveTransport, packet, DeliveryMethod.ReliableOrdered,
+                    NetworkChannels.Death, 1024, MenuUI?.Diagnostics);
         }
 
         /// <summary>
@@ -803,13 +817,18 @@ namespace SilksongCoop.Mod
         /// <param name="facingRight">True if facing right at the bench.</param>
         public void ApplyRemoteBenchCheckpoint(string sceneName, string respawnMarker, int spawnType, bool facingRight)
         {
+            TryApplyRemoteBenchCheckpoint(sceneName, respawnMarker, spawnType, facingRight);
+        }
+
+        private bool TryApplyRemoteBenchCheckpoint(string sceneName, string respawnMarker, int spawnType, bool facingRight)
+        {
             try
             {
                 // Validate against the actual loaded scene and its respawn markers before
                 // writing a checkpoint into the local save.
                 var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
                 if (!scene.isLoaded || scene.name != sceneName || GameManager.instance?.IsGameplayScene() != true)
-                    return;
+                    return false;
 
                 bool foundMarker = false;
                 foreach (var marker in RespawnMarker.Markers)
@@ -818,7 +837,7 @@ namespace SilksongCoop.Mod
                     foundMarker = true;
                     break;
                 }
-                if (!foundMarker) return;
+                if (!foundMarker) return false;
 
                 using (RemoteApplyScope.Begin())
                 {
@@ -827,6 +846,7 @@ namespace SilksongCoop.Mod
                     {
                         pd.SetBenchRespawn(respawnMarker, sceneName, spawnType, facingRight);
                         Logger.LogInfo($"[Coop] Applied remote bench checkpoint: {sceneName} / {respawnMarker}");
+                        return true;
                     }
                 }
             }
@@ -834,6 +854,7 @@ namespace SilksongCoop.Mod
             {
                 Logger.LogWarning($"[Coop] Failed applying remote bench checkpoint: {ex.Message}");
             }
+            return false;
         }
 
         /// <summary>
@@ -1237,38 +1258,6 @@ namespace SilksongCoop.Mod
                     DeathCoordinator?.RegisterRemotePeer(peer);
                     DeathCoordinator?.SetRemotePeerInSameScene(peer, CloneSpawner.IsRemoteInSameScene(peer));
 
-                    // Every peer needs the current world state, not only the first one.
-                    // The host resends snapshots/dead enemies/world replay; existing peers
-                    // receive idempotent repeats.
-                    EnemySync?.BeginCatchUpForNewPeer();
-
-                    if (VitalsSync != null)
-                    {
-                        var pd = PlayerData.instance;
-                        if (firstPeer && pd != null)
-                        {
-                            VitalsSync.InitializeState(
-                                pd.health,
-                                pd.maxHealthBase,
-                                pd.silk,
-                                Math.Max(1, pd.silkMax / 9),
-                                pd.nailUpgrades,
-                                pd.geo,
-                                pd.ShellShards
-                            );
-                        }
-
-                        // Broadcast to all peers; the newly connected one needs the current
-                        // state and existing peers simply receive an idempotent update.
-                        VitalsSync.BroadcastCurrentVitals();
-                        VitalsSync.BroadcastCurrentCurrency();
-                        // Tell the newly connected peer which world drops were already
-                        // collected, so its local copies are disabled before it can pick them.
-                        VitalsSync.BroadcastClaimedPickups();
-
-                        // HIGH-02: Broadcast initial inventory dump (abilities, tools, crests) to client
-                        BroadcastInitialInventory();
-                    }
                 }
                 catch (Exception ex)
                 {
@@ -1295,6 +1284,12 @@ namespace SilksongCoop.Mod
                     // lobby is over even when additional peers are still registered.
                     bool endSession = wasLastPeer || (!wasHost && wasPrimary);
 
+                    _vitalsSyncManager?.OnCurrencyPeerDisconnected(peer);
+                    _remoteScenes.Remove(peer);
+                    _pendingCheckpoints.Remove(peer);
+                    _readySent.Remove(peer);
+                    _readyForCatchUp.Remove(peer);
+                    _initialStateSent.Remove(peer);
                     SessionState.RemoveRemotePeer(peer);
                     CloneSpawner?.DespawnRemotePlayer(peer);
                     VitalsSync?.RemoveRemotePeer(peer);
@@ -1329,6 +1324,7 @@ namespace SilksongCoop.Mod
                         DeathCoordinator?.CurrentState == DeathState.RespawningAtPartner;
 
                     SessionState.SetDisconnected(reason);
+                    ResetPeerReadiness();
                     ResetDesyncTracking();
                     _vitalsSyncManager?.OnSessionEnded();
                     EventBus?.Publish(new SessionEndedEvent { Reason = reason });
@@ -1417,7 +1413,26 @@ namespace SilksongCoop.Mod
                     SessionState?.RecordReceived(length);
                     MenuUI?.Diagnostics?.RecordReceived(length);
 
-                    ProcessPacket(peer, new ReadOnlySpan<byte>(data, offset, length));
+                    var span = new ReadOnlySpan<byte>(data, offset, length);
+                    if (!IsSaveReady && IsKnownPeer(peer) &&
+                        PacketHeader.TryReadFrom(span, out var header) &&
+                        header.IsValidPacketType && header.PacketId != PacketType.PeerReady)
+                    {
+                        if (header.PacketId == PacketType.TransformSync ||
+                            header.PacketId == PacketType.ActionTrigger) return;
+                        if (_deferredGamePackets.Count == 4096)
+                        {
+                            Logger.LogWarning("[Coop] Save load packet queue exhausted; disconnecting.");
+                            DisconnectFromSession();
+                            return;
+                        }
+                        _deferredGamePackets.Enqueue((peer, span.ToArray()));
+                        return;
+                    }
+
+                    if (IsSaveReady && (!_initializedVitalsForConnection || _deferredGamePackets.Count > 0))
+                        PumpPeerReadiness();
+                    ProcessPacket(peer, span);
                 }
                 catch (Exception ex)
                 {
@@ -1426,11 +1441,119 @@ namespace SilksongCoop.Mod
             };
         }
 
+        private void ApplyWalletSeed(NetworkPeerId peer, Core.Protocol.Packets.CurrencyType currency, int total)
+        {
+            VitalsSync.SeedWallet(currency, total,
+                _vitalsSyncManager?.GetPendingCurrencyDelta(peer, currency) ?? 0);
+        }
+
+        internal void OnCurrencyQueueDrained() => _vitalsSyncManager?.OnCurrencyQueueDrained();
+        internal void ScheduleWalletReconcile() => _vitalsSyncManager?.ScheduleWalletReconcile();
+
+        private void ResetPeerReadiness()
+        {
+            _readySent.Clear();
+            _readyForCatchUp.Clear();
+            _initialStateSent.Clear();
+            _deferredGamePackets.Clear();
+            _pendingCheckpoints.Clear();
+            _remoteScenes.Clear();
+            _initializedVitalsForConnection = false;
+            _awaitingWalletSeed = false;
+        }
+
+        private void PumpPeerReadiness()
+        {
+            if (!IsSaveReady || ActiveTransport == null || SessionState?.IsConnected != true) return;
+            if (!_initializedVitalsForConnection)
+            {
+                var pd = PlayerData.instance;
+                string? room = ActiveTransport is SteamP2PTransport steam
+                    ? steam.CurrentLobbyId.m_SteamID.ToString()
+                    : SessionState.CurrentRoomCode;
+                bool resume = ReferenceEquals(_walletSave, pd) && !string.IsNullOrEmpty(room) && _walletRoom == room;
+                if (!resume)
+                {
+                    _walletSave = pd;
+                    _walletRoom = room;
+                    _walletSaveInstance = Guid.NewGuid();
+                    _walletPeerInstances.Clear();
+                    QuestStateSync?.ClearAuthoredChanges();
+                    _vitalsSyncManager?.ResetCurrencyJournal();
+                }
+                VitalsSync.InitializeState(pd.health, pd.maxHealthBase, pd.silk,
+                    Math.Max(1, pd.silkMax / 9), pd.nailUpgrades, pd.geo, pd.ShellShards, preserveWallet: resume);
+                _initializedVitalsForConnection = true;
+            }
+
+            while (_deferredGamePackets.Count > 0)
+            {
+                var pending = _deferredGamePackets.Dequeue();
+                ProcessPacket(pending.Peer, pending.Data);
+            }
+
+            foreach (var peer in SessionState.RemotePeerIds)
+            {
+                if (!_readySent.Contains(peer) &&
+                    PacketSender.SendTo(ActiveTransport, peer, new PeerReadyPacket
+                    {
+                        Header = new PacketHeader(PacketType.PeerReady, NetworkChannels.Currency, 0, NetworkClock.NowMs),
+                        SaveInstance = _walletSaveInstance
+                    }, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, PacketHeader.HeaderSize + 16))
+                {
+                    _readySent.Add(peer);
+                }
+
+                if (_readyForCatchUp.TryGetValue(peer, out var saveInstance) && _initialStateSent.Add(peer))
+                {
+                    bool existingPeer = _walletPeerInstances.TryGetValue(peer, out var previousSave);
+                    bool resumedPeer = existingPeer && previousSave == saveInstance;
+                    _walletPeerInstances[peer] = saveInstance;
+                    if (!resumedPeer)
+                    {
+                        VitalsSync.ResetCurrencyPeer(peer);
+                        if (existingPeer || SessionState.IsHost)
+                            _vitalsSyncManager?.ForgetCurrencyPeer(peer);
+                        if (SessionState.IsHost)
+                            _vitalsSyncManager?.SendWalletSeed(peer, VitalsSync.GetWalletBalances());
+                        else if (SessionState.RemotePeerId == peer)
+                            _awaitingWalletSeed = true;
+                    }
+                    if (SessionState.IsHost || resumedPeer || SessionState.RemotePeerId != peer)
+                        _vitalsSyncManager?.EnableCurrencyPeer(peer);
+
+                    EnemySync?.BeginCatchUpForNewPeer();
+                    VitalsSync.BroadcastCurrentVitals();
+                    VitalsSync.BroadcastClaimedPickups();
+                    BroadcastInitialInventory();
+                    QuestStateSync?.ReplayAuthoredChanges(peer);
+                    if (_lastBenchCheckpoint.HasValue && ReferenceEquals(_benchSave, PlayerData.instance) &&
+                        SessionState.IsHost)
+                        PacketSender.SendTo(ActiveTransport, peer, _lastBenchCheckpoint.Value,
+                            DeliveryMethod.ReliableOrdered, NetworkChannels.Death, 1024, MenuUI?.Diagnostics);
+                }
+
+                if (_pendingCheckpoints.TryGetValue(peer, out var bench) &&
+                    TryApplyRemoteBenchCheckpoint(bench.SceneName, bench.RespawnMarker, bench.SpawnType, bench.FacingRight))
+                {
+                    _pendingCheckpoints.Remove(peer);
+                }
+            }
+        }
+
         /// <summary>
         /// True when <paramref name="peer"/> is the current session partner or one of the
         /// additional peers registered for a future multi-peer transport. The legacy
         /// single-peer path always registers exactly one peer.
         /// </summary>
+        private bool IsWorldAuthority(NetworkPeerId peer, ulong origin)
+        {
+            bool accepted = SessionState?.IsHost == false && SessionState.RemotePeerId == peer &&
+                            peer.Value == origin;
+            if (!accepted) MenuUI?.Diagnostics?.RecordRejected();
+            return accepted;
+        }
+
         private bool IsKnownPeer(NetworkPeerId peer)
         {
             var session = SessionState;
@@ -1493,15 +1616,25 @@ namespace SilksongCoop.Mod
                 var reader = new PacketReader(span);
                 switch (header.PacketId)
                 {
+                    case PacketType.PeerReady:
+                        reader.ReadHeader();
+                        var saveInstance = reader.ReadGuid();
+                        if (reader.Remaining != 0 || saveInstance == Guid.Empty) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        if (_readyForCatchUp.TryAdd(peer, saveInstance)) PumpPeerReadiness();
+                        break;
+
                     case PacketType.TransformSync:
                         var trans = TransformSyncPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateTransformSync(trans)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        if (reader.Remaining != 0 || !PacketValidator.ValidateTransformSync(trans)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        _remoteScenes.TryGetValue(peer, out var remoteScene);
+                        if (!remoteScene.AcceptTransform(trans.SceneGeneration, header.TickSequence)) break;
+                        _remoteScenes[peer] = remoteScene;
                         int localSceneHash = GameManager.instance != null ? GameManager.instance.sceneNameHash : 0;
                         // BUG-B6: strict equality — while a scene is loading the local hash
                         // is 0, and the old "either side 0 counts as same scene" rule made
                         // the clone pop in and flicker on the black loading screen. Hide
                         // until both hashes are known and equal.
-                        bool isSameScene = trans.SceneNameHash != 0 && trans.SceneNameHash == localSceneHash;
+                        bool isSameScene = CanSendSceneTransform && trans.SceneNameHash != 0 && trans.SceneNameHash == localSceneHash;
                         CloneSpawner?.UpdateRemoteTransform(
                             peer,
                             trans.PositionX, trans.PositionY,
@@ -1517,17 +1650,22 @@ namespace SilksongCoop.Mod
 
                     case PacketType.BenchCheckpointSync:
                         var bench = BenchCheckpointSyncPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateBenchCheckpoint(bench)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        ApplyRemoteBenchCheckpoint(bench.SceneName, bench.RespawnMarker, bench.SpawnType, bench.FacingRight);
+                        if (reader.Remaining != 0 || !PacketValidator.ValidateBenchCheckpoint(bench)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        if (TryApplyRemoteBenchCheckpoint(bench.SceneName, bench.RespawnMarker, bench.SpawnType, bench.FacingRight))
+                            _pendingCheckpoints.Remove(peer);
+                        else
+                            _pendingCheckpoints[peer] = bench;
                         break;
 
                     case PacketType.ActionTrigger:
                         var action = ActionTriggerPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateActionTrigger(action)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        if (reader.Remaining != 0 || !PacketValidator.ValidateActionTrigger(action)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         // A hidden clone still sits at its last position in this scene.
                         // Its attack must not damage enemies in a room the partner has
                         // already left (issue #2.4).
-                        if (CloneSpawner == null || !CloneSpawner.IsRemoteInSameScene(peer))
+                        if (CloneSpawner == null || !CloneSpawner.IsRemoteInSameScene(peer) ||
+                            !_remoteScenes.TryGetValue(peer, out var actionScene) ||
+                            !actionScene.HasTransform || actionScene.Generation != action.SceneGeneration)
                         {
                             break;
                         }
@@ -1536,19 +1674,52 @@ namespace SilksongCoop.Mod
 
                     case PacketType.VitalsSync:
                         var vitals = VitalsSyncPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateVitalsSync(vitals)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        if (reader.Remaining != 0 || !PacketValidator.ValidateVitalsSync(vitals)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         VitalsSync?.HandleVitalsPacket(peer, vitals);
                         break;
 
                     case PacketType.CurrencySync:
                         var currency = CurrencySyncPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateCurrencySync(currency)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        VitalsSync?.HandleCurrencyPacket(peer, currency);
+                        if (reader.Remaining != 0 || !PacketValidator.ValidateCurrencySync(currency)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        if (currency.DeltaAmount == 0 && currency.PickupKey == 0) break;
+                        VitalsSync.HandleCurrencyPacket(peer, currency);
+                        if (currency.DeltaAmount != 0 && ActiveTransport != null)
+                            PacketSender.SendTo(ActiveTransport, peer, new CurrencyReceiptPacket
+                            {
+                                Header = new PacketHeader(PacketType.CurrencyReceipt, NetworkChannels.Currency, 0, NetworkClock.NowMs),
+                                TransactionId = currency.TransactionId
+                            }, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, PacketHeader.HeaderSize + 16);
+                        break;
+
+                    case PacketType.WalletSeed:
+                        reader.ReadHeader();
+                        int rosaries = reader.ReadInt32();
+                        int shards = reader.ReadInt32();
+                        if (reader.Remaining != 0 || rosaries > PacketValidator.MaxReasonableCurrency ||
+                            shards > PacketValidator.MaxReasonableCurrency)
+                        {
+                            MenuUI?.Diagnostics?.RecordRejected();
+                            return;
+                        }
+                        if (_awaitingWalletSeed && !SessionState.IsHost && SessionState.RemotePeerId == peer)
+                        {
+                            _awaitingWalletSeed = false;
+                            ApplyWalletSeed(peer, Core.Protocol.Packets.CurrencyType.Rosaries, rosaries);
+                            ApplyWalletSeed(peer, Core.Protocol.Packets.CurrencyType.ShellShards, shards);
+                            _vitalsSyncManager?.EnableCurrencyPeer(peer);
+                        }
+                        break;
+
+                    case PacketType.CurrencyReceipt:
+                        reader.ReadHeader();
+                        var receipt = reader.ReadGuid();
+                        if (reader.Remaining != 0 || receipt == Guid.Empty) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        _vitalsSyncManager?.ReceiveCurrencyReceipt(peer, receipt);
                         break;
 
                     case PacketType.PlayerDeath:
                         var death = DeathLifecyclePacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateDeathLifecycle(death)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        if (reader.Remaining != 0 || !PacketValidator.ValidateDeathLifecycle(death)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         if (DeathCoordinator != null)
                         {
                             bool wasAlive = DeathCoordinator.IsRemotePeerAlive(peer);
@@ -1598,50 +1769,50 @@ namespace SilksongCoop.Mod
                         // immediately and drop buffered snapshots so it never lingers at
                         // its last position during the remote's scene load.
                         var scene = SceneTransitionPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateSceneTransition(scene)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        if (scene.TransitionPhase == 0)
+                        if (reader.Remaining != 0 || !PacketValidator.ValidateSceneTransition(scene)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        _remoteScenes.TryGetValue(peer, out var departed);
+                        if (scene.TransitionPhase == 0 && departed.AcceptDeparture(header.TickSequence))
                         {
+                            _remoteScenes[peer] = departed;
                             CloneSpawner?.SetRemoteScenePresence(peer, false);
-                        }
-                        else
-                        {
-                            CloneSpawner?.SetRemoteScenePresence(peer, true);
                         }
                         break;
 
                     case PacketType.EnemySync:
                         var enemyPacket = EnemySyncPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateEnemySync(enemyPacket)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        if (reader.Remaining != 0 || !PacketValidator.ValidateEnemySync(enemyPacket)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         EnemySync?.ApplyRemoteHit(enemyPacket, peer);
                         break;
 
                     case PacketType.EnemySnapshot:
                         var enemySnapshot = EnemySnapshotPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateEnemySnapshot(enemySnapshot)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        if (reader.Remaining != 0 || !PacketValidator.ValidateEnemySnapshot(enemySnapshot)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         EnemySync?.ApplyRemoteSnapshot(enemySnapshot, peer);
                         break;
 
                     case PacketType.WorldEvent:
                         var worldEvent = WorldEventPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateWorldEvent(worldEvent)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        EnemySync?.ApplyRemoteWorldEvent(worldEvent, peer);
+                        if (reader.Remaining != 0 || !PacketValidator.ValidateWorldEvent(worldEvent)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        if (IsWorldAuthority(peer, worldEvent.OriginPeerId))
+                            EnemySync?.ApplyRemoteWorldEvent(worldEvent, peer);
                         break;
 
                     case PacketType.PersistentState:
                         var persistentState = PersistentStatePacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidatePersistentState(persistentState)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        EnemySync?.ApplyRemotePersistentState(persistentState);
+                        if (reader.Remaining != 0 || !PacketValidator.ValidatePersistentState(persistentState)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        if (IsWorldAuthority(peer, persistentState.OriginPeerId))
+                            EnemySync?.ApplyRemotePersistentState(persistentState);
                         break;
 
                     case PacketType.QuestState:
                         var questState = QuestStatePacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateQuestState(questState)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        if (reader.Remaining != 0 || !PacketValidator.ValidateQuestState(questState)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         QuestStateSync?.ApplyRemote(questState);
                         break;
 
                     case PacketType.ItemUnlockSync:
                         var item = ItemUnlockPacket.Deserialize(ref reader);
-                        if (!PacketValidator.ValidateItemUnlock(item)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
+                        if (reader.Remaining != 0 || !PacketValidator.ValidateItemUnlock(item)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         InventorySync?.HandleItemUnlockPacket(peer, item);
                         break;
                 }
@@ -1666,15 +1837,17 @@ namespace SilksongCoop.Mod
         {
             try
             {
-                if (ActiveTransport == null || SessionState?.IsConnected != true || !SessionState.RemotePeerId.HasValue) return;
+                _departedSceneHandle = UnityEngine.SceneManagement.SceneManager.GetActiveScene().handle;
+                _sceneGeneration++;
+                if (ActiveTransport == null || SessionState?.IsConnected != true) return;
 
-                // World drops from the scene we are leaving must not be replayed later.
-                VitalsSync?.ClearClaimedPickups();
+                foreach (var peer in SessionState.RemotePeerIds)
+                    CloneSpawner?.SetRemoteScenePresence(peer, false);
 
                 int sceneHash = GameManager.instance != null ? GameManager.instance.sceneNameHash : 0;
                 var packet = new SceneTransitionPacket
                 {
-                    Header = new PacketHeader(PacketType.SceneTransition, 0, 0, NetworkClock.NowMs),
+                    Header = new PacketHeader(PacketType.SceneTransition, NetworkChannels.Action, _sceneGeneration, NetworkClock.NowMs),
                     TargetScene = string.Empty,
                     EntryGate = string.Empty,
                     SceneNameHash = sceneHash,
@@ -1687,8 +1860,7 @@ namespace SilksongCoop.Mod
                 {
                     var writer = new PacketWriter(buffer);
                     packet.Serialize(ref writer);
-                    ActiveTransport.Send(
-                        SessionState.RemotePeerId.Value,
+                    ActiveTransport.SendToAll(
                         buffer,
                         0,
                         writer.Position,
@@ -1756,7 +1928,9 @@ namespace SilksongCoop.Mod
                 {
                     SteamTransport.PollEvents();
                 }
+                PumpPeerReadiness();
                 ActiveTransport?.PollEvents();
+                PumpPeerReadiness();
 
                 _networkOrchestrator?.Update();
                 foreach (var orch in _orchestrators)
@@ -1799,13 +1973,13 @@ namespace SilksongCoop.Mod
                                 transport.Connect(addr);
                                 SessionState?.SetConnecting(transport.LocalPeerId, addr);
                                 MenuUI?.SetStatusMessage(Loc.T("Reconnecting (attempt {0})...", _reconnectAttempts));
-                                Logger.LogInfo($"[Coop] Auto-reconnect attempt {_reconnectAttempts} to {addr}");
+                                Logger.LogInfo($"[Coop] Auto-reconnect attempt {_reconnectAttempts}");
                             }
                             else
                             {
                                 _reconnectPending = true;
                                 _nextReconnectTime = Time.unscaledTime + 4f;
-                                Logger.LogWarning($"[Coop] Auto-reconnect deferred: transport for {addr} is unavailable");
+                                Logger.LogWarning("[Coop] Auto-reconnect deferred: transport unavailable");
                             }
                         }
                         catch (Exception ex)
@@ -1903,6 +2077,14 @@ namespace SilksongCoop.Mod
             if (SessionState != null && SessionState.Status != SessionStatus.Disconnected)
                 DisconnectFromSession(respawnSpectator: false);
             VitalsSync?.ClearClaimedPickups();
+            _walletSave = null;
+            _walletRoom = null;
+            _departedSceneHandle = null;
+            _lastBenchCheckpoint = null;
+            _benchSave = null;
+            _walletPeerInstances.Clear();
+            QuestStateSync?.ClearAuthoredChanges();
+            _vitalsSyncManager?.ResetCurrencyJournal();
             _sessionSaveScope.Reset();
         }
 

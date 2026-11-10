@@ -510,23 +510,16 @@ namespace SilksongCoop.Tests
         }
 
         [Fact]
-        public void ZeroFloor_AlternatingMicroDeltasAroundZero_AccurateTrajectory()
+        public void Deficit_AlternatingDeltasRemainOrderIndependentAndDisplayZero()
         {
             using var harness = new DualClientTestHarness();
             harness.HostVitals.InitializeState(5, 5, 9, 1, 0, initialRosaries: 0, initialShards: 0);
             harness.ClientVitals.InitializeState(5, 5, 9, 1, 0, initialRosaries: 0, initialShards: 0);
 
-            // Sequence of operations starting from 0:
-            // 1. -50 -> max(0, -50) = 0
-            // 2. +20 -> 20
-            // 3. -30 -> max(0, 20 - 30) = 0
-            // 4. +15 -> 15
-            // 5. -10 -> 5
-            // 6. -20 -> max(0, 5 - 20) = 0
-            // 7. +40 -> 40
-
+            // Concurrent peers can receive operations in different orders. Keep the
+            // deficit internally and apply the zero floor only to the displayed value.
             int[] deltas = { -50, 20, -30, 15, -10, -20, 40 };
-            int expected = 40;
+            int expected = 0;
 
             foreach (var d in deltas)
             {

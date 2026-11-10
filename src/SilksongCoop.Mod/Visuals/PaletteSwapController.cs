@@ -18,6 +18,7 @@ namespace SilksongCoop.Mod.Visuals
         private tk2dSprite[]? _sprites;
         private Renderer[]? _renderers;
         private Material[][]? _cachedMaterials;
+        private readonly Dictionary<Material, Material> _ownedMaterials = new();
         private MaterialPropertyBlock? _propertyBlock;
         private bool _isPlayer2;
         private float _hueShift = PaletteSwapMath.Player2HueShift;
@@ -47,17 +48,30 @@ namespace SilksongCoop.Mod.Visuals
         {
             _sprites = GetComponentsInChildren<tk2dSprite>(true);
             _renderers = GetComponentsInChildren<Renderer>(true);
-            if (_renderers != null)
+            _cachedMaterials = new Material[_renderers.Length][];
+            for (int i = 0; i < _renderers.Length; i++)
             {
-                _cachedMaterials = new Material[_renderers.Length][];
-                for (int i = 0; i < _renderers.Length; i++)
+                var renderer = _renderers[i];
+                if (renderer == null)
                 {
-                    _cachedMaterials[i] = _renderers[i] != null ? _renderers[i].materials : Array.Empty<Material>();
+                    _cachedMaterials[i] = Array.Empty<Material>();
+                    continue;
                 }
-            }
-            else
-            {
-                _cachedMaterials = null;
+
+                var materials = renderer.sharedMaterials;
+                bool changed = false;
+                for (int m = 0; m < materials.Length; m++)
+                {
+                    var source = materials[m];
+                    if (source == null || _ownedMaterials.ContainsKey(source)) continue;
+                    var instance = new Material(source);
+                    _ownedMaterials.Add(instance, source);
+                    materials[m] = instance;
+                    changed = true;
+                }
+
+                if (changed) renderer.sharedMaterials = materials;
+                _cachedMaterials[i] = materials;
             }
         }
 
@@ -82,27 +96,27 @@ namespace SilksongCoop.Mod.Visuals
 
         private void OnDestroy()
         {
-            // Renderer.materials instantiates a per-renderer copy; Unity does not destroy
-            // those copies with the GameObject. Without this every clone spawn leaked a set
-            // of native materials.
-            if (_cachedMaterials == null) return;
-
-            var destroyed = new HashSet<Material>();
-            for (int i = 0; i < _cachedMaterials.Length; i++)
+            if (_renderers != null)
             {
-                var materials = _cachedMaterials[i];
-                if (materials == null) continue;
-
-                for (int m = 0; m < materials.Length; m++)
+                foreach (var renderer in _renderers)
                 {
-                    var material = materials[m];
-                    if (material != null && destroyed.Add(material))
+                    if (renderer == null) continue;
+                    var materials = renderer.sharedMaterials;
+                    bool changed = false;
+                    for (int i = 0; i < materials.Length; i++)
                     {
-                        Destroy(material);
+                        if (materials[i] == null || !_ownedMaterials.TryGetValue(materials[i], out var original))
+                            continue;
+                        materials[i] = original;
+                        changed = true;
                     }
+                    if (changed) renderer.sharedMaterials = materials;
                 }
             }
 
+            foreach (var instance in _ownedMaterials.Keys)
+                if (instance != null) Destroy(instance);
+            _ownedMaterials.Clear();
             _cachedMaterials = null;
         }
 
@@ -179,7 +193,7 @@ namespace SilksongCoop.Mod.Visuals
                     _huePropId = GetHueShiftPropertyId();
                 }
 
-                if (_sprites == null || _sprites.Length == 0 || _renderers == null || _renderers.Length == 0)
+                if (_sprites == null || _renderers == null)
                 {
                     CacheComponents();
                 }
@@ -245,12 +259,6 @@ namespace SilksongCoop.Mod.Visuals
                             if (_cachedMaterials != null && i < _cachedMaterials.Length)
                             {
                                 materials = _cachedMaterials[i];
-                            }
-                            if (materials == null)
-                            {
-                                materials = ren.materials;
-                                if (_cachedMaterials != null && i < _cachedMaterials.Length)
-                                    _cachedMaterials[i] = materials;
                             }
                             if (materials != null)
                             {

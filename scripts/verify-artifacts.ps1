@@ -55,7 +55,8 @@ if ($failures.Count -gt 0) {
 }
 
 Write-Host '==> SHA-256 manifest' -ForegroundColor Cyan
-$verified = 0
+$expectedNames = @([IO.Path]::GetFileName($fullZip), [IO.Path]::GetFileName($pluginZip))
+$verifiedNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 foreach ($line in Get-Content -LiteralPath $manifest -Encoding UTF8) {
     if ([string]::IsNullOrWhiteSpace($line)) { continue }
     $match = [regex]::Match($line, '^([0-9A-Fa-f]{64})\s+\*?(.+?)\s*$')
@@ -66,6 +67,10 @@ foreach ($line in Get-Content -LiteralPath $manifest -Encoding UTF8) {
 
     $expected = $match.Groups[1].Value.ToUpperInvariant()
     $name = $match.Groups[2].Value
+    if ($expectedNames -cnotcontains $name -or -not $verifiedNames.Add($name)) {
+        Check $false "unexpected or duplicate manifest entry: $name"
+        continue
+    }
     $path = Join-Path $Directory $name
     if (-not (Test-Path -LiteralPath $path)) {
         Check $false "manifest entry missing on disk: $name"
@@ -74,10 +79,9 @@ foreach ($line in Get-Content -LiteralPath $manifest -Encoding UTF8) {
 
     $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToUpperInvariant()
     Check ($actual -eq $expected) "SHA-256 matches for $name"
-    $verified++
 }
 
-Check ($verified -ge 2) "manifest verifies both archives ($verified entries)"
+Check ($verifiedNames.SetEquals([string[]]$expectedNames)) "manifest lists exactly both expected archives"
 
 Write-Host '==> Archive contents' -ForegroundColor Cyan
 Add-Type -AssemblyName System.IO.Compression.FileSystem

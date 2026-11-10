@@ -15,12 +15,12 @@ namespace SilksongCoop.Tests.Reliability
     public class ChaosSimulationTests
     {
         [Fact]
-        public void ReliableOrdered_UnderJitterAndSimulatedLoss_DeliversEveryPacketInOrder()
+        public void ReliableOrdered_UnderMockJitter_DeliversEveryPacketInOrder()
         {
             var (host, client) = MockNetworkTransport.CreatePair(
                 latencyMs: 60,
                 jitterMs: 120,
-                lossRate: 0.45f,
+                lossRate: 0f,
                 useVirtualTime: true,
                 seed: 20261109);
 

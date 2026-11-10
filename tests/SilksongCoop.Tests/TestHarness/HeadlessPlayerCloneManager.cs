@@ -40,6 +40,7 @@ namespace SilksongCoop.Core.Clones
 
         private readonly Dictionary<NetworkPeerId, CloneEntry> _clones = new Dictionary<NetworkPeerId, CloneEntry>();
         private readonly double _targetDelayMs;
+        private readonly object _gate = new();
 
         #endregion
 
@@ -54,7 +55,7 @@ namespace SilksongCoop.Core.Clones
             _targetDelayMs = targetDelayMs;
         }
 
-        public int ActiveCloneCount => _clones.Count;
+        public int ActiveCloneCount { get { lock (_gate) return _clones.Count; } }
 
         #endregion
 
@@ -67,31 +68,34 @@ namespace SilksongCoop.Core.Clones
         /// <param name="isPlayer2">True if this is the second player, false otherwise.</param>
         public void SpawnRemotePlayer(NetworkPeerId peerId, bool isPlayer2)
         {
-            if (_clones.TryGetValue(peerId, out var existing))
+            lock (_gate)
             {
-                // Edge Case E01: Re-spawning peer cleanly resets existing clone and buffer
-                existing.Buffer.Clear();
-                existing.DashLifecycle.Reset();
-                existing.IsPlayer2 = isPlayer2;
-                existing.CurrentPosX = 0f;
-                existing.CurrentPosY = 0f;
-                existing.CurrentVelX = 0f;
-                existing.CurrentVelY = 0f;
-                existing.FacingRight = true;
-                existing.StateFlags = 0;
-                existing.ActiveClipHash = AnimationClipHasher.ComputeHash("Idle");
-                existing.NormalizedTime = 0f;
-                return;
-            }
+                if (_clones.TryGetValue(peerId, out var existing))
+                {
+                    // Edge Case E01: Re-spawning peer cleanly resets existing clone and buffer
+                    existing.Buffer.Clear();
+                    existing.DashLifecycle.Reset();
+                    existing.IsPlayer2 = isPlayer2;
+                    existing.CurrentPosX = 0f;
+                    existing.CurrentPosY = 0f;
+                    existing.CurrentVelX = 0f;
+                    existing.CurrentVelY = 0f;
+                    existing.FacingRight = true;
+                    existing.StateFlags = 0;
+                    existing.ActiveClipHash = AnimationClipHasher.ComputeHash("Idle");
+                    existing.NormalizedTime = 0f;
+                    return;
+                }
 
-            var entry = new CloneEntry
-            {
-                PeerId = peerId,
-                IsPlayer2 = isPlayer2,
-                ActiveClipHash = AnimationClipHasher.ComputeHash("Idle"),
-                FacingRight = true
-            };
-            _clones[peerId] = entry;
+                var entry = new CloneEntry
+                {
+                    PeerId = peerId,
+                    IsPlayer2 = isPlayer2,
+                    ActiveClipHash = AnimationClipHasher.ComputeHash("Idle"),
+                    FacingRight = true
+                };
+                _clones[peerId] = entry;
+            }
         }
 
         /// <summary>
@@ -100,8 +104,11 @@ namespace SilksongCoop.Core.Clones
         /// <param name="peerId">Network peer identifier to despawn.</param>
         public void DespawnRemotePlayer(NetworkPeerId peerId)
         {
-            // Edge Case E02: Despawning non-existent peer is a safe no-op
-            _clones.Remove(peerId);
+            lock (_gate)
+            {
+                // Edge Case E02: Despawning non-existent peer is a safe no-op
+                _clones.Remove(peerId);
+            }
         }
 
         /// <summary>
@@ -127,46 +134,49 @@ namespace SilksongCoop.Core.Clones
             ushort normalizedTime,
             uint timestampMs)
         {
-            if (!_clones.TryGetValue(peerId, out var clone))
+            lock (_gate)
             {
-                return;
-            }
-
-            // Proper packet ordering: handle both normal progression and clock wrap detection
-            // A packet is newer if:
-            // 1. LastTimestampMs is 0 (first packet), OR
-            // 2. Timestamp is ahead (normal case), OR
-            // 3. Timestamp is behind by more than 10 seconds (clock wrap / session reset)
-            // The 10-second threshold prevents rejecting legitimate session resets while
-            // still filtering out stale packets from minor network jitter.
-            long diff = (long)timestampMs - (long)clone.LastTimestampMs;
-            bool isNewerPacket = clone.LastTimestampMs == 0 || diff > 0 || diff < -10000;
-            
-            if (isNewerPacket)
-            {
-                clone.Buffer.AddSnapshot(new TransformSnapshot
+                if (!_clones.TryGetValue(peerId, out var clone))
                 {
-                    Tick = timestampMs,
-                    TimestampMs = timestampMs,
-                    PositionX = posX,
-                    PositionY = posY,
-                    VelocityX = velX,
-                    VelocityY = velY,
-                    FacingRight = facingDirection != 0,
-                    Flags = stateFlags,
-                    AnimHash = animClipHash
-                });
+                    return;
+                }
 
-                clone.FacingRight = facingDirection != 0;
-                clone.StateFlags = stateFlags;
-                clone.ActiveClipHash = animClipHash != 0 ? animClipHash : AnimationClipHasher.ComputeHash("Idle");
-                clone.NormalizedTime = AnimationClipHasher.DecodeNormalizedTime(normalizedTime);
-                clone.LastTimestampMs = timestampMs;
+                // Proper packet ordering: handle both normal progression and clock wrap detection
+                // A packet is newer if:
+                // 1. LastTimestampMs is 0 (first packet), OR
+                // 2. Timestamp is ahead (normal case), OR
+                // 3. Timestamp is behind by more than 10 seconds (clock wrap / session reset)
+                // The 10-second threshold prevents rejecting legitimate session resets while
+                // still filtering out stale packets from minor network jitter.
+                long diff = (long)timestampMs - (long)clone.LastTimestampMs;
+                bool isNewerPacket = clone.LastTimestampMs == 0 || diff > 0 || diff < -10000;
 
-                // Trigger dash lifecycle if FlagDashing is active
-                if ((stateFlags & TransformSyncPacket.FlagDashing) != 0 && clone.DashLifecycle.CanTriggerDash)
+                if (isNewerPacket)
                 {
-                    clone.DashLifecycle.TriggerDash(isAirDash: (stateFlags & TransformSyncPacket.FlagGrounded) == 0, clone.IsPlayer2);
+                    clone.Buffer.AddSnapshot(new TransformSnapshot
+                    {
+                        Tick = timestampMs,
+                        TimestampMs = timestampMs,
+                        PositionX = posX,
+                        PositionY = posY,
+                        VelocityX = velX,
+                        VelocityY = velY,
+                        FacingRight = facingDirection != 0,
+                        Flags = stateFlags,
+                        AnimHash = animClipHash
+                    });
+
+                    clone.FacingRight = facingDirection != 0;
+                    clone.StateFlags = stateFlags;
+                    clone.ActiveClipHash = animClipHash != 0 ? animClipHash : AnimationClipHasher.ComputeHash("Idle");
+                    clone.NormalizedTime = AnimationClipHasher.DecodeNormalizedTime(normalizedTime);
+                    clone.LastTimestampMs = timestampMs;
+
+                    // Trigger dash lifecycle if FlagDashing is active
+                    if ((stateFlags & TransformSyncPacket.FlagDashing) != 0 && clone.DashLifecycle.CanTriggerDash)
+                    {
+                        clone.DashLifecycle.TriggerDash(isAirDash: (stateFlags & TransformSyncPacket.FlagGrounded) == 0, clone.IsPlayer2);
+                    }
                 }
             }
         }
@@ -183,11 +193,14 @@ namespace SilksongCoop.Core.Clones
         /// <param name="variant">Action variant or parameter.</param>
         public void TriggerRemoteAction(NetworkPeerId peerId, ActionType action, byte variant)
         {
-            if (!_clones.TryGetValue(peerId, out var clone)) return;
-
-            if (action == ActionType.AirDash || action == ActionType.HarpoonDash)
+            lock (_gate)
             {
-                clone.DashLifecycle.TriggerDash(isAirDash: action == ActionType.AirDash, clone.IsPlayer2);
+                if (!_clones.TryGetValue(peerId, out var clone)) return;
+
+                if (action == ActionType.AirDash || action == ActionType.HarpoonDash)
+                {
+                    clone.DashLifecycle.TriggerDash(isAirDash: action == ActionType.AirDash, clone.IsPlayer2);
+                }
             }
         }
 
@@ -199,9 +212,12 @@ namespace SilksongCoop.Core.Clones
         /// <param name="normalizedTime">Normalized animation time [0, 1].</param>
         public void SyncAnimation(NetworkPeerId peerId, int clipHash, ushort normalizedTime)
         {
-            if (!_clones.TryGetValue(peerId, out var clone)) return;
-            clone.ActiveClipHash = clipHash != 0 ? clipHash : AnimationClipHasher.ComputeHash("Idle");
-            clone.NormalizedTime = AnimationClipHasher.DecodeNormalizedTime(normalizedTime);
+            lock (_gate)
+            {
+                if (!_clones.TryGetValue(peerId, out var clone)) return;
+                clone.ActiveClipHash = clipHash != 0 ? clipHash : AnimationClipHasher.ComputeHash("Idle");
+                clone.NormalizedTime = AnimationClipHasher.DecodeNormalizedTime(normalizedTime);
+            }
         }
 
         /// <summary>
@@ -211,8 +227,11 @@ namespace SilksongCoop.Core.Clones
         /// <param name="facingRight">True if facing right, false if facing left.</param>
         public void SetFacingDirection(NetworkPeerId peerId, bool facingRight)
         {
-            if (!_clones.TryGetValue(peerId, out var clone)) return;
-            clone.FacingRight = facingRight;
+            lock (_gate)
+            {
+                if (!_clones.TryGetValue(peerId, out var clone)) return;
+                clone.FacingRight = facingRight;
+            }
         }
 
         /// <summary>
@@ -222,8 +241,11 @@ namespace SilksongCoop.Core.Clones
         /// <param name="isAirDash">True if this is an air dash, false if ground dash.</param>
         public void TriggerDashEffect(NetworkPeerId peerId, bool isAirDash)
         {
-            if (!_clones.TryGetValue(peerId, out var clone)) return;
-            clone.DashLifecycle.TriggerDash(isAirDash, clone.IsPlayer2);
+            lock (_gate)
+            {
+                if (!_clones.TryGetValue(peerId, out var clone)) return;
+                clone.DashLifecycle.TriggerDash(isAirDash, clone.IsPlayer2);
+            }
         }
 
         #endregion
@@ -239,15 +261,18 @@ namespace SilksongCoop.Core.Clones
         /// <returns>True if the player exists and position was retrieved, false otherwise.</returns>
         public bool TryGetRemotePosition(NetworkPeerId peerId, out float posX, out float posY)
         {
-            if (_clones.TryGetValue(peerId, out var clone))
+            lock (_gate)
             {
-                posX = clone.CurrentPosX;
-                posY = clone.CurrentPosY;
-                return true;
+                if (_clones.TryGetValue(peerId, out var clone))
+                {
+                    posX = clone.CurrentPosX;
+                    posY = clone.CurrentPosY;
+                    return true;
+                }
+                posX = 0f;
+                posY = 0f;
+                return false;
             }
-            posX = 0f;
-            posY = 0f;
-            return false;
         }
 
         /// <summary>
@@ -258,27 +283,30 @@ namespace SilksongCoop.Core.Clones
         /// <returns>True if the player exists and state was retrieved, false otherwise.</returns>
         public bool TryGetRemoteState(NetworkPeerId peerId, out RemoteCloneState state)
         {
-            if (_clones.TryGetValue(peerId, out var clone))
+            lock (_gate)
             {
-                state = new RemoteCloneState
+                if (_clones.TryGetValue(peerId, out var clone))
                 {
-                    PeerId = clone.PeerId,
-                    IsPlayer2 = clone.IsPlayer2,
-                    PositionX = clone.CurrentPosX,
-                    PositionY = clone.CurrentPosY,
-                    VelocityX = clone.CurrentVelX,
-                    VelocityY = clone.CurrentVelY,
-                    FacingRight = clone.FacingRight,
-                    StateFlags = clone.StateFlags,
-                    ActiveClipHash = clone.ActiveClipHash,
-                    ClipNormalizedTime = clone.NormalizedTime,
-                    IsDashActive = clone.DashLifecycle.CurrentPhase == DashTrailPhase.Active,
-                    DashTimeRemaining = clone.DashLifecycle.ActiveTimeRemaining
-                };
-                return true;
+                    state = new RemoteCloneState
+                    {
+                        PeerId = clone.PeerId,
+                        IsPlayer2 = clone.IsPlayer2,
+                        PositionX = clone.CurrentPosX,
+                        PositionY = clone.CurrentPosY,
+                        VelocityX = clone.CurrentVelX,
+                        VelocityY = clone.CurrentVelY,
+                        FacingRight = clone.FacingRight,
+                        StateFlags = clone.StateFlags,
+                        ActiveClipHash = clone.ActiveClipHash,
+                        ClipNormalizedTime = clone.NormalizedTime,
+                        IsDashActive = clone.DashLifecycle.CurrentPhase == DashTrailPhase.Active,
+                        DashTimeRemaining = clone.DashLifecycle.ActiveTimeRemaining
+                    };
+                    return true;
+                }
+                state = default;
+                return false;
             }
-            state = default;
-            return false;
         }
 
         /// <summary>
@@ -288,7 +316,10 @@ namespace SilksongCoop.Core.Clones
         /// <returns>True if the player is spawned, false otherwise.</returns>
         public bool IsPlayerSpawned(NetworkPeerId peerId)
         {
-            return _clones.ContainsKey(peerId);
+            lock (_gate)
+            {
+                return _clones.ContainsKey(peerId);
+            }
         }
 
         /// <summary>
@@ -296,7 +327,10 @@ namespace SilksongCoop.Core.Clones
         /// </summary>
         public bool IsRemoteInSameScene(NetworkPeerId peerId)
         {
-            return _clones.ContainsKey(peerId);
+            lock (_gate)
+            {
+                return _clones.ContainsKey(peerId);
+            }
         }
 
         #endregion
@@ -309,78 +343,81 @@ namespace SilksongCoop.Core.Clones
         /// <param name="currentLocalTimeMs">Current local time in milliseconds.</param>
         public void UpdateInterpolation(double currentLocalTimeMs)
         {
-            double renderTime = currentLocalTimeMs - _targetDelayMs;
-
-            foreach (var kvp in _clones)
+            lock (_gate)
             {
-                var clone = kvp.Value;
-                float dt = clone.LastLocalTimeMs > 0 ? Math.Max(0f, (float)(currentLocalTimeMs - clone.LastLocalTimeMs) / 1000f) : 0.016f;
-                clone.LastLocalTimeMs = currentLocalTimeMs;
+                double renderTime = currentLocalTimeMs - _targetDelayMs;
 
-                // Update dash lifecycle state
-                bool isGrounded = (clone.StateFlags & TransformSyncPacket.FlagGrounded) != 0;
-                bool isWallSliding = (clone.StateFlags & TransformSyncPacket.FlagWallSliding) != 0;
-                clone.DashLifecycle.Update(dt, isGrounded, isWallSliding);
-
-                if (clone.Buffer.TryGetSnapshotsForTime(renderTime, out var s0, out var s1, out double t))
+                foreach (var kvp in _clones)
                 {
-                    if (t < 1.0)
+                    var clone = kvp.Value;
+                    float dt = clone.LastLocalTimeMs > 0 ? Math.Max(0f, (float)(currentLocalTimeMs - clone.LastLocalTimeMs) / 1000f) : 0.016f;
+                    clone.LastLocalTimeMs = currentLocalTimeMs;
+
+                    // Update dash lifecycle state
+                    bool isGrounded = (clone.StateFlags & TransformSyncPacket.FlagGrounded) != 0;
+                    bool isWallSliding = (clone.StateFlags & TransformSyncPacket.FlagWallSliding) != 0;
+                    clone.DashLifecycle.Update(dt, isGrounded, isWallSliding);
+
+                    if (clone.Buffer.TryGetSnapshotsForTime(renderTime, out var s0, out var s1, out double t))
                     {
-                        // Interpolate between snapshots s0 and s1
-                        float segmentDt = (float)(s1.TimestampMs - s0.TimestampMs) / 1000f;
-                        var (interpX, interpY) = HermiteSpline.InterpolatePosition2D(
-                            s0.PositionX, s0.PositionY,
-                            s0.VelocityX, s0.VelocityY,
-                            s1.PositionX, s1.PositionY,
-                            s1.VelocityX, s1.VelocityY,
-                            segmentDt, (float)t);
-
-                        var (velX, velY) = HermiteSpline.InterpolateVelocity2D(
-                            s0.PositionX, s0.PositionY,
-                            s0.VelocityX, s0.VelocityY,
-                            s1.PositionX, s1.PositionY,
-                            s1.VelocityX, s1.VelocityY,
-                            segmentDt, (float)t);
-
-                        // Edge Case E04: Teleport / extreme distance snap check
-                        if (DeadReckoning.ShouldSnap(clone.CurrentPosX, clone.CurrentPosY, interpX, interpY))
+                        if (t < 1.0)
                         {
-                            clone.CurrentPosX = s1.PositionX;
-                            clone.CurrentPosY = s1.PositionY;
+                            // Interpolate between snapshots s0 and s1
+                            float segmentDt = (float)(s1.TimestampMs - s0.TimestampMs) / 1000f;
+                            var (interpX, interpY) = HermiteSpline.InterpolatePosition2D(
+                                s0.PositionX, s0.PositionY,
+                                s0.VelocityX, s0.VelocityY,
+                                s1.PositionX, s1.PositionY,
+                                s1.VelocityX, s1.VelocityY,
+                                segmentDt, (float)t);
+
+                            var (velX, velY) = HermiteSpline.InterpolateVelocity2D(
+                                s0.PositionX, s0.PositionY,
+                                s0.VelocityX, s0.VelocityY,
+                                s1.PositionX, s1.PositionY,
+                                s1.VelocityX, s1.VelocityY,
+                                segmentDt, (float)t);
+
+                            // Edge Case E04: Teleport / extreme distance snap check
+                            if (DeadReckoning.ShouldSnap(clone.CurrentPosX, clone.CurrentPosY, interpX, interpY))
+                            {
+                                clone.CurrentPosX = s1.PositionX;
+                                clone.CurrentPosY = s1.PositionY;
+                                clone.CurrentVelX = s1.VelocityX;
+                                clone.CurrentVelY = s1.VelocityY;
+                            }
+                            else
+                            {
+                                clone.CurrentPosX = interpX;
+                                clone.CurrentPosY = interpY;
+                                clone.CurrentVelX = velX;
+                                clone.CurrentVelY = velY;
+                            }
+                        }
+                        else
+                        {
+                            // Edge Case E03: Packet starvation - extrapolate via DeadReckoning
+                            float extrapDt = (float)(renderTime - s1.TimestampMs) / 1000f;
+                            if (extrapDt > 0f)
+                            {
+                                var (extrapX, extrapY) = DeadReckoning.ExtrapolatePosition(
+                                    s1.PositionX, s1.PositionY,
+                                    s1.VelocityX, s1.VelocityY,
+                                    isGrounded,
+                                    extrapDt);
+
+                                clone.CurrentPosX = extrapX;
+                                clone.CurrentPosY = extrapY;
+                            }
+                            else
+                            {
+                                clone.CurrentPosX = s1.PositionX;
+                                clone.CurrentPosY = s1.PositionY;
+                            }
+
                             clone.CurrentVelX = s1.VelocityX;
                             clone.CurrentVelY = s1.VelocityY;
                         }
-                        else
-                        {
-                            clone.CurrentPosX = interpX;
-                            clone.CurrentPosY = interpY;
-                            clone.CurrentVelX = velX;
-                            clone.CurrentVelY = velY;
-                        }
-                    }
-                    else
-                    {
-                        // Edge Case E03: Packet starvation - extrapolate via DeadReckoning
-                        float extrapDt = (float)(renderTime - s1.TimestampMs) / 1000f;
-                        if (extrapDt > 0f)
-                        {
-                            var (extrapX, extrapY) = DeadReckoning.ExtrapolatePosition(
-                                s1.PositionX, s1.PositionY,
-                                s1.VelocityX, s1.VelocityY,
-                                isGrounded,
-                                extrapDt);
-
-                            clone.CurrentPosX = extrapX;
-                            clone.CurrentPosY = extrapY;
-                        }
-                        else
-                        {
-                            clone.CurrentPosX = s1.PositionX;
-                            clone.CurrentPosY = s1.PositionY;
-                        }
-
-                        clone.CurrentVelX = s1.VelocityX;
-                        clone.CurrentVelY = s1.VelocityY;
                     }
                 }
             }
@@ -395,7 +432,10 @@ namespace SilksongCoop.Core.Clones
         /// </summary>
         public void ResetAllClones()
         {
-            _clones.Clear();
+            lock (_gate)
+            {
+                _clones.Clear();
+            }
         }
 
         #endregion

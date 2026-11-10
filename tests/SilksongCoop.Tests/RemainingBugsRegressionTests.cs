@@ -37,8 +37,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLib_ReliableOrdered_AfterUnreliable_OnSameChannel_IsDelivered()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");
@@ -78,10 +78,10 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLib_HostStaysListening_AfterPeerDisconnects_NewPeerCanJoin()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
             host.StartHost(0);
 
-            using var firstClient = new LiteNetLibTransport(2, "Client1");
+            using var firstClient = new LiteNetLibTransport(2, "Client1") { RequireRoomCode = false };
             firstClient.Connect($"127.0.0.1:{host.BoundPort}");
             WaitForConnection(host, firstClient);
 
@@ -95,7 +95,7 @@ namespace SilksongCoop.Tests
 
             Assert.False(host.IsConnected);
 
-            using var secondClient = new LiteNetLibTransport(3, "Client2");
+            using var secondClient = new LiteNetLibTransport(3, "Client2") { RequireRoomCode = false };
             secondClient.Connect($"127.0.0.1:{host.BoundPort}");
             WaitForConnection(host, secondClient);
         }
@@ -141,7 +141,8 @@ namespace SilksongCoop.Tests
             string staleCode = RoomCodeCodec.Encode("127.0.0.1", 7778);
 
             using var host = new LiteNetLibTransport(1, "Host");
-            host.SetRoomCode(hostCode); // host is protected by its real code
+            host.SetRoomCode(hostCode);
+            host.RequireRoomCode = false; // Explicitly test the direct-IP compatibility mode.
             host.StartHost(0);
 
             using var client = new LiteNetLibTransport(2, "Client");

@@ -24,7 +24,7 @@ namespace SilksongCoop.Core.Networking
         public const ushort ProtocolVersion = NetworkProtocol.Version;
 
         private const byte FlagMacPresent = 0x01;
-        private const int MacSizeBytes = 8;
+        private const int MacSizeBytes = 16;
 
         #region Nested Types
 
@@ -114,21 +114,29 @@ namespace SilksongCoop.Core.Networking
         // unauthenticated sender permanently owned the single slot and blocked every other
         // client (issue #1.1). Each endpoint gets its own nonce, so a spoofed handshake
         // cannot replace the real client's pending challenge.
-        private sealed class PendingHandshake
-        {
-            public NetworkPeerId Peer;
-            public readonly ConnectionAuthenticator Auth = new ConnectionAuthenticator();
-            public long CreatedMs;
-        }
-
-        private readonly Dictionary<IPEndPoint, PendingHandshake> _pendingHandshakes = new();
-        private const int MaxPendingHandshakes = 8;
+        private readonly byte[] _challengeKey = new byte[32];
+        private byte[]? _clientChallenge;
+        private long _clientChallengeReceivedAt;
+        private const int ChallengeBytes = 16;
+        private const int ChallengeResponseBytes = ChallengeBytes + sizeof(ulong) + 32;
+        private const int ChallengeBucketMs = 5000;
         private readonly object _lock = new();
         // Serializes deferred-event drains across concurrent PollEvents callers. The same
         // object is reentrant on one thread, which preserves the handler re-entrancy guard.
         private readonly object _drainLock = new();
         private bool _drainRequested;
         private HMACSHA256? _hmac;
+        private HMACSHA256? _receiveHmac;
+        private uint _controlSequence;
+        private int _invalidMacCount;
+        private long _macCooldownUntil;
+        private readonly Dictionary<UdpFrameType, uint> _latestControl = new();
+        private readonly Dictionary<byte, (uint Latest, ulong Seen)> _unreliableReplay = new();
+        private readonly Queue<(NetworkPeerId Peer, byte[] Data, DeliveryMethod Method, byte Channel)> _reliableQueue = new();
+        private const int ReliableQueueCapacity = 4096;
+
+        /// <summary>Queues reliable application messages while the retransmit window is full.</summary>
+        public bool QueueReliableWhenBusy { get; set; }
         private const int HmacHashBytes = 32;
         // Reused drain batch: ToArray() allocated once per PollEvents frame with events.
         private readonly List<DeferredEvent> _drainBatch = new List<DeferredEvent>(64);
@@ -146,14 +154,11 @@ namespace SilksongCoop.Core.Networking
         // (data, ACK, ping/pong, disconnect). Null for legacy direct-IP no-code sessions.
         private byte[]? _sessionKey;
         private string? _roomCode;
-        private bool _requireRoomCode;
+        private bool _requireRoomCode = true;
 
         /// <summary>
-        /// When true (and a room code is set), the host rejects handshakes from clients
-        /// that did not announce a room code (direct-IP joins). Default false preserves
-        /// the documented "direct IP:Port" join path.
-        /// WARNING: direct IP joins have no shared-secret barrier beyond the protocol.
-        /// Only enable RequireRoomCode if you want to restrict joins to room-code sessions.
+        /// Defaults to true. Set false explicitly to allow unauthenticated direct-IP
+        /// clients on a trusted private network.
         /// </summary>
         public bool RequireRoomCode
         {
@@ -201,9 +206,38 @@ namespace SilksongCoop.Core.Networking
         // ReliableUnordered has its own sequence space but no ordering window. Duplicates
         // are possible because retransmissions are allowed, so remember recently delivered
         // sequences (bounded) and still ACK duplicates.
-        private readonly HashSet<(byte Channel, uint Sequence)> _receivedUnordered = new();
-        private readonly Queue<(byte Channel, uint Sequence)> _receivedUnorderedOrder = new();
-        private const int MaxTrackedUnorderedPackets = 4096;
+        private readonly Dictionary<byte, UnorderedReplayWindow> _receivedUnordered = new();
+
+        private sealed class UnorderedReplayWindow
+        {
+            private const uint Capacity = 4096;
+            private readonly uint[] _sequences = new uint[Capacity];
+            private readonly bool[] _seen = new bool[Capacity];
+            private uint _latest;
+            private bool _initialized;
+
+            public bool IsNew(uint sequence)
+            {
+                if (!_initialized || IsSequenceNewer(sequence, _latest)) return true;
+                if (unchecked(_latest - sequence) >= Capacity) return false;
+                uint slot = sequence % Capacity;
+                return !_seen[slot] || _sequences[slot] != sequence;
+            }
+
+            public bool Accept(uint sequence)
+            {
+                if (!IsNew(sequence)) return false;
+                if (!_initialized || IsSequenceNewer(sequence, _latest))
+                {
+                    _latest = sequence;
+                    _initialized = true;
+                }
+                uint slot = sequence % Capacity;
+                _sequences[slot] = sequence;
+                _seen[slot] = true;
+                return true;
+            }
+        }
 
         // BUG-A3: last time the client sent its Handshake frame. The initial datagram and
         // the host's HandshakeAck both travel unreliably, so the client must retransmit
@@ -356,6 +390,12 @@ namespace SilksongCoop.Core.Networking
             {
                 ReturnPooledBuffer(node.Envelope);
             }
+            _reliableQueue.Clear();
+            _latestControl.Clear();
+            _unreliableReplay.Clear();
+            _controlSequence = 0;
+            _invalidMacCount = 0;
+            _macCooldownUntil = 0;
             _sendSequences.Clear();
             _expectedReceiveSequences.Clear();
             _latestSequencedReceived.Clear();
@@ -364,7 +404,6 @@ namespace SilksongCoop.Core.Networking
             _unacknowledged.Clear();
             _unacknowledgedIndex.Clear();
             _receivedUnordered.Clear();
-            _receivedUnorderedOrder.Clear();
             _lastUnreliableSequences.Clear();
             _lossWindowStartMs = 0;
             _lossPacketsExpected = 0;
@@ -375,7 +414,9 @@ namespace SilksongCoop.Core.Networking
             _lastHandshakeSentMs = 0;
             _rttMs = 30;
             _connectionAttemptStartMs = 0;
-            _pendingHandshakes.Clear();
+            using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(_challengeKey);
+            _clientChallenge = null;
+            _clientChallengeReceivedAt = 0;
             ClearSessionKey();
             _authenticator.Reset();
         }
@@ -501,7 +542,7 @@ namespace SilksongCoop.Core.Networking
                 }
                 else
                 {
-                    throw new ArgumentException($"Invalid address or room code: {addressOrCode}", nameof(addressOrCode));
+                    throw new ArgumentException("Invalid address or room code.", nameof(addressOrCode));
                 }
             }
 
@@ -708,6 +749,16 @@ namespace SilksongCoop.Core.Networking
         /// <param name="channel">The channel to send on.</param>
         public void Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
+            SendInternal(target, data, offset, length, method, channel, allowQueue: true);
+        }
+
+        private void SendImmediate(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
+        {
+            SendInternal(target, data, offset, length, method, channel, allowQueue: false);
+        }
+
+        private void SendInternal(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel, bool allowQueue)
+        {
             lock (_lock)
             {
                 if (!IsConnected || _remoteEndPoint == null || _socket == null) return;
@@ -723,6 +774,21 @@ namespace SilksongCoop.Core.Networking
                 // the session down if the backlog never drains.
                 bool isReliable = method == DeliveryMethod.ReliableOrdered ||
                                   method == DeliveryMethod.ReliableUnordered;
+                if (isReliable && allowQueue && QueueReliableWhenBusy &&
+                    (_reliableQueue.Count > 0 || _unacknowledged.Count >= MaxUnacknowledgedPackets))
+                {
+                    if (_reliableQueue.Count >= ReliableQueueCapacity)
+                    {
+                        CoopLog.Warn("[UDP] Reliable queue exhausted; disconnecting to avoid silent state loss.");
+                        if (IsHost) DropPeerForTimeout(DisconnectReason.Timeout);
+                        else Disconnect(DisconnectReason.ConnectionFailed);
+                        return;
+                    }
+
+                    _reliableQueue.Enqueue((target, data.AsSpan(offset, length).ToArray(), method, channel));
+                    return;
+                }
+
                 if (isReliable && _unacknowledged.Count >= MaxUnacknowledgedPackets)
                 {
                     System.Threading.Interlocked.Increment(ref _droppedReliablePackets);
@@ -858,7 +924,7 @@ namespace SilksongCoop.Core.Networking
 
                         // Connected data traffic only compares the endpoint, so one instance
                         // can be reused. Handshake/disconnected paths keep a fresh object
-                        // because they may store it in _pendingHandshakes.
+                        // because a successful proof can retain it as the session endpoint.
                         EndPoint senderEp = IsConnected
                             ? _connectedSenderEndPoint
                             : new IPEndPoint(IPAddress.Any, 0);
@@ -895,7 +961,6 @@ namespace SilksongCoop.Core.Networking
                     }
 
                     // Client-side connection timeout: avoid stuck "Connecting" state (UX)
-                    PrunePendingHandshakes();
                     if (!IsHost && !IsConnected && _remoteEndPoint != null && _socket != null && _connectionAttemptStartMs > 0)
                     {
                         if (GetTimestampMs() - _connectionAttemptStartMs > AdaptiveConnectionTimeoutMs)
@@ -993,6 +1058,12 @@ namespace SilksongCoop.Core.Networking
                         return;
                     }
 
+                    while (_reliableQueue.Count > 0 && _unacknowledged.Count < MaxUnacknowledgedPackets)
+                    {
+                        var item = _reliableQueue.Dequeue();
+                        SendImmediate(item.Peer, item.Data, 0, item.Data.Length, item.Method, item.Channel);
+                    }
+
                     // 3. Heartbeat ping
                     if (IsConnected && _remoteEndPoint != null && _socket != null)
                     {
@@ -1061,6 +1132,7 @@ namespace SilksongCoop.Core.Networking
                 DeliveryMethod method = (DeliveryMethod)datagram[2];
                 uint sequence = BitConverter.ToUInt32(datagram.Slice(3, 4));
                 byte flags = datagram[7];
+                if ((flags & ~FlagMacPresent) != 0) return;
                 bool hasMac = (flags & FlagMacPresent) != 0;
                 int macOffset = datagram.Length - (hasMac ? MacSizeBytes : 0);
                 if (macOffset < 8) return;
@@ -1075,8 +1147,14 @@ namespace SilksongCoop.Core.Networking
                 // attacker cannot brute-force the room-code HMAC or reflect challenges.
                 // The bucket is per source endpoint so a single sender cannot exhaust the
                 // budget that a real client needs to complete its handshake.
-                if (!IsConnected && !IsPreAuthAllowed(sender))
-                    return;
+                if (!IsConnected)
+                {
+                    if (IsHost && frameType != UdpFrameType.Handshake && frameType != UdpFrameType.ChallengeResponse)
+                        return;
+                    if (!IsHost && frameType != UdpFrameType.Challenge && frameType != UdpFrameType.HandshakeAck)
+                        return;
+                    if (!IsPreAuthAllowed(sender)) return;
+                }
 
                 // Once a session key exists, every frame except the still-relevant
                 // pre-connection handshake frames must be authenticated. Challenge and
@@ -1109,8 +1187,18 @@ namespace SilksongCoop.Core.Networking
                 // direct-IP sessions) still pass through the rate limiter below.
                 if (hasMac)
                 {
+                    long now = GetTimestampMs();
+                    if (now < _macCooldownUntil) return;
                     if (!ValidateMac(datagram.Slice(0, macOffset), datagram.Slice(macOffset, MacSizeBytes)))
+                    {
+                        if (++_invalidMacCount >= 64)
+                        {
+                            _macCooldownUntil = now + 100;
+                            _invalidMacCount = 0;
+                        }
                         return;
+                    }
+                    _invalidMacCount = 0;
                 }
                 else if (macRequired)
                 {
@@ -1137,8 +1225,33 @@ namespace SilksongCoop.Core.Networking
                 // An unsigned duplicate handshake is allowed for the lost-ack retry path,
                 // but it must not refresh the heartbeat: only authenticated post-handshake
                 // traffic proves the peer is still alive.
-                if (frameType != UdpFrameType.Handshake)
+                if (IsConnected && hasMac)
+                {
+                    if (frameType == UdpFrameType.Data)
+                    {
+                        if (method == DeliveryMethod.Unreliable && !AcceptUnreliable(channel, sequence)) return;
+                        if (method == DeliveryMethod.Unreliable ||
+                            (method == DeliveryMethod.Sequenced &&
+                             (!_latestSequencedReceived.TryGetValue(channel, out uint latest) ||
+                              IsSequenceNewer(sequence, latest))) ||
+                            (method == DeliveryMethod.ReliableOrdered && IsNewOrderedData(channel, sequence)) ||
+                            (method == DeliveryMethod.ReliableUnordered &&
+                             (!_receivedUnordered.TryGetValue(channel, out var unordered) || unordered.IsNew(sequence))))
+                            _lastReceivedMs = GetTimestampMs();
+                    }
+                    else if (frameType == UdpFrameType.Ping || frameType == UdpFrameType.Pong ||
+                             frameType == UdpFrameType.Disconnect)
+                    {
+                        if (_latestControl.TryGetValue(frameType, out uint latest) &&
+                            !IsSequenceNewer(sequence, latest)) return;
+                        _latestControl[frameType] = sequence;
+                        _lastReceivedMs = GetTimestampMs();
+                    }
+                }
+                else if (frameType != UdpFrameType.Handshake)
+                {
                     _lastReceivedMs = GetTimestampMs();
+                }
 
                 switch (frameType)
                 {
@@ -1201,62 +1314,21 @@ namespace SilksongCoop.Core.Networking
                             bool clientHasCode = payload.Length >= 9 && payload[8] != 0;
                             if (_requireRoomCode && (_roomCode == null || !clientHasCode))
                             {
-                                CoopLog.Warn("[LiteNetLibTransport] Rejecting handshake: RequireRoomCode enabled but no room code provided");
                                 break;
                             }
-                            if (_roomCode != null && clientHasCode)
+                            if (_roomCode != null && clientHasCode && sender is IPEndPoint handshakeEndpoint)
                             {
-                                if (!(sender is IPEndPoint handshakeEndpoint))
-                                    break;
-
-                                if (!_pendingHandshakes.TryGetValue(handshakeEndpoint, out var pending))
-                                {
-                                    if (_pendingHandshakes.Count >= MaxPendingHandshakes)
-                                        EvictOldestPendingHandshake();
-
-                                    pending = new PendingHandshake
-                                    {
-                                        Peer = candidatePeer,
-                                        CreatedMs = GetTimestampMs()
-                                    };
-                                    _pendingHandshakes[handshakeEndpoint] = pending;
-                                }
-                                else if (pending.Peer.Value != candidatePeer.Value)
-                                {
-                                    // The endpoint already owns an unanswered challenge.
-                                    // Replacing its peer id while keeping the nonce would let
-                                    // a spoofed duplicate make the legitimate response adopt
-                                    // an attacker-selected identity.
-                                    break;
-                                }
-
-                                byte[] nonce;
-                                if (pending.Auth.TryGetPendingNonce(out byte[]? pendingNonce) && pendingNonce != null)
-                                {
-                                    // BUG-A3: duplicate handshake while auth is pending —
-                                    // resend the SAME nonce so the client's retransmitted
-                                    // response stays valid.
-                                    nonce = pendingNonce;
-                                }
-                                else
-                                {
-                                    nonce = pending.Auth.GenerateNonce();
-                                }
-
-                                SendEnvelopeTo(sender, UdpFrameType.Challenge, 0, 0, DeliveryMethod.Unreliable, nonce);
-                            }
-                            else if (_roomCode != null && _requireRoomCode && !clientHasCode)
-                            {
-                                // BUG-N9 (item 9): host requires a room code but the client
-                                // did not announce one — reject the direct-IP join. Leave any
-                                // pending authenticated handshake untouched.
-                                CoopLog.Warn("[LiteNetLibTransport] Rejecting handshake: room code required but not announced");
+                                Span<byte> cookie = stackalloc byte[ChallengeBytes];
+                                uint bucket = (uint)(GetTimestampMs() / ChallengeBucketMs);
+                                WriteChallenge(cookie, handshakeEndpoint, clientPeerValue, bucket);
+                                SendEnvelopeTo(sender, UdpFrameType.Challenge, 0, 0, DeliveryMethod.Unreliable, cookie);
                             }
                             else
                             {
                                 // No room code on either side, fall back to old behavior (no authentication)
                                 _remoteEndPoint = sender;
                                 _remotePeerId = candidatePeer;
+                                _lastReceivedMs = Math.Max(1, GetTimestampMs());
                                 _isConnected = true;
                                 SendEnvelope(UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BuildHandshakeAckPayload());
                                 _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, candidatePeer, generation: _sessionGeneration));
@@ -1277,45 +1349,54 @@ namespace SilksongCoop.Core.Networking
                                 break;
                             }
 
-                            // Received challenge from host, compute HMAC and send response
-                            if (payload.Length >= 16)
+                            if (payload.Length != ChallengeBytes) break;
+                            long now = GetTimestampMs();
+                            if (_clientChallenge != null &&
+                                now - _clientChallengeReceivedAt < ChallengeBucketMs * 2 &&
+                                !payload.SequenceEqual(_clientChallenge)) break;
+
+                            if (_clientChallenge == null || !payload.SequenceEqual(_clientChallenge))
                             {
-                                byte[] nonce = payload.Slice(0, 16).ToArray();
-                                byte[] signature = _authenticator.ComputeSignature(nonce, _roomCode);
-                                // Both sides derive the same post-handshake MAC key from the
-                                // room code and the nonce. Set it before responding so the
-                                // first data frame after HandshakeAck is verifiable.
-                                SetSessionKey(_authenticator.ComputeSessionKey(nonce, _roomCode));
-                                SendEnvelope(UdpFrameType.ChallengeResponse, 0, 0, DeliveryMethod.Unreliable, signature);
+                                _clientChallenge = payload.ToArray();
+                                _clientChallengeReceivedAt = now;
+                                SetSessionKey(_authenticator.ComputeSessionKey(_clientChallenge, _roomCode));
                             }
+
+                            Span<byte> response = stackalloc byte[ChallengeResponseBytes];
+                            payload.CopyTo(response);
+                            BinaryPrimitives.WriteUInt64LittleEndian(response.Slice(ChallengeBytes), LocalPeerId.Value);
+                            _authenticator.ComputeSignature(_clientChallenge, _roomCode)
+                                .CopyTo(response.Slice(ChallengeBytes + sizeof(ulong)));
+                            SendEnvelope(UdpFrameType.ChallengeResponse, 0, 0, DeliveryMethod.Unreliable, response);
                         }
                         break;
 
                     case UdpFrameType.ChallengeResponse:
-                        if (IsHost && !IsConnected && _roomCode != null)
+                        if (IsHost && !IsConnected && _roomCode != null &&
+                            sender is IPEndPoint responseEndpoint && payload.Length == ChallengeResponseBytes)
                         {
-                            // The response must answer the nonce issued to this endpoint.
-                            if (sender is IPEndPoint responseEndpoint &&
-                                _pendingHandshakes.TryGetValue(responseEndpoint, out var pending) &&
-                                payload.Length >= 32 &&
-                                pending.Auth.ValidateSignature(payload.Slice(0, 32).ToArray(), _roomCode, out byte[]? sessionKey))
-                            {
-                                // The HMAC proves the sender knows the shared secret; only now
-                                // does it own the slot and the endpoint is committed.
-                                SetSessionKey(sessionKey);
-                                _remoteEndPoint = responseEndpoint;
-                                _remotePeerId = pending.Peer;
-                                _pendingHandshakes.Clear();
-                                _isConnected = true;
-                                SendEnvelopeTo(sender, UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BuildHandshakeAckPayload());
-                                _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, _remotePeerId.Value, generation: _sessionGeneration));
-                            }
-                            else
-                            {
-                                // Invalid signature: keep this endpoint's pending nonce (it
-                                // expires in 10 s) so a spoofed response cannot invalidate
-                                // the real client's challenge. Do not pin the sender.
-                            }
+                            var cookie = payload.Slice(0, ChallengeBytes);
+                            uint bucket = BinaryPrimitives.ReadUInt32LittleEndian(cookie);
+                            uint current = (uint)(GetTimestampMs() / ChallengeBucketMs);
+                            if (unchecked(current - bucket) > 1) break;
+
+                            ulong clientId = BinaryPrimitives.ReadUInt64LittleEndian(payload.Slice(ChallengeBytes));
+                            Span<byte> expected = stackalloc byte[ChallengeBytes];
+                            WriteChallenge(expected, responseEndpoint, clientId, bucket);
+                            if (!CryptographicOperations.FixedTimeEquals(cookie, expected)) break;
+
+                            byte[] nonce = cookie.ToArray();
+                            byte[] proof = _authenticator.ComputeSignature(nonce, _roomCode);
+                            if (!CryptographicOperations.FixedTimeEquals(
+                                    proof, payload.Slice(ChallengeBytes + sizeof(ulong)))) break;
+
+                            SetSessionKey(_authenticator.ComputeSessionKey(nonce, _roomCode));
+                            _remoteEndPoint = responseEndpoint;
+                            _remotePeerId = new NetworkPeerId(clientId, "Client");
+                            _lastReceivedMs = Math.Max(1, GetTimestampMs());
+                            _isConnected = true;
+                            SendEnvelopeTo(sender, UdpFrameType.HandshakeAck, 0, 0, DeliveryMethod.Unreliable, BuildHandshakeAckPayload());
+                            _pendingEvents.Enqueue(new DeferredEvent(DeferredEventKind.PeerConnected, _remotePeerId.Value, generation: _sessionGeneration));
                         }
                         break;
 
@@ -1408,7 +1489,8 @@ namespace SilksongCoop.Core.Networking
 
                             // O(1) removal using index. The ACK envelope carries the
                             // delivery method that owns the acknowledged sequence space.
-                            TryRemoveAcknowledged(ackChannel, method, ackSeq);
+                            if (TryRemoveAcknowledged(ackChannel, method, ackSeq))
+                                _lastReceivedMs = GetTimestampMs();
                         }
                         break;
 
@@ -1476,6 +1558,36 @@ namespace SilksongCoop.Core.Networking
         /// had to be rejected because the reorder buffer is full — the caller must not ACK
         /// it so the sender retransmits later.
         /// </returns>
+        private bool IsNewOrderedData(byte channel, uint sequence)
+        {
+            _expectedReceiveSequences.TryGetValue(channel, out uint expected);
+            return sequence == expected ||
+                   (IsSequenceNewer(sequence, expected) &&
+                    (!_pendingReliable.TryGetValue(channel, out var pending) ||
+                     (pending.Count < 256 && !pending.ContainsKey(sequence))));
+        }
+
+        private bool AcceptUnreliable(byte channel, uint sequence)
+        {
+            if (!_unreliableReplay.TryGetValue(channel, out var window))
+            {
+                _unreliableReplay[channel] = (sequence, 1);
+                return true;
+            }
+
+            int distance = unchecked((int)(sequence - window.Latest));
+            if (distance > 0)
+            {
+                _unreliableReplay[channel] = (sequence, distance >= 64 ? 1 : (window.Seen << distance) | 1);
+                return true;
+            }
+            if (distance <= -64) return false;
+            ulong bit = 1UL << -distance;
+            if ((window.Seen & bit) != 0) return false;
+            _unreliableReplay[channel] = (window.Latest, window.Seen | bit);
+            return true;
+        }
+
         private bool HandleIncomingData(byte channel, DeliveryMethod method, uint sequence, ReadOnlySpan<byte> payload)
         {
             try
@@ -1546,22 +1658,9 @@ namespace SilksongCoop.Core.Networking
 
                 if (method == DeliveryMethod.ReliableUnordered)
                 {
-                    // No ordering window, but retransmissions may duplicate a packet.
-                    // Check the dedup set before copying the payload: duplicates should not
-                    // allocate a managed buffer just to be discarded.
-                    var key = (channel, sequence);
-                    if (!_receivedUnordered.Add(key))
-                    {
-                        return true;
-                    }
-
-                    _receivedUnorderedOrder.Enqueue(key);
-                    while (_receivedUnordered.Count > MaxTrackedUnorderedPackets &&
-                           _receivedUnorderedOrder.Count > 0)
-                    {
-                        _receivedUnordered.Remove(_receivedUnorderedOrder.Dequeue());
-                    }
-
+                    if (!_receivedUnordered.TryGetValue(channel, out var window))
+                        _receivedUnordered[channel] = window = new UnorderedReplayWindow();
+                    if (!window.Accept(sequence)) return true;
                     DispatchData(payload.ToArray());
                     return true;
                 }
@@ -1899,46 +1998,22 @@ namespace SilksongCoop.Core.Networking
             }
         }
 
-        private void EvictOldestPendingHandshake()
+        private void WriteChallenge(Span<byte> cookie, IPEndPoint endpoint, ulong peerId, uint bucket)
         {
-            IPEndPoint? oldest = null;
-            long oldestMs = long.MaxValue;
-            foreach (var pair in _pendingHandshakes)
-            {
-                if (pair.Value.CreatedMs < oldestMs)
-                {
-                    oldestMs = pair.Value.CreatedMs;
-                    oldest = pair.Key;
-                }
-            }
+            Span<byte> input = stackalloc byte[18];
+            if (!endpoint.Address.TryWriteBytes(input.Slice(0, 4), out int written) || written != 4)
+                throw new ArgumentException("An IPv4 endpoint is required.", nameof(endpoint));
+            BinaryPrimitives.WriteUInt16LittleEndian(input.Slice(4), (ushort)endpoint.Port);
+            BinaryPrimitives.WriteUInt64LittleEndian(input.Slice(6), peerId);
+            BinaryPrimitives.WriteUInt32LittleEndian(input.Slice(14), bucket);
 
-            if (oldest != null)
-            {
-                _pendingHandshakes.Remove(oldest);
-            }
-        }
+            Span<byte> hash = stackalloc byte[32];
+            using var hmac = new HMACSHA256(_challengeKey);
+            if (!hmac.TryComputeHash(input, hash, out _))
+                throw new InvalidOperationException("Challenge generation failed.");
 
-        private void PrunePendingHandshakes()
-        {
-            if (_pendingHandshakes.Count == 0) return;
-
-            long now = GetTimestampMs();
-            List<IPEndPoint>? stale = null;
-            foreach (var pair in _pendingHandshakes)
-            {
-                if (now - pair.Value.CreatedMs > 10000)
-                {
-                    (stale ??= new List<IPEndPoint>()).Add(pair.Key);
-                }
-            }
-
-            if (stale != null)
-            {
-                for (int i = 0; i < stale.Count; i++)
-                {
-                    _pendingHandshakes.Remove(stale[i]);
-                }
-            }
+            BinaryPrimitives.WriteUInt32LittleEndian(cookie, bucket);
+            hash.Slice(0, ChallengeBytes - sizeof(uint)).CopyTo(cookie.Slice(sizeof(uint)));
         }
 
         private void SendEnvelope(UdpFrameType type, byte channel, uint sequence, DeliveryMethod method, ReadOnlySpan<byte> payload)
@@ -1951,6 +2026,8 @@ namespace SilksongCoop.Core.Networking
             if (_socket == null || target == null) return;
 
             bool includeMac = _sessionKey != null && NeedsMac(type);
+            if (includeMac && (type == UdpFrameType.Ping || type == UdpFrameType.Pong || type == UdpFrameType.Disconnect))
+                sequence = ++_controlSequence;
             int envelopeLength = 8 + payload.Length + (includeMac ? MacSizeBytes : 0);
             byte[] envelope = ArrayPool<byte>.Shared.Rent(envelopeLength);
             try
@@ -2010,8 +2087,17 @@ namespace SilksongCoop.Core.Networking
         private void SetSessionKey(byte[]? key)
         {
             _hmac?.Dispose();
+            _receiveHmac?.Dispose();
             _sessionKey = key;
-            _hmac = key == null || key.Length == 0 ? null : new HMACSHA256(key);
+            _hmac = null;
+            _receiveHmac = null;
+            if (key == null || key.Length == 0) return;
+
+            using var derivation = new HMACSHA256(key);
+            var clientToHost = derivation.ComputeHash(new byte[] { 0 });
+            var hostToClient = derivation.ComputeHash(new byte[] { 1 });
+            _hmac = new HMACSHA256(IsHost ? hostToClient : clientToHost);
+            _receiveHmac = new HMACSHA256(IsHost ? clientToHost : hostToClient);
         }
 
         private void ClearSessionKey() => SetSessionKey(null);
@@ -2038,10 +2124,10 @@ namespace SilksongCoop.Core.Networking
 
         private bool ValidateMac(ReadOnlySpan<byte> headerAndPayload, ReadOnlySpan<byte> receivedMac)
         {
-            if (_hmac == null || receivedMac.Length < MacSizeBytes) return false;
+            if (_receiveHmac == null || receivedMac.Length != MacSizeBytes) return false;
 
             Span<byte> hash = stackalloc byte[HmacHashBytes];
-            if (!_hmac.TryComputeHash(headerAndPayload, hash, out int written) ||
+            if (!_receiveHmac.TryComputeHash(headerAndPayload, hash, out int written) ||
                 written < MacSizeBytes)
             {
                 return false;

@@ -26,6 +26,7 @@ namespace SilksongCoop.Core.Protocol.Packets
     public struct ActionTriggerPacket : IPacket
     {
         public PacketHeader Header;
+        public uint SceneGeneration;
         public ActionType Action;
         public uint ActionSequenceId;
         public float OriginX;
@@ -41,6 +42,7 @@ namespace SilksongCoop.Core.Protocol.Packets
         public void Serialize(ref PacketWriter writer)
         {
             writer.WriteHeader(Header);
+            writer.WriteUInt32(SceneGeneration);
             writer.WriteByte((byte)Action);
             writer.WriteUInt32(ActionSequenceId);
             writer.WriteFloat(OriginX);
@@ -60,6 +62,7 @@ namespace SilksongCoop.Core.Protocol.Packets
             return new ActionTriggerPacket
             {
                 Header = reader.ReadHeader(),
+                SceneGeneration = reader.ReadUInt32(),
                 Action = (ActionType)reader.ReadByte(),
                 ActionSequenceId = reader.ReadUInt32(),
                 OriginX = reader.ReadFloat(),

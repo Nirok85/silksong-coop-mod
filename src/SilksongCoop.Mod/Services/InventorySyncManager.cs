@@ -1,4 +1,5 @@
 using System;
+using SilksongCoop.Mod.State;
 using SilksongCoop.Core.Events;
 using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol;
@@ -49,6 +50,7 @@ namespace SilksongCoop.Mod.Services
 
         private void OnOutgoingItemUnlock(ItemUnlockPacket packet)
         {
+            if (RemoteApplyScope.IsActive) return;
             var transport = _transportService.ActiveTransport;
             var session = _sessionService.SessionState;
             if (transport == null || session?.IsConnected != true) return;

@@ -84,17 +84,19 @@ namespace SilksongCoop.Tests
         }
 
         [Fact]
-        public void CloneScene_DifferentScene_HidesClone()
+        public void CloneScene_OlderTransformsCannotRestorePresenceAfterDeparture()
         {
-            var mgr = new HeadlessPlayerCloneManager();
-            var peer = new NetworkPeerId(2, "P");
-            mgr.SpawnRemotePlayer(peer, true);
+            var scene = new SilksongCoop.Core.State.RemoteSceneSequence();
+            Assert.True(scene.AcceptTransform(5, 20));
+            Assert.True(scene.AcceptDeparture(6));
+            Assert.False(scene.HasTransform);
+            Assert.False(scene.AcceptTransform(5, 21));
+            Assert.False(scene.HasTransform);
+            Assert.True(scene.AcceptTransform(6, 22));
+            Assert.True(scene.HasTransform);
+            Assert.False(scene.AcceptDeparture(6));
+            Assert.False(scene.AcceptTransform(6, 21));
 
-            // First packet in same scene
-            mgr.UpdateRemoteTransform(peer, 1f, 2f, 0, 0, 1, 0, 0, 0, 100);
-            // Packet from different scene (isSameScene not in headless API, but transform still processes)
-            // Headless doesn't have isSameScene param; verify buffer works
-            Assert.True(mgr.IsPlayerSpawned(peer));
         }
     }
 }

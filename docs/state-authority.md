@@ -5,7 +5,7 @@ receiver resolves conflicts, and which failures are accepted by design. When cod
 and this document disagree, the code is wrong unless the document is updated in
 the same change.
 
-## Current development build (protocol v9)
+## Current development build (protocol v10)
 
 | State | Writer(s) | Receiver rule | Conflict resolution |
 |---|---|---|---|
@@ -15,8 +15,8 @@ the same change.
 | Currency | Either peer | Transaction GUID dedup + per-sender sequence, applied under `RemoteApplyScope` | Join snapshots seed the balance before the first transaction. Later updates apply transaction deltas. UDP queues currency packets in order while the reliable backlog is full. `PlayerData` is reconciled to the Core wallet after the queued change settles |
 | Inventory unlocks | Either peer | Idempotent per item key | First unlock wins; repeats are no-ops |
 | Enemy/boss HP, deaths and phases | Attackers replicate hits; the host simulates its scene | `EnemySyncController` + `EnemySyncService`; a replicated hit re-emits `TookDamage`/`TOOK DAMAGE` without reapplying damage | Exact `scene + hierarchy` key; see the authority rules below (absolute host HP, additive client damage only without host authority, per-sender sequence dedup, damage proof for deferred kills) |
-| World events (breakables, gates) | Either peer | `WorldEventPacket` with `StateRevision`/`OriginPeerId` | Per-object **and per-origin** revision comparison in `RevisionLedger`; replay of stored events on join; queued stale revisions are discarded before applying |
-| Persistent world values | Either peer | `PersistentStatePacket` keyed by scene + persistent id + type; `SaveState` hook plus a 1 Hz poll of `PersistentBoolItem`/`PersistentIntItem` | Same per-origin `RevisionLedger` rule; the retry queue re-checks staleness before `SaveState`; polling seeds initial scene state without broadcasting it |
+| World events (breakables, gates) | Host | `WorldEventPacket` with `StateRevision`/`OriginPeerId` | Per-object **and per-origin** revision comparison in `RevisionLedger`; replay of stored events on join; queued stale revisions are discarded before applying |
+| Persistent world values | Host | `PersistentStatePacket` keyed by scene + persistent id + type; `SaveState` hook plus a 1 Hz poll of `PersistentBoolItem`/`PersistentIntItem` | Same per-origin `RevisionLedger` rule; the retry queue re-checks staleness before `SaveState`; polling seeds initial scene state without broadcasting it |
 | Quest flags from NPC dialogue | Either peer | `QuestStatePacket` (0x56) after `NPCControlBase` dialogue plus a 1 Hz poll; only allowlisted `PlayerData` bool/int names | Diff of before/after snapshots; only changed values are sent and applied under `RemoteApplyScope`; batches are split by encoded size; overlapping dialogue flushes keep separate baselines |
 | Physical pickups | Either peer | Stable pickup key + one-time claim tracking | Both credit deduplication and local removal require an exact key match |
 
@@ -68,10 +68,8 @@ the same peer whose `EnemySnapshotPacket` is accepted. The rules are:
    drops its death records when the sequence ends, so the next attempt starts
    alive.
 
-The host is not authoritative for player position, death lifecycle, wallet,
-inventory or world-progress state, and there is no vote-based arbitration. Do not
-describe this mod as generally "host-authoritative": the authority is scoped to
-enemy damage and only while the host simulates that scene.
+The host authors world and persistent state and seeds the wallet for a new peer.
+Player position, death lifecycle, inventory and live wallet deltas remain peer-authored.
 
 ## Save scope
 
@@ -150,9 +148,8 @@ These rules currently cover:
 
 ## Revision rules
 
-See `docs/protocol-v8.md` for the exact idempotency rules (origin-aware
-comparison, revision `0` opt-out, cache behaviour, reset on new session).
-In v9, the origin identifies a mod instance across transport and role changes.
+See [protocol v10](protocol-v10.md) for the current wire contract. Revision comparisons use modular arithmetic within the host stream.
+In v10, the wire origin must equal the authenticated host transport peer ID.
 Receivers discard replays of their own updates. Persistent-state replay uses
 header sequence `0` and preserves values last changed locally in the save.
 

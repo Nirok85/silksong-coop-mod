@@ -291,8 +291,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public async Task LiteNetLibTransport_ConcurrentSendAndPoll_ThreadSafetyStress()
         {
-            using var host = new LiteNetLibTransport(1, "StressHost");
-            using var client = new LiteNetLibTransport(2, "StressClient");
+            using var host = new LiteNetLibTransport(1, "StressHost") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "StressClient") { RequireRoomCode = false };
 
             host.StartHost(0);
             int hostPort = host.BoundPort;
@@ -475,8 +475,8 @@ namespace SilksongCoop.Tests
         [Fact]
         public void LiteNetLibTransport_DisconnectInsideDataCallback_HandledGracefullyWithoutException()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");

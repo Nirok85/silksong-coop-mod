@@ -1,49 +1,15 @@
-# Mod CI job (self-hosted runner)
+# Mod CI job
 
-The `Core` job in `.github/workflows/ci.yml` runs on GitHub-hosted runners and is
-green. The `Mod` job cannot run there: the mod compiles against the game's
-managed assemblies (`Assembly-CSharp.dll`, `UnityEngine.*.dll`,
-`TeamCherry.TK2D.dll`, …), which cannot be redistributed.
+GitHub-hosted jobs build and test Core and run the release metadata preflight.
+The Mod preflight needs the installed game's managed assemblies and runs only
+for pushes or manual runs on `master`. Neither same-repository nor fork pull
+requests run code on the game runner.
 
-The `mod:` job is therefore gated on a repository variable and a self-hosted
-runner. By default it is **skipped** (GitHub marks it "skipped", it does not
-queue):
+Use a self-hosted Linux runner with the `silksong` label, PowerShell and read
+access to the installed game. Set `SILKSONG_MANAGED_DIR` to the absolute managed
+assembly directory outside the checkout. Restrict the `silksong-mod-build`
+environment to the protected `master` branch. The workflow builds the solution
+with warnings as errors, checks the DLL versions, and runs Core tests.
 
-```yaml
-  mod:
-    name: Mod - compile against game assemblies (self-hosted)
-    if: >-
-      ${{ vars.ENABLE_MOD_CI == 'true' &&
-          (github.event_name != 'pull_request' ||
-           github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: [self-hosted, linux, silksong]
-    environment: silksong-mod-build
-```
-
-Same-repository PRs run the job automatically. Fork PRs are excluded: executing
-untrusted code on a self-hosted runner is not safe, so a maintainer must build
-such a branch manually before merging.
-
-## Enabling it
-
-1. Register a self-hosted runner with the labels `self-hosted`, `linux` and
-   `silksong`, and make sure the runner user can read the game installation.
-2. Set two repository variables
-   (*Settings → Secrets and variables → Actions → Variables*):
-
-   | Variable | Example |
-   |---|---|
-   | `ENABLE_MOD_CI` | `true` |
-   | `SILKSONG_MANAGED_DIR` | `/home/runner/.local/share/Steam/steamapps/common/Hollow Knight Silksong/Hollow Knight Silksong_Data/Managed` |
-
-3. Push to `master` or open a pull request. The job validates that
-   `Assembly-CSharp.dll` exists and then builds the Mod with
-   `TreatWarningsAsErrors=true`.
-
-Until `ENABLE_MOD_CI` is `true`, the job stays skipped. Unset the variable if the
-runner is offline so the workflow does not queue forever.
-
-A skipped Mod job is **not** evidence that the Mod compiles. Before publishing,
-either make this job green or run `scripts/preflight-release.ps1` on a machine with
-the game installed and record the commit SHA, game version and result in the release
-checklist.
+A successful build does not exercise Unity or Steam. Use the live scenarios in
+the [release checklist](release-checklist.md) before publishing.

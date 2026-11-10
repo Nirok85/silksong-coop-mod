@@ -55,9 +55,14 @@ namespace SilksongCoop.Mod.Hooks
                 if (suppressBench)
                 {
                     // Solo death while partner alive: suppress original bench reload coroutine and enter spectator
-                    __result = EmptyRoutine();
-                    plugin.EnterSpectatorMode();
-                    return false;
+                    if (plugin.TryEnterSpectatorMode())
+                    {
+                        __result = EmptyRoutine();
+                        return false;
+                    }
+
+                    coordinator.BeginSoloBenchRespawn();
+                    return true;
                 }
 
                 // Team wipe: allow standard bench reload coroutine to execute
@@ -112,7 +117,6 @@ namespace SilksongCoop.Mod.Hooks
         public static void PostfixSetBenchRespawnFull(string spawnMarker, string sceneName, int spawnType, bool facingRight)
         {
             if (RemoteApplyScope.IsActive) return;
-            if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
             try
             {
                 SilksongCoopPlugin.Instance?.BroadcastBenchCheckpoint(sceneName, spawnMarker, spawnType, facingRight);
@@ -134,7 +138,6 @@ namespace SilksongCoop.Mod.Hooks
         public static void PostfixSetBenchRespawnSimple(string spawnMarker, string sceneName, bool facingRight)
         {
             if (RemoteApplyScope.IsActive) return;
-            if (SilksongCoopPlugin.Instance?.SessionState?.IsConnected != true) return;
             try
             {
                 SilksongCoopPlugin.Instance?.BroadcastBenchCheckpoint(sceneName, spawnMarker, 1, facingRight);

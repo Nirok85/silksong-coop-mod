@@ -72,7 +72,7 @@ namespace SilksongCoop.Mod.UI
                 RichMessage = BuildRichMessage(kind, message),
                 Kind = kind,
                 CreatedAt = Time.unscaledTime,
-                HoldDuration = holdSeconds,
+                HoldDuration = float.IsFinite(holdSeconds) ? Math.Clamp(holdSeconds, 0f, 60f) : 2.5f,
                 FadeInDuration = 0.25f,
                 FadeOutDuration = 0.45f,
             };

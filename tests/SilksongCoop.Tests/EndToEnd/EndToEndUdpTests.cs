@@ -16,8 +16,8 @@ namespace SilksongCoop.Tests.EndToEnd
         [Fact]
         public void HostClient_Connect_ExchangesTransforms()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");
@@ -71,8 +71,8 @@ namespace SilksongCoop.Tests.EndToEnd
         [Fact]
         public void HostClient_Disconnect_ReconnectAllowed()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");
@@ -88,9 +88,9 @@ namespace SilksongCoop.Tests.EndToEnd
             Assert.True(host.BoundPort > 0);
 
             // A fresh host on a new port avoids stale endpoint state from the first session.
-            using var host2 = new LiteNetLibTransport(1, "Host");
+            using var host2 = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
             host2.StartHost(0);
-            using var client2 = new LiteNetLibTransport(3, "Client2");
+            using var client2 = new LiteNetLibTransport(3, "Client2") { RequireRoomCode = false };
             client2.Connect($"127.0.0.1:{host2.BoundPort}");
             PumpUntilConnected(host2, client2, maxMs: 3000);
             Assert.True(host2.IsConnected && client2.IsConnected);
@@ -99,8 +99,8 @@ namespace SilksongCoop.Tests.EndToEnd
         [Fact]
         public void ReliableOrdered_RetriesUntilAcked()
         {
-            using var host = new LiteNetLibTransport(1, "Host");
-            using var client = new LiteNetLibTransport(2, "Client");
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
 
             host.StartHost(0);
             client.Connect($"127.0.0.1:{host.BoundPort}");

@@ -107,6 +107,10 @@ namespace SilksongCoop.Tests
             receiver.HandleCurrencyPacket(returningPeer, packet);
             receiver.RemoveRemotePeer(returningPeer);
 
+            receiver.HandleCurrencyPacket(returningPeer, packet);
+            Assert.Equal(5, receiver.SharedRosaries); // Same instance resumes without replaying the debit/credit.
+            receiver.ResetCurrencyPeer(returningPeer); // New save instance may restart its sequence.
+
             packet.PickupUniqueId = 1;
             packet.TransactionId = Guid.NewGuid();
             receiver.HandleCurrencyPacket(returningPeer, packet);
