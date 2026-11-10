@@ -44,11 +44,11 @@ All managers depend on interfaces, not on `SilksongCoopPlugin`. Gameplay actions
   damage claim until the combined damage is lethal. Snapshots cannot resurrect a
   dead enemy and cannot raise HP before a newer local hit is acknowledged.
 - Pickups: claimed idempotently per item key.
-- World events / persistent values: `StateRevision` + `OriginPeerId`, idempotent per key (see `docs/protocol-v8.md`).
+- World events / persistent values: `StateRevision` + `OriginPeerId`, idempotent per key (see `docs/protocol-v10.md`).
 
 There is **no** vote-based conflict resolution. Enemy HP and death use the host
 as the authority described in `docs/state-authority.md`; world objects use
-revision ordering. UDP still accepts exactly one remote peer in v8. Steam has an
+revision ordering. UDP still accepts exactly one remote peer. Steam has an
 experimental full-mesh path; see `docs/multiplayer-3plus-analysis.md`.
 
 ## Reconnect / resync

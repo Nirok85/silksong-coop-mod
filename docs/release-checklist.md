@@ -9,7 +9,7 @@
 - [ ] After the release commit, `pwsh ./scripts/preflight-release.ps1` passes on a clean tree (versions, changelog, both READMEs, ROADMAP, build, tests).
 - [ ] All tests pass and none are unexpectedly skipped (do not gate on a hard-coded count).
 - [ ] Core and Mod build with 0 compiler warnings (TreatWarningsAsErrors=true; NU1900 is a NuGet network warning).
-- [ ] Protocol version is unchanged or bumped and documented (`docs/protocol-v8.md`).
+- [ ] Protocol version is unchanged or bumped and documented (`docs/protocol-v10.md` and `docs/state-authority.md`).
 - [ ] Plugin version and assembly versions bumped to `<version>` in both csproj files and `PluginVersion`.
 - [ ] Release commit SHA recorded together with the version.
 - [ ] Migration guide updated.
@@ -32,10 +32,9 @@
 
 - [ ] Core job green.
 - [ ] Mod job green, or a maintainer recorded a manual Mod build of the exact
-      release commit (SHA, game version, OS and result). The Mod job is skipped when
-      the trusted `master` job is unavailable; a green Core job alone is not a release gate.
-      Same-repository PRs run it automatically; fork PRs are excluded because
-      untrusted code must not run on the self-hosted runner, so build them manually.
+      release commit (SHA, game version, OS and result). The job is opt-in via
+      repository variable `SILKSONG_MOD_RUNNER_ENABLED=true`; a skipped job means
+      Mod compilation was not checked. A green Core job alone is not a release gate.
 - [ ] No workflow scope issues (the workflow file needs a token with the `workflow` scope to push).
 
 ## Smoke tests (manual)

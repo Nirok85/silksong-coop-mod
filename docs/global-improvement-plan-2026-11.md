@@ -6,7 +6,7 @@
 > **Статус на 2026-11-09:** этапы A–F и H получили практическую реализацию,
 > этап G оформлен как анализ и план. Подробности, метрики и незакрытые внешние
 > гейты: [`docs/execution-log-2026-11-09.md`](execution-log-2026-11-09.md).
-> Протокол остаётся v8.
+> Wire protocol has since advanced to v10. This plan's v8 references are historical context.
 
 Принципы:
 

@@ -42,7 +42,7 @@ export ManagedDir="$HOME/.steam/steam/steamapps/common/Hollow Knight Silksong/Ho
 
 ## 1. Bump the version
 
-The version lives in **seven** files — a release that updates only some of them
+The version lives in project metadata, the plugin constant, changelog, README files and roadmap — a release that updates only some of them
 produces archives whose filenames disagree with the plugin version reported in
 `BepInEx/LogOutput.log`:
 
@@ -52,8 +52,8 @@ produces archives whose filenames disagree with the plugin version reported in
 | `src/SilksongCoop.Core/SilksongCoop.Core.csproj` | `<Version>`, `<AssemblyVersion>`, `<FileVersion>` |
 | `src/SilksongCoop.Mod/SilksongCoopPlugin.cs` | `public const string PluginVersion` |
 | `CHANGELOG.md` | new `## [x.y.z] - YYYY-MM-DD` section |
-| `README.md`, `README.ru.md` | version badge, archive names, `Initializing ... vX.Y.Z` example |
-| `ROADMAP.md` | `Актуально на` line and the CI acceptance criterion |
+| `README.md`, `README.ru.md` | version badge, archive names, download link |
+| `ROADMAP.md` | current release line |
 
 `assets/INSTALL.txt` needs no edit: `scripts/package-release.sh` substitutes
 `__VERSION__` while packaging.
@@ -85,10 +85,12 @@ dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj -c Release
 ```
 
 Expected: 0 warnings (warnings are errors in Release) and all tests passing.
-The hosted CI job builds Core and runs the Core test project; the Mod job is
-limited to trusted `master` runs on the self-hosted runner. A green Core job alone
-does not prove that the Mod compiled or that Steam/Unity behaviour works. Build the
-Mod against the game assemblies and run the manual smoke checklist before publishing.
+The hosted CI job builds Core and runs the Core test project. The Mod job runs on
+`master` only when `SILKSONG_MOD_RUNNER_ENABLED=true` and a matching self-hosted
+runner is online. A skipped Mod job means compilation was not checked. A green
+Core job alone does not prove that the Mod compiled or that Steam/Unity behaviour
+works. Build the Mod against the game assemblies and run the manual smoke checklist
+before publishing.
 
 If the protocol changed, say so explicitly in the release notes — mixed
 versions refuse to connect, so both players must update.
@@ -168,8 +170,10 @@ gh release create vX.Y.Z \
   --notes-file /tmp/notes.md
 ```
 
-`gh release create` publishes immediately and marks the newest release as
-*Latest*. Add `--draft` first if the notes need review, then
+For a beta, add `--prerelease` and use a prerelease tag such as
+`vX.Y.Z-beta.1`; the plugin and archive version remain numeric `X.Y.Z`.
+`gh release create` publishes immediately and marks a stable release as *Latest*.
+Add `--draft` first if the notes need review, then
 `gh release edit vX.Y.Z --draft=false`.
 
 ## 6. Post-release checks
