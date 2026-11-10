@@ -17,27 +17,27 @@ namespace SilksongCoop.Mod.UI
         /// <summary>
         /// Darkest background color for window backgrounds.
         /// </summary>
-        public static readonly Color BgDeepest   = new Color(0.035f, 0.030f, 0.065f, 0.96f); // #09081A window bg
+        public static readonly Color BgDeepest   = new Color(0.035f, 0.032f, 0.045f, 0.97f); // window background
         
         /// <summary>
         /// Panel background color for sections.
         /// </summary>
-        public static readonly Color BgPanel     = new Color(0.055f, 0.050f, 0.095f, 0.92f); // #0E0D18 section
+        public static readonly Color BgPanel     = new Color(0.065f, 0.058f, 0.075f, 0.94f); // section background
         
         /// <summary>
         /// Input field background color.
         /// </summary>
-        public static readonly Color BgField     = new Color(0.080f, 0.070f, 0.130f, 0.95f); // input field bg
+        public static readonly Color BgField     = new Color(0.105f, 0.092f, 0.110f, 0.96f); // input field bg
         
         /// <summary>
         /// Subtle background color for hover highlights.
         /// </summary>
-        public static readonly Color BgSubtle    = new Color(0.110f, 0.100f, 0.170f, 0.70f); // hover highlight
+        public static readonly Color BgSubtle    = new Color(0.160f, 0.140f, 0.155f, 0.90f); // hover highlight
 
         /// <summary>
         /// Primary accent color (gold).
         /// </summary>
-        public static readonly Color Gold        = new Color(0.831f, 0.659f, 0.263f, 1.00f); // #D4A843 primary accent
+        public static readonly Color Gold        = new Color(0.78f, 0.66f, 0.46f, 1.00f); // primary accent
         
         /// <summary>
         /// Bright gold color for hover states.
@@ -82,7 +82,7 @@ namespace SilksongCoop.Mod.UI
         /// <summary>
         /// Blue color for informational messages.
         /// </summary>
-        public static readonly Color BlueInfo    = new Color(0.400f, 0.700f, 0.950f, 1.00f);
+        public static readonly Color BlueInfo    = new Color(0.51f, 0.74f, 0.82f, 1.00f);
 
         #endregion
 
@@ -237,6 +237,7 @@ namespace SilksongCoop.Mod.UI
                 fontSize = 13,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter,
+                wordWrap = true,
                 border = new RectOffset(3, 3, 3, 3),
                 padding = new RectOffset(10, 10, 6, 6),
                 contentOffset = new Vector2(0, 0),

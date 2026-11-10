@@ -16,7 +16,18 @@ namespace SilksongCoop.Mod.UI
     /// </summary>
     public class CoopMenuUI : MonoBehaviour
     {
-        public bool IsVisible { get; set; } = false;
+        private bool _isVisible;
+        private float _menuOpenedAt;
+
+        public bool IsVisible
+        {
+            get => _isVisible;
+            set
+            {
+                if (value && !_isVisible) _menuOpenedAt = Time.unscaledTime;
+                _isVisible = value;
+            }
+        }
 
         private enum Tab { Host, Join, Status, Settings }
 
@@ -296,6 +307,9 @@ namespace SilksongCoop.Mod.UI
             if (!IsVisible) return;
 
             UpdateWindowLayout();
+            float menuAlpha = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((Time.unscaledTime - _menuOpenedAt) / 0.18f));
+            GUI.backgroundColor = new Color(previousBackgroundColor.r, previousBackgroundColor.g, previousBackgroundColor.b, previousBackgroundColor.a * menuAlpha);
+            GUI.contentColor = new Color(previousContentColor.r, previousContentColor.g, previousContentColor.b, previousContentColor.a * menuAlpha);
             _windowRect = GUI.Window(_windowId, _windowRect, DrawWindowContents, "");
 
             // Keep the window fully on-screen so the close button stays reachable.
@@ -396,7 +410,7 @@ namespace SilksongCoop.Mod.UI
             const float hudW = 180f;
             const float hudH = 68f;
             const float gap = 6f;
-            float x = Screen.width - hudW - 16f;
+            float x = _diagnosticsOverlay?.IsVisible == true ? 16f : Mathf.Max(0f, Screen.width - hudW - 16f);
             float y = 40f;
 
             int shown = 0;
@@ -424,14 +438,14 @@ namespace SilksongCoop.Mod.UI
                 : new Color(SilksongSkin.BgPanel.r, SilksongSkin.BgPanel.g, SilksongSkin.BgPanel.b, 0.55f);
             GUI.DrawTexture(new Rect(x, y, hudW, hudH), SilksongSkin.WhitePixel);
 
-            // Left accent bar (gold when alive, red when dead)
+            // Left accent bar identifies the partner and signals death.
             GUI.color = alive
-                ? SilksongSkin.Gold
-                : new Color(0.90f, 0.30f, 0.30f);
+                ? SilksongSkin.BlueInfo
+                : SilksongSkin.RedError;
             GUI.DrawTexture(new Rect(x, y, 3f, hudH), SilksongSkin.WhitePixel);
 
             // Partner name
-            GUI.color = SilksongSkin.TextTitle;
+            GUI.color = SilksongSkin.BlueInfo;
             GUI.Label(new Rect(x + 8f, y + 2f, hudW - 64f, 16f), peerName, _hudNameStyle ?? Skin.label);
 
             if (!alive)
@@ -517,7 +531,7 @@ namespace SilksongCoop.Mod.UI
 
             if (coordinator.CurrentState == DeathState.Spectating)
             {
-                float bannerWidth = 420f;
+                float bannerWidth = Mathf.Min(420f, Mathf.Max(1f, Screen.width - 24f));
                 float bannerHeight = 75f;
                 float x = (Screen.width - bannerWidth) * 0.5f;
                 float y = Screen.height * 0.15f;
@@ -558,12 +572,12 @@ namespace SilksongCoop.Mod.UI
             }
             else if (coordinator.CurrentState == DeathState.TeamWipe)
             {
-                float bannerWidth = 420f;
+                float bannerWidth = Mathf.Min(420f, Mathf.Max(1f, Screen.width - 24f));
                 float bannerHeight = 50f;
                 float x = (Screen.width - bannerWidth) * 0.5f;
                 float y = Screen.height * 0.15f;
 
-                GUI.color = new Color(0.15f, 0.03f, 0.03f, 0.92f);
+                GUI.color = SilksongSkin.BgDeepest;
                 GUI.DrawTexture(new Rect(x, y, bannerWidth, bannerHeight), SilksongSkin.WhitePixel);
                 GUI.color = SilksongSkin.RedError;
                 GUI.DrawTexture(new Rect(x, y, bannerWidth, 2), SilksongSkin.WhitePixel);
@@ -589,8 +603,8 @@ namespace SilksongCoop.Mod.UI
         /// </summary>
         private void UpdateWindowLayout()
         {
-            float width = Mathf.Min(460f, Mathf.Max(320f, Screen.width - 80f));
-            float height = Mathf.Min(600f, Mathf.Max(300f, Screen.height - 80f));
+            float width = Mathf.Min(460f, Mathf.Max(1f, Screen.width - 24f));
+            float height = Mathf.Min(600f, Mathf.Max(1f, Screen.height - 24f));
 
             if (!Mathf.Approximately(width, _layoutWidth) ||
                 !Mathf.Approximately(height, _layoutHeight))
@@ -606,6 +620,15 @@ namespace SilksongCoop.Mod.UI
         private void DrawWindowContents(int windowId)
         {
             GUI.DragWindow(new Rect(0, 0, _layoutWidth, 24));
+
+            // A fine border gives the panel a quiet frame without obscuring the game.
+            if (Event.current.type == EventType.Repaint)
+            {
+                GUI.color = SilksongSkin.GoldDim;
+                GUI.DrawTexture(new Rect(0, 0, _layoutWidth, 1), SilksongSkin.WhitePixel);
+                GUI.DrawTexture(new Rect(0, _layoutHeight - 1, _layoutWidth, 1), SilksongSkin.WhitePixel);
+                GUI.color = Color.white;
+            }
 
             // Title bar
             GUI.color = SilksongSkin.Gold;
@@ -810,25 +833,20 @@ namespace SilksongCoop.Mod.UI
                 GUILayout.Label(Loc.T("Host a game for your partner to join"), _styleSubtitle ?? Skin.label);
                 GUILayout.Space(12);
 
-                // UDP button (large, prominent)
-                GUI.color = SilksongSkin.Gold;
-                if (GUILayout.Button(Loc.T("HOST  UDP  (Room Code)"), GUILayout.Height(38)))
-                {
-                    GUI.color = Color.white;
-                    HostUdpSession();
-                }
-                GUI.color = Color.white;
-
-                GUILayout.Label(Loc.T("Best with Radmin VPN or LAN. Share the full room code with your partner."), _styleSubtitle ?? Skin.label);
-                GUILayout.Space(10);
-
-                // Steam button
-                if (GUILayout.Button(Loc.T("HOST  Steam  P2P  Lobby"), GUILayout.Height(32)))
+                if (GUILayout.Button(Loc.T("HOST  Steam  P2P  Lobby"), GUILayout.Height(38)))
                 {
                     HostSteamSession();
                 }
 
                 GUILayout.Label(Loc.T("Invite friends directly through Steam. Requires Steam running."), _styleSubtitle ?? Skin.label);
+                GUILayout.Space(10);
+
+                if (GUILayout.Button(Loc.T("HOST  UDP  (Room Code)"), GUILayout.Height(34)))
+                {
+                    HostUdpSession();
+                }
+
+                GUILayout.Label(Loc.T("Best with Radmin VPN or LAN. Share the full room code with your partner."), _styleSubtitle ?? Skin.label);
             }
         }
 
@@ -912,8 +930,6 @@ namespace SilksongCoop.Mod.UI
             bool canConnect = !isConnecting && !string.IsNullOrWhiteSpace(_inputAddressOrCode);
 
             GUI.enabled = canConnect;
-            GUILayout.BeginHorizontal();
-
             if (GUILayout.Button(Loc.T("JOIN  via  IP / Code"), GUILayout.Height(32)))
             {
                 JoinUdpSession(_inputAddressOrCode);
@@ -923,7 +939,6 @@ namespace SilksongCoop.Mod.UI
                 JoinSteamSession(_inputAddressOrCode);
             }
 
-            GUILayout.EndHorizontal();
             GUI.enabled = true;
 
             // Paste from clipboard button

@@ -119,7 +119,7 @@ namespace SilksongCoop.Mod.UI
         private static void EnsureTextures()
         {
             if (_whiteTex == null) _whiteTex = GetSolidTexture(Color.white);
-            if (_bgTex == null) _bgTex = GetSolidTexture(new Color(0f, 0f, 0f, 0.75f));
+            if (_bgTex == null) _bgTex = GetSolidTexture(SilksongSkin.BgDeepest);
             if (_gridTex == null) _gridTex = GetSolidTexture(new Color(1f, 1f, 1f, 0.15f));
         }
 
@@ -184,7 +184,7 @@ namespace SilksongCoop.Mod.UI
                 // Title
                 // P2: cached styles — the old code allocated 8 new GUIStyle objects on
                 // EVERY OnGUI call (2-4 per frame) inside the overlay's draw path.
-                var titleStyle = _titleStyle ??= CreateOverlayStyle(13, FontStyle.Bold, new Color(0.95f, 0.85f, 0.55f));
+                var titleStyle = _titleStyle ??= CreateOverlayStyle(13, FontStyle.Bold, SilksongSkin.TextTitle);
                 GUI.Label(new Rect(x + Padding, y + 6, TotalWidth - Padding * 2, 18),
                     Loc.T("Network Diagnostics [F11]"), titleStyle);
 
@@ -195,7 +195,7 @@ namespace SilksongCoop.Mod.UI
                 DrawGraph(Loc.T("Ping"), cursorY, x + Padding,
                     _historyBuffer, pingCount,
                     _diagnostics.CurrentPing, "ms",
-                    0f, 200f, new Color(1f, 0.9f, 0.3f));
+                    0f, 200f, SilksongSkin.Gold);
                 cursorY += GraphHeight + RowSpacing;
 
                 // Packet loss graph (red)
@@ -203,7 +203,7 @@ namespace SilksongCoop.Mod.UI
                 DrawGraph(Loc.T("Loss"), cursorY, x + Padding,
                     _historyBuffer, lossCount,
                     _diagnostics.PacketLossPercent, "%",
-                    0f, 20f, new Color(1f, 0.4f, 0.4f));
+                    0f, 20f, SilksongSkin.RedError);
                 cursorY += GraphHeight + RowSpacing;
 
                 // Bandwidth graph (cyan) — convert bytes to KB inside DrawGraph
@@ -211,7 +211,7 @@ namespace SilksongCoop.Mod.UI
                 DrawGraph(Loc.T("BW"), cursorY, x + Padding,
                     _historyBuffer, bandwidthCount,
                     (_diagnostics.BytesOutPerSecond + _diagnostics.BytesInPerSecond) / 1024f, Loc.T("KB/s"),
-                    0f, 100f, new Color(0.4f, 0.9f, 1f), 1f / 1024f);
+                    0f, 100f, SilksongSkin.BlueInfo, 1f / 1024f);
                 cursorY += GraphHeight + RowSpacing;
 
                 // Summary line

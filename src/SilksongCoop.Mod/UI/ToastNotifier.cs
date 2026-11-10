@@ -28,7 +28,7 @@ namespace SilksongCoop.Mod.UI
         private struct Toast
         {
             // Full rich-text label built once in Show (icon + escaped message).
-            public string RichMessage;
+            public GUIContent Content;
             public ToastKind Kind;
             public float CreatedAt;
             public float HoldDuration;
@@ -69,7 +69,7 @@ namespace SilksongCoop.Mod.UI
 
             var toast = new Toast
             {
-                RichMessage = BuildRichMessage(kind, message),
+                Content = new GUIContent(BuildRichMessage(kind, message)),
                 Kind = kind,
                 CreatedAt = Time.unscaledTime,
                 HoldDuration = float.IsFinite(holdSeconds) ? Math.Clamp(holdSeconds, 0f, 60f) : 2.5f,
@@ -153,7 +153,16 @@ namespace SilksongCoop.Mod.UI
                 _cachedSkin = skin;
             }
 
-            // Draw bottom-to-top (newest at the top)
+            var style = _toastStyle ??= new GUIStyle(skin.label)
+            {
+                fontSize = 12,
+                fontStyle = FontStyle.Normal,
+                alignment = TextAnchor.MiddleLeft,
+                padding = new RectOffset(14, 8, 0, 0),
+                richText = true,
+                wordWrap = true,
+            };
+            float nextY = TopMargin;
             for (int i = 0; i < _active.Count; i++)
             {
                 var t = _active[i];
@@ -184,33 +193,27 @@ namespace SilksongCoop.Mod.UI
 
                 // Position: right side, stacked from top. Shrink on narrow screens so the
                 // toast never starts off-screen; the text wraps inside the reduced width.
-                float availableWidth = Mathf.Max(160f, Screen.width - RightMargin * 2f);
+                float availableWidth = Mathf.Max(1f, Screen.width - RightMargin * 2f);
                 float toastWidth = Mathf.Min(ToastWidth, availableWidth);
                 float x = Mathf.Max(RightMargin, Screen.width - toastWidth - RightMargin + slide);
-                float y = TopMargin + i * (ToastHeight + ToastSpacing);
+                float y = nextY;
+                float toastHeight = Mathf.Max(ToastHeight, style.CalcHeight(t.Content, Mathf.Max(1f, toastWidth - 8f)) + 8f);
+                nextY += toastHeight + ToastSpacing;
 
                 // Background
-                var bgRect = new Rect(x, y, toastWidth, ToastHeight);
+                var bgRect = new Rect(x, y, toastWidth, toastHeight);
                 GUI.color = bg;
                 GUI.DrawTexture(bgRect, SilksongSkin.WhitePixel);
 
                 // Left accent bar (4px wide)
-                var accentRect = new Rect(x, y, 4f, ToastHeight);
+                var accentRect = new Rect(x, y, 4f, toastHeight);
                 GUI.color = border;
                 GUI.DrawTexture(accentRect, SilksongSkin.WhitePixel);
 
                 // Text
                 GUI.color = text;
-                var style = _toastStyle ??= new GUIStyle(skin.label)
-                {
-                    fontSize = 12,
-                    fontStyle = FontStyle.Normal,
-                    alignment = TextAnchor.MiddleLeft,
-                    padding = new RectOffset(14, 8, 0, 0),
-                    richText = true,
-                };
-                var textRect = new Rect(x + 4f, y, toastWidth - 8f, ToastHeight);
-                GUI.Label(textRect, t.RichMessage, style);
+                var textRect = new Rect(x + 4f, y, toastWidth - 8f, toastHeight);
+                GUI.Label(textRect, t.Content, style);
             }
 
             GUI.color = Color.white;
@@ -235,31 +238,31 @@ namespace SilksongCoop.Mod.UI
             return kind switch
             {
                 ToastKind.Success => (
-                    new Color(0.08f, 0.22f, 0.12f, 0.92f),
+                    SilksongSkin.BgDeepest,
                     SilksongSkin.GreenOk,
                     new Color(0.80f, 1.00f, 0.85f, 1f),
                     "✓"
                 ),
                 ToastKind.Warning => (
-                    new Color(0.25f, 0.20f, 0.05f, 0.92f),
+                    SilksongSkin.BgDeepest,
                     SilksongSkin.YellowWarn,
                     new Color(1.00f, 0.95f, 0.75f, 1f),
                     "⚠"
                 ),
                 ToastKind.Error => (
-                    new Color(0.25f, 0.07f, 0.07f, 0.92f),
+                    SilksongSkin.BgDeepest,
                     SilksongSkin.RedError,
                     new Color(1.00f, 0.80f, 0.80f, 1f),
                     "✕"
                 ),
                 ToastKind.Copy => (
-                    new Color(0.10f, 0.15f, 0.25f, 0.92f),
+                    SilksongSkin.BgDeepest,
                     SilksongSkin.Gold,
                     SilksongSkin.TextCream,
                     "📋"
                 ),
                 _ => ( // Info
-                    new Color(0.08f, 0.10f, 0.18f, 0.92f),
+                    SilksongSkin.BgDeepest,
                     SilksongSkin.BlueInfo,
                     new Color(0.85f, 0.90f, 1.00f, 1f),
                     "ℹ"

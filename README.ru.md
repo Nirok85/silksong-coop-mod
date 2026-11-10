@@ -1,18 +1,18 @@
 # Hollow Knight: Silksong — кооперативный мод
 
-![Версия](https://img.shields.io/badge/Version-3.3.7-success)
+![Версия](https://img.shields.io/badge/Version-3.3.8-success)
 [![CI](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml)
 
-[English version](README.md) · [Скачать v3.3.7](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.7)
+[English version](README.md) · [Скачать v3.3.8 beta](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.8-beta.1)
 
 Исследуйте Фарлум вдвоём в Steam-версии Silksong для ПК. Сражайтесь вместе и делитесь валютой, улучшениями и открытиями. Текущее здоровье, шёлк и экипировка у каждого свои.
 
 ## Установка
 
-У обоих игроков должны совпадать версии игры и мода.
+**Бета:** обновлённый интерфейс ещё не проверен визуально в игре. У обоих игроков должны совпадать версии игры и мода.
 
-- **Windows x64.** Закройте игру и распакуйте `SilksongCoop_v3.3.7.zip` в её папку. BepInEx 5.4.21 уже в архиве. Файл `winhttp.dll` должен лежать рядом с исполняемым файлом игры.
-- **Если BepInEx 5.4.x уже установлен.** Скачайте `SilksongCoop_v3.3.7_plugin-only.zip` и положите обе DLL мода в `BepInEx/plugins/SilksongCoop/`. На Linux и macOS используйте BepInEx для своей платформы.
+- **Windows x64.** Закройте игру и распакуйте `SilksongCoop_v3.3.8.zip` в её папку. BepInEx 5.4.21 уже в архиве. Файл `winhttp.dll` должен лежать рядом с исполняемым файлом игры.
+- **Если BepInEx 5.4.x уже установлен.** Скачайте `SilksongCoop_v3.3.8_plugin-only.zip` и положите обе DLL мода в `BepInEx/plugins/SilksongCoop/`. На Linux и macOS используйте BepInEx для своей платформы.
 
 Запустите Silksong через Steam, загрузите сохранение и нажмите **F10**.
 
