@@ -129,7 +129,9 @@ jobs:
     # only be compiled on the self-hosted runner that has Silksong installed.
     #
     # Only the protected master branch may execute on the persistent game runner.
-    if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    # Keep the job opt-in until a Silksong runner is registered. Otherwise every
+    # push queues indefinitely and leaves a pending deployment in GitHub.
+    if: vars.SILKSONG_MOD_RUNNER_ENABLED == 'true' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: [self-hosted, linux, silksong]
     timeout-minutes: 30
     environment: silksong-mod-build
