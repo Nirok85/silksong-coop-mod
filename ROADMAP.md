@@ -1,6 +1,6 @@
 ﻿# Silksong Co-op Mod — Глобальный план улучшений (15 пунктов)
 
-Текущая beta: [v3.3.9-beta.2](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.9-beta.2), протокол v11.
+Текущая beta: [v3.3.9-beta.3](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.9-beta.3), протокол v11.
 
 > Остальная часть файла — исторический backlog из 15 пунктов и снимки прошлых
 > релизов. [`docs/improvement-plan-2026-11.md`](docs/improvement-plan-2026-11.md)
