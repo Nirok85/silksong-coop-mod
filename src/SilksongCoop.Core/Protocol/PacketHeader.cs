@@ -66,6 +66,7 @@ namespace SilksongCoop.Core.Protocol
             PacketType.ActionTrigger => true,
             PacketType.VitalsSync => true,
             PacketType.PeerReady => true,
+            PacketType.CatchUpComplete => true,
             PacketType.CurrencySync => true,
             PacketType.CurrencyReceipt => true,
             PacketType.WalletSeed => true,

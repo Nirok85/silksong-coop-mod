@@ -1,4 +1,5 @@
 using System;
+using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol;
 using SilksongCoop.Core.Protocol.Packets;
 using Xunit;
@@ -320,6 +321,52 @@ namespace SilksongCoop.Tests
             }
 
             Assert.True(threw, "PacketReader must throw InvalidOperationException on underflow.");
+        }
+
+        [Fact]
+        public void CatchUpCompletePacket_Roundtrip_MatchesExactValues()
+        {
+            var original = new CatchUpCompletePacket
+            {
+                Header = new PacketHeader(PacketType.CatchUpComplete, NetworkChannels.Currency, 0, 12345),
+                SaveInstance = Guid.Parse("0123456789abcdef0123456789abcdef")
+            };
+
+            Span<byte> buffer = stackalloc byte[64];
+            var writer = new PacketWriter(buffer);
+            original.Serialize(ref writer);
+
+            // 12-byte header + 16-byte GUID: keep the wire size in sync with the sender's
+            // bufferSize hint so pooled buffers never truncate the payload.
+            Assert.Equal(PacketHeader.HeaderSize + 16, writer.Position);
+
+            var reader = new PacketReader(writer.WrittenSpan);
+            reader.ReadHeader();
+            Assert.Equal(original.SaveInstance, reader.ReadGuid());
+            Assert.Equal(0, reader.Remaining);
+        }
+
+        [Fact]
+        public void CatchUpCompletePacket_IsKnownPacketType()
+        {
+            // The additive marker must pass the header gate, otherwise every peer would
+            // reject it before reaching the handler.
+            var header = new PacketHeader(PacketType.CatchUpComplete, NetworkChannels.Currency, 0, 0);
+            Assert.True(header.IsValidPacketType);
+        }
+
+        [Fact]
+        public void ValidateCatchUpComplete_RejectsEmptyInstance_AcceptsRealInstance()
+        {
+            Assert.False(PacketValidator.ValidateCatchUpComplete(new CatchUpCompletePacket
+            {
+                SaveInstance = Guid.Empty
+            }));
+
+            Assert.True(PacketValidator.ValidateCatchUpComplete(new CatchUpCompletePacket
+            {
+                SaveInstance = Guid.NewGuid()
+            }));
         }
     }
 }

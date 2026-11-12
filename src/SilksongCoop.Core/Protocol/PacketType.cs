@@ -12,6 +12,8 @@ namespace SilksongCoop.Core.Protocol
         // Vitals & Progression (0x20 - 0x2F)
         VitalsSync          = 0x20,
         PeerReady           = 0x21,
+        /// <summary>Initial catch-up burst dispatched (additive marker, protocol v11).</summary>
+        CatchUpComplete     = 0x22,
 
         // Economy & Inventory (0x30 - 0x3F)
         CurrencySync        = 0x30,

@@ -59,7 +59,11 @@ namespace SilksongCoop.Mod.Services
             var session = _sessionService.SessionState;
             if (transport == null || session?.IsConnected != true) return;
 
-            PacketSender.SendToAll(transport, packet, method, channel, 64, Diagnostics, "[DeathSyncManager]");
+            // A refused send is not retried here (the next lifecycle transition re-broadcasts
+            // the corrected state), but it must not be invisible: silent refusals were
+            // indistinguishable from successful delivery.
+            if (!PacketSender.SendToAll(transport, packet, method, channel, 64, Diagnostics, "[DeathSyncManager]"))
+                SilksongCoopPlugin.LogWarn("[DeathSyncManager] Transport refused a death lifecycle packet.");
         }
 
         private void OnReviveAtPartnerRequested(float x, float y)

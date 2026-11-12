@@ -1069,11 +1069,16 @@ namespace SilksongCoop.Mod.State
 
             for (int i = 0; i < ReplayBatchSize && _replayQueue.Count > 0; i++)
             {
-                var item = _replayQueue.Dequeue();
+                // Peek, then dequeue only after the transport accepted the packet. A refused
+                // send previously lost the item for this replay pass; pausing keeps it for
+                // the next pump (and _worldReplayPending still re-queues everything after a
+                // reconnect or a detected reliable drop).
+                var item = _replayQueue.Peek();
+                bool sent;
                 if (item.IsPersistent)
                 {
                     var stored = item.Persistent;
-                    SendPersistentPacket(new PersistentStatePacket
+                    sent = SendPersistentPacket(new PersistentStatePacket
                     {
                         Header = new PacketHeader(PacketType.PersistentState, WorldChannel, 0, NetworkClock.NowMs),
                         ItemKey = stored.ItemKey,
@@ -1086,7 +1091,7 @@ namespace SilksongCoop.Mod.State
                 else
                 {
                     var stored = item.World;
-                    SendWorldPacket(new WorldEventPacket
+                    sent = SendWorldPacket(new WorldEventPacket
                     {
                         Header = new PacketHeader(PacketType.WorldEvent, WorldChannel, ++_packetSequence, NetworkClock.NowMs),
                         ObjectKey = stored.ObjectKey,
@@ -1098,6 +1103,15 @@ namespace SilksongCoop.Mod.State
                     });
                 }
 
+                if (!sent)
+                {
+                    // Backpressure or a refused send: retry this batch shortly instead of
+                    // advancing past unsent state.
+                    _nextReplaySendTime = Time.unscaledTime + 0.05f;
+                    break;
+                }
+                _replayQueue.Dequeue();
+
                 if (transport.ReliableBacklogCount >= ReplayBacklogThreshold)
                     break;
             }
@@ -1107,10 +1121,11 @@ namespace SilksongCoop.Mod.State
             _nextReplaySendTime = Time.unscaledTime + 0.02f;
         }
 
-        private void SendWorldPacket(WorldEventPacket packet)
+        /// <summary>True when the transport accepted the packet for delivery.</summary>
+        private bool SendWorldPacket(WorldEventPacket packet)
         {
             var transport = _plugin?.ActiveTransport;
-            if (transport == null || !transport.IsHost || packet.OriginPeerId != _revisionOrigin) return;
+            if (transport == null || !transport.IsHost || packet.OriginPeerId != _revisionOrigin) return false;
             packet.OriginPeerId = transport.LocalPeerId.Value;
 
             byte[] buffer = ArrayPool<byte>.Shared.Rent(64);
@@ -1118,11 +1133,12 @@ namespace SilksongCoop.Mod.State
             {
                 var writer = new PacketWriter(buffer);
                 packet.Serialize(ref writer);
-                SendBuffer(buffer, writer.Position);
+                return SendBuffer(buffer, writer.Position);
             }
             catch (Exception ex)
             {
                 SilksongCoopPlugin.LogWarn($"[EnemySync] Failed sending world event: {ex.Message}");
+                return false;
             }
             finally
             {
@@ -1675,10 +1691,11 @@ namespace SilksongCoop.Mod.State
             };
         }
 
-        private void SendPersistentPacket(PersistentStatePacket packet)
+        /// <summary>True when the transport accepted the packet for delivery.</summary>
+        private bool SendPersistentPacket(PersistentStatePacket packet)
         {
             var transport = _plugin?.ActiveTransport;
-            if (transport == null || !transport.IsHost || packet.OriginPeerId != _revisionOrigin) return;
+            if (transport == null || !transport.IsHost || packet.OriginPeerId != _revisionOrigin) return false;
             packet.OriginPeerId = transport.LocalPeerId.Value;
 
             byte[] buffer = ArrayPool<byte>.Shared.Rent(64);
@@ -1686,11 +1703,12 @@ namespace SilksongCoop.Mod.State
             {
                 var writer = new PacketWriter(buffer);
                 packet.Serialize(ref writer);
-                SendBuffer(buffer, writer.Position);
+                return SendBuffer(buffer, writer.Position);
             }
             catch (Exception ex)
             {
                 SilksongCoopPlugin.LogWarn($"[EnemySync] Failed sending persistent state: {ex.Message}");
+                return false;
             }
             finally
             {
@@ -1883,13 +1901,16 @@ namespace SilksongCoop.Mod.State
             var transport = _plugin?.ActiveTransport;
             if (transport == null || _plugin?.SessionState?.IsConnected != true) return false;
 
-            // SendToAll has no return value, and a full reliable window silently drops the
-            // new packet. Avoid entering that state for snapshots so the batch is retried
-            // instead of being marked as sent.
+            // A full reliable window silently refuses new packets. Avoid entering that state
+            // for snapshots so the batch is retried instead of being marked as sent.
             if (requireReliableCapacity && transport.ReliableBacklogCount >= NetworkLimits.SnapshotBacklogThreshold) return false;
 
-            transport.SendToAll(buffer, 0, length, DeliveryMethod.ReliableOrdered, WorldChannel);
-            return true;
+            // Since protocol v11 SendToAll reports acceptance: false means at least one peer
+            // refused (or nobody is connected). Propagate the real result so the caller keeps
+            // the batch and retries, instead of suppressing those enemies until the periodic
+            // reconcile. Retrying after a partial multi-peer refusal only duplicates entries
+            // to the peers that already accepted, which is idempotent for snapshots.
+            return transport.SendToAll(buffer, 0, length, DeliveryMethod.ReliableOrdered, WorldChannel);
         }
 
         /// <summary>

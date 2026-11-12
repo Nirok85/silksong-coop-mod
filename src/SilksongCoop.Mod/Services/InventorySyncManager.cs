@@ -55,9 +55,12 @@ namespace SilksongCoop.Mod.Services
             var session = _sessionService.SessionState;
             if (transport == null || session?.IsConnected != true) return;
 
-            PacketSender.SendToAll(
+            // Item unlocks are re-broadcast during peer catch-up (BroadcastInitialInventory),
+            // so a refusal only delays the unlock — but it must not be silent.
+            if (!PacketSender.SendToAll(
                 transport, packet, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency,
-                512, Diagnostics, "[InventorySyncManager]");
+                512, Diagnostics, "[InventorySyncManager]"))
+                SilksongCoopPlugin.LogWarn("[InventorySyncManager] Transport refused an item unlock broadcast.");
         }
     }
 }

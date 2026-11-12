@@ -51,12 +51,57 @@ namespace SilksongCoop.Tests.Networking
         }
 
         [Fact]
+        public void SendToAll_AllAccepted_ReturnsTrue()
+        {
+            var transport = new RecordingTransport(new[]
+            {
+                new NetworkPeerId(2), new NetworkPeerId(3)
+            });
+
+            bool accepted = transport.SendToAll(new byte[8], 0, 8, DeliveryMethod.ReliableOrdered, 5);
+
+            Assert.True(accepted);
+            Assert.Equal(2, transport.Sent.Count);
+        }
+
+        [Fact]
+        public void SendToAll_PartialRefusal_ReturnsFalseButAttemptsEveryPeer()
+        {
+            var refused = new NetworkPeerId(3);
+            var transport = new RecordingTransport(new[]
+            {
+                new NetworkPeerId(2), refused, new NetworkPeerId(4)
+            });
+            transport.RefuseTargets.Add(refused);
+
+            bool accepted = transport.SendToAll(new byte[8], 0, 8, DeliveryMethod.ReliableOrdered, 5);
+
+            // The aggregate result must report the refusal: sync managers that mark state
+            // "sent" on true would otherwise suppress a batch one peer never received.
+            Assert.False(accepted);
+            Assert.Equal(3, transport.Sent.Count);
+        }
+
+        [Fact]
+        public void SendToAll_MultiPeerRefusal_ReturnsFalse()
+        {
+            var transport = new RecordingMultiPeerTransport(new[] { new NetworkPeerId(2) });
+            transport.BroadcastResult = false;
+
+            bool accepted = transport.SendToAll(new byte[8], 0, 8, DeliveryMethod.ReliableOrdered, 5);
+
+            Assert.False(accepted);
+            Assert.Equal(1, transport.BroadcastCalls);
+        }
+
+        [Fact]
         public void SendToAll_NoPeers_DoesNothing()
         {
             var transport = new RecordingTransport(Array.Empty<NetworkPeerId>());
 
-            transport.SendToAll(new byte[8], 0, 8, DeliveryMethod.Unreliable, 0);
+            bool accepted = transport.SendToAll(new byte[8], 0, 8, DeliveryMethod.Unreliable, 0);
 
+            Assert.False(accepted);
             Assert.Empty(transport.Sent);
         }
 
@@ -70,6 +115,9 @@ namespace SilksongCoop.Tests.Networking
             }
 
             public List<(NetworkPeerId Target, int Length)> Sent { get; } = new();
+
+            /// <summary>Targets whose Send must report a refusal (test-only backpressure).</summary>
+            public HashSet<NetworkPeerId> RefuseTargets { get; } = new();
 
             public bool IsHost => true;
             public bool IsConnected => _peers.Count > 0;
@@ -111,7 +159,7 @@ namespace SilksongCoop.Tests.Networking
                 byte channel)
             {
                 Sent.Add((target, length));
-                return true;
+                return !RefuseTargets.Contains(target);
             }
 
             public void Dispose() { }
@@ -122,13 +170,17 @@ namespace SilksongCoop.Tests.Networking
             public RecordingMultiPeerTransport(IReadOnlyList<NetworkPeerId> peers) : base(peers) { }
 
             public int BroadcastCalls { get; private set; }
+
+            /// <summary>Result returned by the next Broadcast calls (test-only refusal).</summary>
+            public bool BroadcastResult { get; set; } = true;
+
             public int MaxRemotePeers => 3;
             public bool SupportsHostRelay => false;
 
             public bool Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel)
             {
                 BroadcastCalls++;
-                return true;
+                return BroadcastResult;
             }
         }
     }

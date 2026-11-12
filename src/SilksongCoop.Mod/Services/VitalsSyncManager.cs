@@ -25,6 +25,8 @@ namespace SilksongCoop.Mod.Services
         private readonly EnemySyncController? _enemySync;
         private readonly Dictionary<NetworkPeerId, List<CurrencySyncPacket>> _currencyJournal = new();
         private readonly HashSet<NetworkPeerId> _exhaustedCurrencyJournals = new();
+        /// <summary>Peers already warned about a filling journal; warns once per peer.</summary>
+        private readonly HashSet<NetworkPeerId> _journalWarned = new();
         private readonly HashSet<NetworkPeerId> _currencyPeersReady = new();
 
         private const int MaxUnconfirmedTransactions = 4096;
@@ -95,6 +97,7 @@ namespace SilksongCoop.Mod.Services
         {
             _currencyJournal.Clear();
             _exhaustedCurrencyJournals.Clear();
+            _journalWarned.Clear();
         }
 
         internal void OnCurrencyPeerDisconnected(NetworkPeerId peer) => _currencyPeersReady.Remove(peer);
@@ -103,6 +106,7 @@ namespace SilksongCoop.Mod.Services
         {
             _currencyJournal.Remove(peer);
             _exhaustedCurrencyJournals.Remove(peer);
+            _journalWarned.Remove(peer);
         }
 
         internal bool CanResumeCurrencyPeer(NetworkPeerId peer) => !_exhaustedCurrencyJournals.Contains(peer);
@@ -131,11 +135,12 @@ namespace SilksongCoop.Mod.Services
             return total;
         }
 
-        internal void SendWalletSeed(NetworkPeerId peer, (int Rosaries, int Shards) balances)
+        /// <summary>True when the transport accepted the seed for delivery.</summary>
+        internal bool SendWalletSeed(NetworkPeerId peer, (int Rosaries, int Shards) balances)
         {
             var transport = _transportService.ActiveTransport;
-            if (transport == null) return;
-            PacketSender.SendTo(transport, peer, new WalletSeedPacket
+            if (transport == null) return false;
+            return PacketSender.SendTo(transport, peer, new WalletSeedPacket
             {
                 Header = new PacketHeader(PacketType.WalletSeed, NetworkChannels.Currency, 0, NetworkClock.NowMs),
                 Rosaries = balances.Rosaries,
@@ -174,6 +179,15 @@ namespace SilksongCoop.Mod.Services
             foreach (var pair in _currencyJournal)
             {
                 if (_exhaustedCurrencyJournals.Contains(pair.Key)) continue;
+                // Early visibility: receipts stream in continuously, so a journal that
+                // keeps growing here means the partner stopped confirming. Warn once
+                // well before the exhaustion limit turns into a disconnect.
+                if (pair.Value.Count >= MaxUnconfirmedTransactions * 3 / 4 &&
+                    _journalWarned.Add(pair.Key))
+                {
+                    SilksongCoopPlugin.LogWarn(
+                        $"[Coop] Currency journal for {pair.Key} is at {pair.Value.Count}/{MaxUnconfirmedTransactions} unconfirmed transactions; the partner may have stopped confirming receipts.");
+                }
                 if (pair.Value.Count >= MaxUnconfirmedTransactions)
                 {
                     _exhaustedCurrencyJournals.Add(pair.Key);
@@ -192,6 +206,10 @@ namespace SilksongCoop.Mod.Services
                     }
                     continue;
                 }
+                // The peer recovered from the earlier warning (receipts caught up): allow
+                // a fresh warning if the journal ever starts growing again.
+                if (pair.Value.Count < MaxUnconfirmedTransactions / 2) _journalWarned.Remove(pair.Key);
+
                 pair.Value.Add(packet);
                 if (_currencyPeersReady.Contains(pair.Key)) SendCurrencyTo(pair.Key, packet);
             }

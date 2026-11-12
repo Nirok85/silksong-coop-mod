@@ -478,11 +478,18 @@ namespace SilksongCoop.Mod.Services
             };
 
             if (target.HasValue)
-                PacketSender.SendTo(transport, target.Value, packet, DeliveryMethod.ReliableOrdered,
-                    NetworkChannels.World, QuestStatePacket.MaxEncodedBytes);
-            else
-                PacketSender.SendToAll(transport, packet, DeliveryMethod.ReliableOrdered,
-                    NetworkChannels.World, QuestStatePacket.MaxEncodedBytes, diagnostics: null, logContext: "[QuestSync]");
+            {
+                // Authored changes are replayed during peer catch-up, so a refusal only
+                // delays the flags — surface it instead of dropping silently.
+                if (!PacketSender.SendTo(transport, target.Value, packet, DeliveryMethod.ReliableOrdered,
+                        NetworkChannels.World, QuestStatePacket.MaxEncodedBytes))
+                    SilksongCoopPlugin.LogWarn("[QuestSync] Transport refused a quest batch to a single peer.");
+            }
+            else if (!PacketSender.SendToAll(transport, packet, DeliveryMethod.ReliableOrdered,
+                         NetworkChannels.World, QuestStatePacket.MaxEncodedBytes, diagnostics: null, logContext: "[QuestSync]"))
+            {
+                SilksongCoopPlugin.LogWarn("[QuestSync] Transport refused a quest state broadcast.");
+            }
         }
 
         private void CacheQuestFields()

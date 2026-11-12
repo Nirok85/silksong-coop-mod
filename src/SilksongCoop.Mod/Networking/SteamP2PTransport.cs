@@ -755,7 +755,9 @@ namespace SilksongCoop.Mod.Networking
         #region Data Transmission
 
         /// <summary>
-        /// Sends data to all connected peers. Steam currently holds one remote peer.
+        /// Sends data to all connected peers: the primary peer plus notified additional
+        /// lobby members. Returns true only when at least one target exists and every
+        /// target accepted the payload.
         /// </summary>
         public bool Broadcast(byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
@@ -792,7 +794,7 @@ namespace SilksongCoop.Mod.Networking
         /// <summary>
         /// Sends data to a remote peer via Steam P2P.
         /// </summary>
-        /// <param name="target">Target peer (ignored for Steam; sends to current remote peer).</param>
+        /// <param name="target">Target peer: the primary peer or a registered additional peer.</param>
         /// <param name="data">Data buffer to send.</param>
         /// <param name="offset">Offset within the buffer.</param>
         /// <param name="length">Number of bytes to send.</param>

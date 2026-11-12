@@ -400,6 +400,15 @@ namespace SilksongCoop.Core.Protocol
             return true;
         }
 
+        /// <summary>
+        /// Validates a CatchUpComplete marker: the token must identify a real save
+        /// instance, otherwise the marker carries no verifiable session binding.
+        /// </summary>
+        public static bool ValidateCatchUpComplete(CatchUpCompletePacket packet)
+        {
+            return packet.SaveInstance != Guid.Empty;
+        }
+
         // Explicit switches replace Enum.IsDefined on the per-packet path: the reflection
         // overload boxes the value and is measurably slower on Mono. Add new enum members
         // here as well as in their enum declaration.

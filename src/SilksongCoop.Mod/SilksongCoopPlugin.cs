@@ -103,6 +103,14 @@ namespace SilksongCoop.Mod
         private PlayerData? _walletSave;
         private Guid _walletSaveInstance;
         private bool _awaitingWalletSeed;
+        /// <summary>Time.unscaledTime when _awaitingWalletSeed was set; drives the timeout.</summary>
+        private float _awaitingWalletSeedSince;
+        /// <summary>Peers whose wallet seed the transport refused; retried each readiness pump.</summary>
+        private readonly Dictionary<NetworkPeerId, byte> _walletSeedOutstanding = new();
+        /// <summary>Bounded retries before a refused wallet seed fails the session.</summary>
+        private const byte WalletSeedMaxAttempts = 240;
+        /// <summary>Seconds a client waits for the host's wallet seed before giving up.</summary>
+        private const float WalletSeedTimeoutSeconds = 20f;
         private readonly HashSet<NetworkPeerId> _initialStateSent = new();
         private readonly Queue<(NetworkPeerId Peer, byte[] Data)> _deferredGamePackets = new();
         private readonly Dictionary<NetworkPeerId, BenchCheckpointSyncPacket> _pendingCheckpoints = new();
@@ -754,14 +762,17 @@ namespace SilksongCoop.Mod
 
                 // Actions used to go only to the primary peer, so in an experimental 3+
                 // session one guest saw movement without the matching actions.
-                PacketSender.SendToAll(
+                // A refused reliable send is logged: a lost action leaves the partner's
+                // world one trigger behind until the next interaction.
+                if (!PacketSender.SendToAll(
                     ActiveTransport,
                     packet,
                     DeliveryMethod.ReliableOrdered,
                     NetworkChannels.Action,
                     64,
                     MenuUI?.Diagnostics,
-                    "[Coop]");
+                    "[Coop]"))
+                    SilksongCoopPlugin.LogWarn("[Coop] Transport refused an action trigger; the partner may miss it until the next interaction.");
             }
             catch (Exception ex)
             {
@@ -804,8 +815,13 @@ namespace SilksongCoop.Mod
             _benchSave = pd;
             _pendingCheckpoints.Clear();
             if (ActiveTransport != null && SessionState?.IsConnected == true)
-                PacketSender.SendToAll(ActiveTransport, packet, DeliveryMethod.ReliableOrdered,
-                    NetworkChannels.Death, 1024, MenuUI?.Diagnostics);
+            {
+                // The checkpoint is kept in _lastBenchCheckpoint and re-sent during peer
+                // catch-up, so a refusal only delays it — but it must not be silent.
+                if (!PacketSender.SendToAll(ActiveTransport, packet, DeliveryMethod.ReliableOrdered,
+                        NetworkChannels.Death, 1024, MenuUI?.Diagnostics))
+                    SilksongCoopPlugin.LogWarn("[Coop] Transport refused a bench checkpoint broadcast.");
+            }
         }
 
         /// <summary>
@@ -1460,6 +1476,7 @@ namespace SilksongCoop.Mod
             _remoteScenes.Clear();
             _initializedVitalsForConnection = false;
             _awaitingWalletSeed = false;
+            _walletSeedOutstanding.Clear();
         }
 
         private void PumpPeerReadiness()
@@ -1485,6 +1502,9 @@ namespace SilksongCoop.Mod
                     Math.Max(1, pd.silkMax / 9), pd.nailUpgrades, pd.geo, pd.ShellShards, preserveWallet: resume);
                 _initializedVitalsForConnection = true;
             }
+
+            PumpWalletSeed();
+            PumpWalletSeedTimeout();
 
             while (_deferredGamePackets.Count > 0)
             {
@@ -1529,9 +1549,18 @@ namespace SilksongCoop.Mod
                         if (existingPeer || SessionState.IsHost)
                             _vitalsSyncManager?.ForgetCurrencyPeer(peer);
                         if (SessionState.IsHost)
-                            _vitalsSyncManager?.SendWalletSeed(peer, VitalsSync.GetWalletBalances());
+                        {
+                            // A refused reliable send previously left the client waiting for
+                            // a seed forever. Queue a bounded retry instead of assuming
+                            // the send succeeded.
+                            if (_vitalsSyncManager?.SendWalletSeed(peer, VitalsSync.GetWalletBalances()) != true)
+                                _walletSeedOutstanding[peer] = WalletSeedMaxAttempts;
+                        }
                         else if (SessionState.RemotePeerId == peer)
+                        {
                             _awaitingWalletSeed = true;
+                            _awaitingWalletSeedSince = Time.unscaledTime;
+                        }
                     }
                     if (SessionState.IsHost || resumedPeer || SessionState.RemotePeerId != peer)
                         _vitalsSyncManager?.EnableCurrencyPeer(peer);
@@ -1543,8 +1572,25 @@ namespace SilksongCoop.Mod
                     QuestStateSync?.ReplayAuthoredChanges(peer);
                     if (_lastBenchCheckpoint.HasValue && ReferenceEquals(_benchSave, PlayerData.instance) &&
                         SessionState.IsHost)
-                        PacketSender.SendTo(ActiveTransport, peer, _lastBenchCheckpoint.Value,
-                            DeliveryMethod.ReliableOrdered, NetworkChannels.Death, 1024, MenuUI?.Diagnostics);
+                    {
+                        // One-shot catch-up item: a refusal means the partner stays on an
+                        // older checkpoint until the next bench touch, so make it visible.
+                        if (!PacketSender.SendTo(ActiveTransport, peer, _lastBenchCheckpoint.Value,
+                                DeliveryMethod.ReliableOrdered, NetworkChannels.Death, 1024, MenuUI?.Diagnostics))
+                            SilksongCoopPlugin.LogWarn("[Coop] Transport refused the bench checkpoint catch-up; it is re-sent at the next bench.");
+                    }
+
+                    // Tell the peer this save instance's initial burst was dispatched.
+                    // Additive within protocol v11: an older 3.3.9 build rejects the
+                    // unknown type and continues without it. Same reliable Currency
+                    // channel as PeerReady/wallet seed, so the marker stays ordered
+                    // behind them.
+                    if (!PacketSender.SendTo(ActiveTransport, peer, new CatchUpCompletePacket
+                    {
+                        Header = new PacketHeader(PacketType.CatchUpComplete, NetworkChannels.Currency, 0, NetworkClock.NowMs),
+                        SaveInstance = saveInstance
+                    }, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, PacketHeader.HeaderSize + 16, MenuUI?.Diagnostics))
+                        SilksongCoopPlugin.LogWarn("[Coop] Transport refused the catch-up-complete marker.");
                 }
 
                 if (_pendingCheckpoints.TryGetValue(peer, out var bench) &&
@@ -1553,6 +1599,69 @@ namespace SilksongCoop.Mod
                     _pendingCheckpoints.Remove(peer);
                 }
             }
+        }
+
+        /// <summary>
+        /// Retries wallet seeds the transport refused, and fails the session when the seed
+        /// cannot be delivered. Without this a refused seed left the client blocked on
+        /// <see cref="_awaitingWalletSeed"/> for the rest of the connection.
+        /// </summary>
+        private void PumpWalletSeed()
+        {
+            if (_walletSeedOutstanding.Count == 0) return;
+            if (SessionState?.IsConnected != true || SessionState.IsHost != true || ActiveTransport == null)
+            {
+                _walletSeedOutstanding.Clear();
+                return;
+            }
+
+            List<NetworkPeerId>? delivered = null;
+            foreach (var pair in _walletSeedOutstanding)
+            {
+                if (_vitalsSyncManager?.SendWalletSeed(pair.Key, VitalsSync.GetWalletBalances()) == true)
+                {
+                    delivered ??= new List<NetworkPeerId>();
+                    delivered.Add(pair.Key);
+                    continue;
+                }
+
+                if (pair.Value > 1)
+                {
+                    _walletSeedOutstanding[pair.Key] = (byte)(pair.Value - 1);
+                    continue;
+                }
+
+                _walletSeedOutstanding.Clear();
+                SilksongCoopPlugin.LogWarn("[Coop] Wallet seed could not be delivered; disconnecting.");
+                DisconnectFromSession(DisconnectReason.ConnectionFailed);
+                return;
+            }
+
+            if (delivered != null)
+            {
+                foreach (var peer in delivered) _walletSeedOutstanding.Remove(peer);
+            }
+        }
+
+        /// <summary>
+        /// Client-side backstop: when the host's wallet seed never arrives, fail the session
+        /// with a visible reason instead of silently disabling currency sync until the next
+        /// reconnect.
+        /// </summary>
+        private void PumpWalletSeedTimeout()
+        {
+            if (!_awaitingWalletSeed) return;
+            if (SessionState?.IsConnected != true || SessionState.IsHost == true)
+            {
+                _awaitingWalletSeed = false;
+                return;
+            }
+
+            if (Time.unscaledTime - _awaitingWalletSeedSince <= WalletSeedTimeoutSeconds) return;
+
+            SilksongCoopPlugin.LogWarn("[Coop] Wallet seed was not received in time; disconnecting.");
+            _awaitingWalletSeed = false;
+            DisconnectFromSession(DisconnectReason.ConnectionFailed);
         }
 
         /// <summary>
@@ -1637,6 +1746,23 @@ namespace SilksongCoop.Mod
                         if (_readyForCatchUp.TryAdd(peer, saveInstance)) PumpPeerReadiness();
                         break;
 
+                    case PacketType.CatchUpComplete:
+                        reader.ReadHeader();
+                        var completedInstance = reader.ReadGuid();
+                        if (reader.Remaining != 0 || completedInstance == Guid.Empty ||
+                            completedInstance != _walletSaveInstance)
+                        {
+                            // The marker carries OUR save instance (echoed from the
+                            // PeerReady token); anything else is stale or forged.
+                            MenuUI?.Diagnostics?.RecordRejected();
+                            return;
+                        }
+                        // Readiness said the peer can apply state; this says its initial
+                        // burst was actually dispatched. Diagnostic only — the wallet-seed
+                        // retry and timeout remain the correctness mechanism.
+                        Logger.LogInfo($"[Coop] Initial catch-up complete for {peer.DisplayName}.");
+                        break;
+
                     case PacketType.TransformSync:
                         var trans = TransformSyncPacket.Deserialize(ref reader);
                         if (reader.Remaining != 0 || !PacketValidator.ValidateTransformSync(trans)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
@@ -1698,11 +1824,16 @@ namespace SilksongCoop.Mod
                         if (currency.DeltaAmount == 0 && currency.PickupKey == 0) break;
                         VitalsSync.HandleCurrencyPacket(peer, currency);
                         if (currency.DeltaAmount != 0 && ActiveTransport != null)
-                            PacketSender.SendTo(ActiveTransport, peer, new CurrencyReceiptPacket
+                        {
+                            // A refused receipt keeps the transaction in the sender's journal
+                            // (counted toward exhaustion), so surface the refusal in the log.
+                            if (!PacketSender.SendTo(ActiveTransport, peer, new CurrencyReceiptPacket
                             {
                                 Header = new PacketHeader(PacketType.CurrencyReceipt, NetworkChannels.Currency, 0, NetworkClock.NowMs),
                                 TransactionId = currency.TransactionId
-                            }, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, PacketHeader.HeaderSize + 16);
+                            }, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, PacketHeader.HeaderSize + 16))
+                                SilksongCoopPlugin.LogWarn("[Coop] Transport refused a currency receipt; journal keeps the transaction unconfirmed.");
+                        }
                         break;
 
                     case PacketType.WalletSeed:
