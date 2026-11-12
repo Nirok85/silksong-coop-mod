@@ -39,6 +39,6 @@
 
 ## Ссылки
 
-[История изменений](CHANGELOG.md) · [Архитектура](docs/architecture.md) · [Тестирование](docs/testing.md) · [Сборка и выпуск](docs/RELEASING.md)
+[Карта документации](docs/README.md) · [История изменений](CHANGELOG.md) · [Архитектура](docs/architecture.md) · [Тестирование](docs/testing.md) · [Сборка и выпуск](docs/RELEASING.md)
 
 Неофициальный фанатский мод. [Лицензия MIT](https://github.com/Nirok85/silksong-coop-mod/blob/master/LICENSE) · [Лицензии сторонних компонентов](https://github.com/Nirok85/silksong-coop-mod/blob/master/THIRD-PARTY-NOTICES.md)

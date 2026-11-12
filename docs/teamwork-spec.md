@@ -1,6 +1,11 @@
 # Silksong Co-op Mod — Performance & Architecture Campaign Spec
 
-> **Current campaign (2026-11-08).** This supersedes the v2.x campaign spec
+> **Historical snapshot (2026-11-08).** This spec targets v3.3.1 and protocol v8.
+> It is retained as a campaign record, not as current requirements. See
+> [the documentation map](README.md), [protocol v11](protocol-v11.md), and
+> [the current release checklist](release-checklist.md).
+
+> **Campaign status as of 2026-11-08.** At that time this superseded the v2.x campaign spec
 > previously stored in this file. The old plan remains in git history.
 
 ## Baseline

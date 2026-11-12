@@ -4,13 +4,10 @@
 > current releases see [RELEASING.md](RELEASING.md) and
 > [protocol-v11.md](protocol-v11.md).
 
-> **Patch 3.0.3-3.3.1:** no protocol change and no extra migration step. Install
-> 3.3.1 instead of 3.0.0; Steam lobbies compare the full mod version, so both
-> players must use the same release (UDP remains wire-compatible with 3.0.x,
-> but stable pickup dedup needs 3.2.0 on both sides and correct combined-damage
-> semantics need 3.3.1). 3.3.0 adds the optional `[Network] SteamMaxPlayers`;
-> leave it at 2 unless every player is on 3.3.1 and wants the experimental 3+
-> Steam mesh.
+> This file documents only the 2.x → 3.0.0 migration. It does not describe
+> intermediate releases or the current beta. Current players should follow the
+> root README and install the same release on every peer; current wire-format
+> compatibility is documented in [protocol-v11.md](protocol-v11.md).
 
 ## Breaking changes
 

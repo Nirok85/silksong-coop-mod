@@ -37,6 +37,6 @@ Launch Silksong through Steam, load a save and press **F10**.
 
 ## Project links
 
-[Changelog](CHANGELOG.md) · [Architecture](docs/architecture.md) · [Testing](docs/testing.md) · [Build and release](docs/RELEASING.md)
+[Documentation map](docs/README.md) · [Changelog](CHANGELOG.md) · [Architecture](docs/architecture.md) · [Testing](docs/testing.md) · [Build and release](docs/RELEASING.md)
 
 Unofficial fan mod. [MIT license](https://github.com/Nirok85/silksong-coop-mod/blob/master/LICENSE) · [Third-party notices](https://github.com/Nirok85/silksong-coop-mod/blob/master/THIRD-PARTY-NOTICES.md)

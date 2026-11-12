@@ -54,6 +54,8 @@ Record game version, mod version, release commit SHA, OS, transport and pass/fai
 - [ ] Steam 3+ lobby (`SteamMaxPlayers=3`): all peers see each other, per-peer vitals/HUD work, death/revive affects only the correct player, a quiet peer is not timed out, and primary promotion keeps the session alive.
 - [ ] Quest interaction: offer/progress a quest and verify the partner sees the same quest state; no duplicate flags are re-sent.
 - [ ] Diagnostics bundle writes a file and the room code is redacted.
+- [ ] Inspect the beta UI in game at 1280×720 and 1024×600: F10 frame, text and tabs; F11 overlap; HUD labels and bars; page rotation with multiple peers; notification clipping.
+- [ ] Verify the UI font and Cyrillic labels on each supported operating system; the menu uses the game's GUI font.
 
 ## Publish
 
