@@ -47,6 +47,7 @@ jobs:
           dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj
           -c Release
           --logger "trx;LogFileName=nightly.trx"
+          --results-directory "${{ runner.temp }}/nightly-test-results"
           --blame-hang --blame-hang-timeout 10m
 
       - name: Verify test results
@@ -54,9 +55,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          trx=$(find . -name nightly.trx -print -quit)
-          if [ -z "$trx" ]; then
-            echo "::error::nightly.trx was not produced"
+          trx="${RUNNER_TEMP}/nightly-test-results/nightly.trx"
+          if [ ! -f "$trx" ]; then
+            echo "::error::nightly.trx was not produced at the expected path"
             exit 1
           fi
           if grep -q 'outcome="NotExecuted"' "$trx"; then
@@ -69,7 +70,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nightly-test-results
-          path: '**/nightly.trx'
+          path: '${{ runner.temp }}/nightly-test-results/nightly.trx'
           if-no-files-found: error
 
   benchmark-smoke:

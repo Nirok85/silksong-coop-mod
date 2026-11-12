@@ -63,6 +63,7 @@ jobs:
           dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj
           -c Release
           --logger "trx;LogFileName=results.trx"
+          --results-directory "${{ runner.temp }}/test-results"
           --blame-hang --blame-hang-timeout 5m
 
       - name: Verify test results
@@ -70,9 +71,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          trx=$(find . -name results.trx -print -quit)
-          if [ -z "$trx" ]; then
-            echo "::error::results.trx was not produced; the test run cannot be trusted"
+          trx="${RUNNER_TEMP}/test-results/results.trx"
+          if [ ! -f "$trx" ]; then
+            echo "::error::results.trx was not produced at the expected path; the test run cannot be trusted"
             exit 1
           fi
           if grep -q 'outcome="NotExecuted"' "$trx"; then
@@ -85,7 +86,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-results-${{ matrix.os }}
-          path: '**/results.trx'
+          path: '${{ runner.temp }}/test-results/results.trx'
           if-no-files-found: error
 
   release-metadata:
