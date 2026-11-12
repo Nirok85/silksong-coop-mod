@@ -26,7 +26,10 @@ namespace SilksongCoop.Mod.Services
             if (ActiveTransport != null)
             {
                 try { ActiveTransport.Disconnect(); }
-                catch { }
+                catch (Exception ex)
+                {
+                    SilksongCoopPlugin.LogWarn($"[TransportService] Previous transport disconnect failed: {ex.Message}");
+                }
             }
 
             ActiveTransport = transport;

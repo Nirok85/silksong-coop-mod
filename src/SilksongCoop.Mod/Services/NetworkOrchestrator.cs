@@ -262,7 +262,7 @@ namespace SilksongCoop.Mod.Services
                     // list always contained RemotePeerId.
                     for (int i = 0; i < recipients.Count; i++)
                     {
-                        transport.Send(
+                        bool accepted = transport.Send(
                             recipients[i],
                             buffer,
                             0,
@@ -270,8 +270,15 @@ namespace SilksongCoop.Mod.Services
                             DeliveryMethod.Unreliable,
                             NetworkChannels.Transform);
 
-                        session.RecordSent(writer.Position);
-                        Diagnostics?.RecordSent(writer.Position);
+                        if (accepted)
+                        {
+                            session.RecordSent(writer.Position);
+                            Diagnostics?.RecordSent(writer.Position);
+                        }
+                        else
+                        {
+                            SilksongCoopPlugin.LogWarn($"[NetworkOrchestrator] Transform send refused for peer {recipients[i]}.");
+                        }
                     }
                 }
                 finally

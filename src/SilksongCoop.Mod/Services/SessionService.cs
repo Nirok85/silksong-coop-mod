@@ -83,7 +83,10 @@ namespace SilksongCoop.Mod.Services
                         transport.Disconnect();
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[SessionService] Transport disconnect failed: {ex.Message}");
+            }
             SessionState.SetDisconnected(reason);
             _eventBus.Publish(new SessionEndedEvent { Reason = reason });
         }
@@ -93,6 +96,7 @@ namespace SilksongCoop.Mod.Services
             _plugin.CloneSpawner?.ResetAllClones();
             _plugin.InventorySync?.ResetSessionState();
             _plugin.EnemySync?.ResetSession();
+            _plugin.QuestStateSync?.ResetSession();
             SessionState?.SetDisconnected(DisconnectReason.GracefulDisconnect);
         }
     }

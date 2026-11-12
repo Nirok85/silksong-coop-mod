@@ -1950,7 +1950,9 @@ namespace SilksongCoop.Mod
                         break;
 
                     case PacketType.QuestState:
-                        var questState = QuestStatePacket.Deserialize(ref reader);
+                        QuestStatePacket questState;
+                        try { questState = QuestStatePacket.Deserialize(ref reader); }
+                        catch (FormatException) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         if (reader.Remaining != 0 || !PacketValidator.ValidateQuestState(questState)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
                         QuestStateSync?.ApplyRemote(questState);
                         break;
