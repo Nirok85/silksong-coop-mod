@@ -24,9 +24,20 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
 if ([string]::IsNullOrWhiteSpace($Directory)) {
-    $Directory = Join-Path $root "dist/$Version"
+    # Both package scripts write directly to dist/ by default.
+    $Directory = Join-Path $root 'dist'
 }
 $Directory = (Resolve-Path -LiteralPath $Directory).Path
+
+$projectPath = Join-Path $root 'src/SilksongCoop.Mod/SilksongCoop.Mod.csproj'
+[xml]$project = Get-Content -LiteralPath $projectPath -Raw -Encoding UTF8
+$projectVersion = [string]$project.Project.PropertyGroup.Version | Select-Object -First 1
+if ([string]::IsNullOrWhiteSpace($projectVersion)) {
+    throw "Unable to read project version from $projectPath"
+}
+if ($Version -ne $projectVersion) {
+    throw "Artifact version $Version does not match project version $projectVersion"
+}
 
 $failures = New-Object System.Collections.Generic.List[string]
 

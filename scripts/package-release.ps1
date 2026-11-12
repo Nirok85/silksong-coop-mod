@@ -58,10 +58,32 @@ function Assert-SafeZip {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [System.IO.Compression.ZipFile]::OpenRead($Path)
     try {
+        $seen = [System.Collections.Generic.Dictionary[string,bool]]::new([StringComparer]::OrdinalIgnoreCase)
         foreach ($entry in $archive.Entries) {
-            $name = $entry.FullName.Replace('\', '/')
-            if ($name.StartsWith('/') -or $name -match '(^|/)\.\.(/|$)') {
-                throw "Unsafe path in $Path`: $name"
+            $name = $entry.FullName
+            $canonical = $name.TrimEnd('/')
+            $segments = $canonical.Split('/')
+            $mode = ($entry.ExternalAttributes -shr 16) -band 0xF000
+            $unsafe = $name.Contains('\') -or $segments -contains '' -or ($segments | Where-Object {
+                $_ -eq '.' -or $_ -eq '..' -or
+                $_ -match '^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(\.|$)' -or
+                $_ -match '[<>:"|?*\x00-\x1F]|[. ]$'
+            })
+            if ($unsafe -or $mode -notin @(0, 0x8000, 0x4000)) {
+                throw "Unsafe entry in $Path`: $name"
+            }
+            if ($seen.ContainsKey($canonical)) {
+                throw "Duplicate entry in $Path`: $name"
+            }
+            $seen.Add($canonical, $name.EndsWith('/'))
+        }
+        foreach ($name in $seen.Keys) {
+            $ancestor = $name
+            while (($slash = $ancestor.LastIndexOf('/')) -ge 0) {
+                $ancestor = $ancestor.Substring(0, $slash)
+                if ($seen.ContainsKey($ancestor) -and -not $seen[$ancestor]) {
+                    throw "File used as directory in $Path`: $ancestor"
+                }
             }
         }
     }

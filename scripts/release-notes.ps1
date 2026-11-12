@@ -29,7 +29,7 @@ $start = -1
 $end = $lines.Count
 
 for ($i = 0; $i -lt $lines.Count; $i++) {
-    if ($lines[$i] -match "^## \[$escaped\]") {
+    if ($lines[$i] -match "^## \[$escaped\](?:\s|$)") {
         $start = $i + 1
         continue
     }

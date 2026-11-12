@@ -66,15 +66,27 @@ for doc in README.ru.md CHANGELOG.md ROADMAP.md; do
 done
 if [ -d "$ROOT/docs" ]; then cp -r "$ROOT/docs" "$PLUGIN/"; fi
 cp -r "$ROOT/LICENSES" "$PLUGIN/"
-sed -i "s/__VERSION__/$VERSION/g" "$PLUGIN/INSTALL.txt"
+if sed --version >/dev/null 2>&1; then
+    sed -i "s/__VERSION__/$VERSION/g" "$PLUGIN/INSTALL.txt"
+else
+    sed -i '' "s/__VERSION__/$VERSION/g" "$PLUGIN/INSTALL.txt"
+fi
 PLUGIN_ZIP="$OUT_DIR/SilksongCoop_v${VERSION}_plugin-only.zip"
 rm -f "$PLUGIN_ZIP"
 (cd "$PLUGIN" && zip -qr "$PLUGIN_ZIP" .)
 echo "  -> $PLUGIN_ZIP"
 
+hash_files() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$@"
+    else
+        shasum -a 256 "$@"
+    fi
+}
+
 write_plugin_manifest() {
     HASH_FILE="$OUT_DIR/SilksongCoop_v${VERSION}_SHA256SUMS.txt"
-    (cd "$OUT_DIR" && sha256sum "SilksongCoop_v${VERSION}_plugin-only.zip" > "$HASH_FILE")
+    (cd "$OUT_DIR" && hash_files "SilksongCoop_v${VERSION}_plugin-only.zip" > "$HASH_FILE")
     cat "$HASH_FILE"
 }
 
@@ -98,7 +110,7 @@ if [ -z "${BEPINEX_ZIP:-}" ]; then
     curl -sSL --fail --retry 3 -o "$BEPINEX_SRC" "$BEPINEX_URL"
 fi
 
-ACTUAL_BEPINEX_SHA="$(sha256sum "$BEPINEX_SRC" | awk '{print $1}')"
+ACTUAL_BEPINEX_SHA="$(hash_files "$BEPINEX_SRC" | awk '{print $1}')"
 echo "    BepInEx SHA256: $ACTUAL_BEPINEX_SHA"
 if [ -n "${BEPINEX_SHA256:-}" ]; then
     EXPECTED_BEPINEX_SHA="$(printf '%s' "$BEPINEX_SHA256" | tr '[:upper:]' '[:lower:]')"
@@ -160,7 +172,7 @@ echo "  -> $FULL_ZIP"
 
 echo "==> SHA256"
 HASH_FILE="$OUT_DIR/SilksongCoop_v${VERSION}_SHA256SUMS.txt"
-(cd "$OUT_DIR" && sha256sum "SilksongCoop_v${VERSION}.zip" "SilksongCoop_v${VERSION}_plugin-only.zip" > "$HASH_FILE")
+(cd "$OUT_DIR" && hash_files "SilksongCoop_v${VERSION}.zip" "SilksongCoop_v${VERSION}_plugin-only.zip" > "$HASH_FILE")
 cat "$HASH_FILE"
 
 echo "==> Done"
