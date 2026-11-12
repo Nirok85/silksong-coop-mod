@@ -3,7 +3,7 @@
 ![Версия](https://img.shields.io/badge/Version-3.3.9-success)
 [![CI](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml)
 
-[English version](README.md) · [Скачать v3.3.9 beta](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.9-beta.1)
+[English version](README.md) · [Скачать v3.3.9 beta.2](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.9-beta.2)
 
 Исследуйте Фарлум вдвоём в Steam-версии Silksong для ПК. Сражайтесь вместе и делитесь валютой, улучшениями и открытиями. Текущее здоровье, шёлк и экипировка у каждого свои.
 

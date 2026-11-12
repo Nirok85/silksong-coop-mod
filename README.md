@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/Version-3.3.9-success)
 [![CI](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml)
 
-[Русская версия](README.ru.md) · [Download v3.3.9 beta](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.9-beta.1)
+[Русская версия](README.ru.md) · [Download v3.3.9 beta.2](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.9-beta.2)
 
 Explore Pharloom together in a two-player co-op mod for the Steam PC version of Silksong. Fight enemies together and share currency, upgrades and unlocks. Each player manages their own health, silk and equipped gear.
 
