@@ -90,8 +90,6 @@ namespace SilksongCoop.Mod.UI
 
         // ── Cached skin (built once) ───────────────────────────────────────────
         private static GUISkin? _cached;
-        private static Font? _font;
-        private static Font? _titleFont;
         private static Texture2D? _texButton, _texButtonHover, _texTabActive;
         private static Texture2D? _texBgDeepest, _texBgPanel, _texBgField, _texBgSubtle;
         private static Texture2D? _texGold, _texGoldBright, _texGoldDim;
@@ -118,25 +116,11 @@ namespace SilksongCoop.Mod.UI
         /// </summary>
         public static void Release()
         {
-            // The skin is an Instantiate() clone and the font is created at runtime; both
-            // are native objects that outlive the managed references without an explicit
-            // Destroy.
+            // The cloned skin is a native object and must be destroyed explicitly.
             if (_cached != null)
             {
                 UnityEngine.Object.Destroy(_cached);
                 _cached = null;
-            }
-
-            if (_font != null)
-            {
-                UnityEngine.Object.Destroy(_font);
-                _font = null;
-            }
-
-            if (_titleFont != null)
-            {
-                UnityEngine.Object.Destroy(_titleFont);
-                _titleFont = null;
             }
 
             DestroyTexture(ref _texBgDeepest);
@@ -197,6 +181,18 @@ namespace SilksongCoop.Mod.UI
             GUI.color = previous;
         }
 
+        /// <summary>Draws a small needle and thread motif along the window frame.</summary>
+        public static void DrawNeedle(Vector2 center)
+        {
+            if (Event.current.type != EventType.Repaint) return;
+            Color previous = GUI.color;
+            GUI.color = Gold;
+            GUI.DrawTexture(new Rect(center.x - 18f, center.y, 36f, 1f), WhitePixel);
+            GUI.DrawTexture(new Rect(center.x - 3f, center.y - 1f, 6f, 3f), WhitePixel);
+            GUI.DrawTexture(new Rect(center.x - 1f, center.y - 2f, 2f, 5f), WhitePixel);
+            GUI.color = previous;
+        }
+
         // ── Builder ────────────────────────────────────────────────────────────
         private static GUISkin BuildSkin()
         {
@@ -217,20 +213,9 @@ namespace SilksongCoop.Mod.UI
             _texButtonHover = MakeFramedTex(BgSubtle, Gold);
             _texTabActive = MakeFramedTex(BgSubtle, GoldBright);
 
-            // ── Font setup (use Unity's default font at various sizes) ─────────
-            // Cached so Release() can destroy the runtime-created font.
-            _font = Font.CreateDynamicFontFromOSFont("Segoe UI", 14);
-            // Fall back to Unity's built-in font when the OS font is unavailable (Linux/macOS
-            // or a stripped system), so the UI never renders with a null font.
-            if (_font == null) _font = GUI.skin != null ? GUI.skin.font : null;
-            var font = _font;
-            var installedFonts = Font.GetOSInstalledFontNames();
-            foreach (string candidate in new[] { "Georgia", "Liberation Serif", "Times New Roman" })
-            {
-                if (!Array.Exists(installedFonts, name => string.Equals(name, candidate, StringComparison.OrdinalIgnoreCase))) continue;
-                _titleFont = Font.CreateDynamicFontFromOSFont(candidate, 16);
-                if (_titleFont != null) break;
-            }
+            // Reuse the game's GUI font for predictable metrics across operating systems.
+            // The font belongs to the game and must not be destroyed by this skin.
+            var font = skin.font;
 
             // ── WINDOW ──────────────────────────────────────────────────────────
             skin.window = new GUIStyle(skin.window)
@@ -352,7 +337,7 @@ namespace SilksongCoop.Mod.UI
             var titleStyle = new GUIStyle(skin.label)
             {
                 normal = { textColor = TextTitle },
-                font = _titleFont ?? font,
+                font = font,
                 fontSize = 16,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleLeft,

@@ -387,20 +387,42 @@ namespace SilksongCoop.Mod.UI
             var peers = vitals.RemotePeers;
             if (peers.Count == 0) return;
 
-            const float hudW = 180f;
+            float hudW = Mathf.Min(180f, Mathf.Max(0f, Screen.width - 32f));
             const float hudH = 68f;
             const float gap = 6f;
+            if (hudW < 100f) return;
             float x = _diagnosticsOverlay?.IsVisible == true ? 16f : Mathf.Max(0f, Screen.width - hudW - 16f);
             float y = 40f;
 
+            int eligible = 0;
+            for (int i = 0; i < peers.Count; i++)
+                if (peers[i].MaxHealth > 0 || peers[i].MaxSilkSpools > 0) eligible++;
+            int slots = Mathf.FloorToInt((Screen.height - y + gap) / (hudH + gap));
+            if (slots <= 0 || eligible == 0) return;
+            if (eligible > slots)
+                slots = Mathf.FloorToInt((Screen.height - y - 18f + gap) / (hudH + gap));
+            if (slots <= 0) return;
+            int pages = (eligible + slots - 1) / slots;
+            int page = pages > 1 ? (int)(Time.unscaledTime / 5f) % pages : 0;
+            int first = page * slots;
+            int eligibleIndex = 0;
             int shown = 0;
             for (int i = 0; i < peers.Count; i++)
             {
                 var peer = peers[i];
                 if (peer.MaxHealth <= 0 && peer.MaxSilkSpools <= 0) continue;
+                if (eligibleIndex++ < first) continue;
+                if (shown >= slots) break;
 
                 DrawPeerVitalsBlock(peer, x, y + shown * (hudH + gap), hudW, hudH);
                 shown++;
+            }
+            if (pages > 1)
+            {
+                GUI.color = SilksongSkin.TextMuted;
+                GUI.Label(new Rect(x, y + shown * (hudH + gap), hudW, 16f),
+                    $"{page + 1} / {pages}", _barLabelStyle ?? Skin.label);
+                GUI.color = Color.white;
             }
         }
 
@@ -431,7 +453,7 @@ namespace SilksongCoop.Mod.UI
 
             if (!alive)
             {
-                GUI.color = new Color(0.95f, 0.35f, 0.35f);
+                GUI.color = SilksongSkin.RedError;
                 GUI.Label(new Rect(x + hudW - 56f, y + 2f, 50f, 16f), Loc.T("DEAD"), _hudNameStyle ?? Skin.label);
             }
 
@@ -439,29 +461,31 @@ namespace SilksongCoop.Mod.UI
             float barX = x + 8f;
             float barW = hudW - 16f;
             float barH = 8f;
-            float barY = y + 22f;
+            float barY = y + 31f;
 
             float hpFrac = peer.MaxHealth > 0 ? (float)peer.Health / peer.MaxHealth : 0f;
             Color hpColor = alive ? SilksongSkin.RedError : new Color(0.45f, 0.30f, 0.30f);
-            DrawStatusBar(barX, barY, barW, barH, hpFrac, hpColor,
-                Loc.T("HP {0}/{1}", peer.Health, peer.MaxHealth));
+            GUI.color = SilksongSkin.TextCream;
+            GUI.Label(new Rect(barX, y + 17f, barW, 14f), Loc.T("HP {0}/{1}", peer.Health, peer.MaxHealth), _barLabelStyle ?? Skin.label);
+            DrawStatusBar(barX, barY, barW, barH, hpFrac, hpColor);
 
             // Silk bar
-            float silkY = y + 42f;
+            float silkY = y + 57f;
             float silkFrac = peer.MaxSilkSpools > 0 ? (float)peer.Silk / (peer.MaxSilkSpools * 9f) : 0f;
             Color silkColor = alive ? SilksongSkin.BlueInfo : new Color(0.30f, 0.36f, 0.39f);
-            DrawStatusBar(barX, silkY, barW, barH, silkFrac, silkColor,
-                Loc.T("Silk {0}/{1}", peer.Silk, peer.MaxSilkSpools * 9));
+            GUI.color = SilksongSkin.TextCream;
+            GUI.Label(new Rect(barX, y + 43f, barW, 14f), Loc.T("Silk {0}/{1}", peer.Silk, peer.MaxSilkSpools * 9), _barLabelStyle ?? Skin.label);
+            DrawStatusBar(barX, silkY, barW, barH, silkFrac, silkColor);
 
             GUI.color = Color.white;
         }
 
-        private void DrawStatusBar(float x, float y, float w, float h, float fraction, Color fillColor, string label)
+        private void DrawStatusBar(float x, float y, float w, float h, float fraction, Color fillColor)
         {
             fraction = Mathf.Clamp01(fraction);
 
             // Background
-            GUI.color = new Color(0.12f, 0.10f, 0.18f, 0.9f);
+            GUI.color = SilksongSkin.BgField;
             GUI.DrawTexture(new Rect(x, y, w, h), SilksongSkin.WhitePixel);
 
             // Fill
@@ -472,15 +496,7 @@ namespace SilksongCoop.Mod.UI
             }
 
             // Border
-            GUI.color = new Color(0.3f, 0.28f, 0.4f, 0.5f);
-            GUI.DrawTexture(new Rect(x, y, w, 1), SilksongSkin.WhitePixel);
-            GUI.DrawTexture(new Rect(x, y + h - 1, w, 1), SilksongSkin.WhitePixel);
-            GUI.DrawTexture(new Rect(x, y, 1, h), SilksongSkin.WhitePixel);
-            GUI.DrawTexture(new Rect(x + w - 1, y, 1, h), SilksongSkin.WhitePixel);
-
-            // Label
-            GUI.color = SilksongSkin.TextCream;
-            GUI.Label(new Rect(x, y, w, h), label, _barLabelStyle ?? Skin.label);
+            SilksongSkin.DrawFrame(new Rect(x, y, w, h), SilksongSkin.GoldDim);
         }
 
         // ─── Spectator overlay (death state) ──────────────────────────────────
@@ -493,8 +509,8 @@ namespace SilksongCoop.Mod.UI
             if (_hudNameStyle != null && _barLabelStyle != null && _placeholderStyle != null) return;
             var title = _styleTitle ?? Skin.label;
             var label = Skin.label;
-            _hudNameStyle = new GUIStyle(title) { fontSize = 11 };
-            _barLabelStyle = new GUIStyle(label) { fontSize = 9, alignment = TextAnchor.MiddleCenter };
+            _hudNameStyle = new GUIStyle(title) { fontSize = 11, wordWrap = false, clipping = TextClipping.Clip };
+            _barLabelStyle = new GUIStyle(label) { fontSize = 11, alignment = TextAnchor.MiddleLeft, wordWrap = false, clipping = TextClipping.Clip, padding = new RectOffset(0, 0, 0, 0) };
             _spectTitleStyle = new GUIStyle(title) { fontSize = 16, alignment = TextAnchor.MiddleCenter };
             _spectSubStyle = new GUIStyle(label) { fontSize = 13, alignment = TextAnchor.MiddleCenter };
             _wipeTitleStyle = new GUIStyle(title) { fontSize = 15, alignment = TextAnchor.MiddleCenter };
@@ -549,7 +565,7 @@ namespace SilksongCoop.Mod.UI
                 float progress = Mathf.Clamp01(1f - (coordinator.RemainingSpectatorTime / total));
                 float barWidth = bannerWidth - 40f;
                 float barY = y + 58f;
-                DrawStatusBar(x + 20f, barY, barWidth, 8f, progress, SilksongSkin.Gold, "");
+                DrawStatusBar(x + 20f, barY, barWidth, 8f, progress, SilksongSkin.Gold);
             }
             else if (coordinator.CurrentState == DeathState.TeamWipe)
             {
@@ -608,6 +624,7 @@ namespace SilksongCoop.Mod.UI
                 SilksongSkin.DrawFrame(new Rect(0, 0, _layoutWidth, _layoutHeight), SilksongSkin.GoldDim);
                 SilksongSkin.DrawFrame(new Rect(4, 4, _layoutWidth - 8, _layoutHeight - 8),
                     new Color(SilksongSkin.GoldDim.r, SilksongSkin.GoldDim.g, SilksongSkin.GoldDim.b, 0.35f));
+                SilksongSkin.DrawNeedle(new Vector2(_layoutWidth * 0.5f, _layoutHeight - 4f));
             }
 
             // Title bar
