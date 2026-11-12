@@ -187,9 +187,12 @@ namespace SilksongCoop.Core.State
 
                 lock (_syncLock)
                 {
-                    if (_processedTransactions.Contains(tx)) return;
+                    if (_processedCounterTransactions.Contains(tx)) return;
 
-                    RecordTransaction(tx);
+                    // Counter transactions are retained for the whole session. Unlike regular
+                    // unlock transactions, replaying one after FIFO eviction would apply the
+                    // same counter increment a second time.
+                    _processedCounterTransactions.Add(tx);
                     seq = ++_sequenceCounter;
                 }
 

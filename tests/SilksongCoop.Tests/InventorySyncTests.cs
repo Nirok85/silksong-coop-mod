@@ -76,6 +76,29 @@ namespace SilksongCoop.Tests
         }
 
         [Fact]
+        public void CounterTransaction_RemainsDeduplicatedAfterRegularFifoEviction()
+        {
+            var service = new InventorySyncService();
+            ItemUnlockPacket? counter = null;
+            int applied = 0;
+            service.OnOutgoingItemUnlockPacket += packet => counter ??= packet;
+            service.OnItemUnlocked += (id, category) =>
+            {
+                if (id.StartsWith("heartPieces:", StringComparison.Ordinal)) applied++;
+            };
+
+            var transactionId = Guid.NewGuid();
+            service.OnLocalCounterChanged("heartPieces:1", ItemCategory.KeyItem, transactionId);
+            Assert.NotNull(counter);
+
+            for (int i = 0; i < 501; i++)
+                service.OnLocalItemDiscovered("Tool_Fifo" + i, ItemCategory.Tool);
+
+            service.HandleItemUnlockPacket(new NetworkPeerId(1), counter.Value);
+            Assert.Equal(0, applied);
+        }
+
+        [Fact]
         public void DuplicateItemUnlock_FiresEventOnlyOnce()
         {
             var service = new InventorySyncService();

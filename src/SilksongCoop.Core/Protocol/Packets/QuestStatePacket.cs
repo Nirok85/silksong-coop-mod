@@ -78,7 +78,10 @@ namespace SilksongCoop.Core.Protocol.Packets
         public static QuestStatePacket Deserialize(ref PacketReader reader)
         {
             var header = reader.ReadHeader();
-            int count = Math.Min((int)reader.ReadByte(), MaxEntries);
+            int count = reader.ReadByte();
+            if (count > MaxEntries)
+                throw new FormatException($"Quest state entry count {count} exceeds maximum {MaxEntries}.");
+
             var entries = new QuestFlagEntry[count];
 
             for (int i = 0; i < count; i++)

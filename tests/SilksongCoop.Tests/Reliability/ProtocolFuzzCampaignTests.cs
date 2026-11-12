@@ -79,7 +79,12 @@ namespace SilksongCoop.Tests.Reliability
                 }
                 catch (InvalidOperationException)
                 {
-                    // Expected for a truncated body. Any other exception type is a bug.
+                    // Expected for a truncated body.
+                }
+                catch (FormatException)
+                {
+                    // Expected for a structurally invalid body, such as a count
+                    // outside the protocol's declared range.
                 }
             }
         }

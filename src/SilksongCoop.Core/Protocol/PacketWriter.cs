@@ -47,7 +47,8 @@ namespace SilksongCoop.Core.Protocol
         /// <param name="header">The packet header to write.</param>
         public void WriteHeader(PacketHeader header)
         {
-            header.WriteTo(_buffer.Slice(_position));
+            EnsureCapacity(PacketHeader.HeaderSize);
+            header.WriteTo(_buffer.Slice(_position, PacketHeader.HeaderSize));
             _position += PacketHeader.HeaderSize;
         }
 

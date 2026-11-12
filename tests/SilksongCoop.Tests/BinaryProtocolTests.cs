@@ -306,6 +306,24 @@ namespace SilksongCoop.Tests
         }
 
         [Fact]
+        public void PacketWriter_HeaderOverflow_UsesConsistentOverflowException()
+        {
+            Span<byte> buffer = stackalloc byte[PacketHeader.HeaderSize - 1];
+            var writer = new PacketWriter(buffer);
+            bool threw = false;
+            try
+            {
+                writer.WriteHeader(new PacketHeader(PacketType.TransformSync, 1, 1, 1));
+            }
+            catch (InvalidOperationException)
+            {
+                threw = true;
+            }
+
+            Assert.True(threw);
+        }
+
+        [Fact]
         public void PacketReader_BufferUnderflow_ThrowsInvalidOperationException()
         {
             bool threw = false;

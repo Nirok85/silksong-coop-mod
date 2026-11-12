@@ -178,6 +178,28 @@ namespace SilksongCoop.Tests.Progression
         }
 
         [Fact]
+        public void Deserialize_RejectsWireCountAboveMaximum()
+        {
+            Span<byte> buffer = stackalloc byte[PacketHeader.HeaderSize + 1];
+            var writer = new PacketWriter(buffer);
+            writer.WriteHeader(new PacketHeader(PacketType.QuestState, 1, 1, 1));
+            writer.WriteByte((byte)(QuestStatePacket.MaxEntries + 1));
+
+            var reader = new PacketReader(writer.WrittenSpan);
+            bool threw = false;
+            try
+            {
+                QuestStatePacket.Deserialize(ref reader);
+            }
+            catch (FormatException)
+            {
+                threw = true;
+            }
+
+            Assert.True(threw);
+        }
+
+        [Fact]
         public void Validator_RejectsOutOfRangeIntAndUnknownKind()
         {
             var badInt = new QuestStatePacket
