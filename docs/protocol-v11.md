@@ -19,3 +19,9 @@ A datagram with a failed MAC is discarded individually.
 Currency journals retain pending transactions for reconnects to the same room
 and save. If a peer exhausts its journal, resuming that journal fails explicitly.
 Other connected Steam peers keep their own journals and reliable queues.
+
+The initial catch-up burst ends with a new `CatchUpComplete` packet (type 0x22):
+header plus a 16-byte GUID echoing the receiver's `PeerReady` save instance.
+It is informational — it logs that the burst was dispatched. Peers on older
+3.3.9 beta builds reject the unknown type and keep working; a marker with an
+unexpected or empty GUID is discarded as rejected.

@@ -1,5 +1,9 @@
 # Migration guide: 2.x → 3.0.0
 
+> **Historical migration guide.** It targets the 2.x → 3.0.0 upgrade only. For
+> current releases see [RELEASING.md](RELEASING.md) and
+> [protocol-v11.md](protocol-v11.md).
+
 > **Patch 3.0.3-3.3.1:** no protocol change and no extra migration step. Install
 > 3.3.1 instead of 3.0.0; Steam lobbies compare the full mod version, so both
 > players must use the same release (UDP remains wire-compatible with 3.0.x,
