@@ -86,7 +86,7 @@ dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj -c Release
 
 Expected: 0 warnings (warnings are errors in Release) and all tests passing.
 The hosted CI job builds Core and runs the Core test project. The Mod job is
-eligible on pushes to `master` and manual runs on `master` when
+eligible on pushes and manual runs on `master` or a `v*` release tag when
 `SILKSONG_MOD_RUNNER_ENABLED` is set to the exact string `true`. Otherwise,
 GitHub skips it. If the job is eligible but no matching self-hosted runner is
 online, it can stay queued. A green Core job alone does not verify Mod compilation
@@ -135,10 +135,13 @@ Verify the produced files before tagging:
 
 ```powershell
 pwsh ./scripts/verify-artifacts.ps1 -Version X.Y.Z
+# If artifacts were written elsewhere, pass -Directory <artifact-directory>.
 ```
 
 The script checks both hashes, both DLLs, the BepInEx injector files and rejects
-archives that accidentally contain proprietary game assemblies.
+archives that accidentally contain proprietary game assemblies. It reads `dist/`
+by default and refuses a `-Version` that does not match the version in
+`src/SilksongCoop.Mod/SilksongCoop.Mod.csproj`.
 
 ## 4. Commit, tag, push
 
@@ -151,8 +154,8 @@ git push origin master
 git push origin vX.Y.Z
 ```
 
-Wait for CI on `master` to go green (`gh run watch`); the tag itself triggers
-nothing, so the workflow only runs for the branch push.
+Wait for CI on `master` and on the release tag to go green (`gh run watch`).
+The `v*` tag triggers its own workflow run; check both runs before publishing.
 
 ## 5. Publish the GitHub release
 

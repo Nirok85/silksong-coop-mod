@@ -9,10 +9,10 @@
 - [ ] After the release commit, `pwsh ./scripts/preflight-release.ps1` passes on a clean tree (versions, changelog, both READMEs, ROADMAP, build, tests).
 - [ ] All tests pass and none are unexpectedly skipped (do not gate on a hard-coded count).
 - [ ] Core and Mod build with 0 compiler warnings (TreatWarningsAsErrors=true; NU1900 is a NuGet network warning).
-- [ ] Protocol version is unchanged or bumped and documented (`docs/protocol-v10.md` and `docs/state-authority.md`).
+- [ ] Protocol version is unchanged or bumped and documented in the current contract (`docs/protocol-v11.md`) and `docs/state-authority.md`.
 - [ ] Plugin version and assembly versions bumped to `<version>` in both csproj files and `PluginVersion`.
 - [ ] Release commit SHA recorded together with the version.
-- [ ] Migration guide updated.
+- [ ] Upgrade and rollback guidance updated in the current protocol specification and release notes; add a dedicated migration guide if needed.
 - [ ] CHANGELOG.md updated (`[Unreleased]` moved to `[<version>]`).
 - [ ] README.md / README.ru.md updated - limits section matches what is implemented.
 
@@ -20,7 +20,7 @@
 
 - [ ] Clean checkout build (`dotnet build` from scratch).
 - [ ] `pwsh ./scripts/package-release.ps1 -ManagedDir <path> -BepInExSha256 <pinned-hash>` (or the bash script) produced both archives plus `SilksongCoop_v<version>_SHA256SUMS.txt`.
-- [ ] `pwsh ./scripts/verify-artifacts.ps1 -Version <version>` passes: hashes match, both DLLs are present, and no proprietary game assemblies leaked.
+- [ ] `pwsh ./scripts/verify-artifacts.ps1 -Version <version>` passes: hashes match, both DLLs are present, the version matches the Mod project, and no proprietary game assemblies leaked.
 - [ ] `pwsh ./scripts/release-notes.ps1 -Version <version> -OutputPath dist/<version>/release-notes.md` produces the GitHub release body from CHANGELOG.md.
 - [ ] Run the packager twice and confirm the second run does not keep files removed from staging (no stale ZIP entries).
 - [ ] Extract both archives on Windows and Unix and confirm entry names use `/`, required docs/licenses are present, and no `bin/`/`obj/` or secrets are included.
