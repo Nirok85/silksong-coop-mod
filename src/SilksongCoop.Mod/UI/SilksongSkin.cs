@@ -42,12 +42,12 @@ namespace SilksongCoop.Mod.UI
         /// <summary>
         /// Bright gold color for hover states.
         /// </summary>
-        public static readonly Color GoldBright  = new Color(0.950f, 0.800f, 0.350f, 1.00f); // hover accent
+        public static readonly Color GoldBright  = new Color(0.88f, 0.78f, 0.59f, 1.00f); // hover accent
         
         /// <summary>
         /// Dimmed gold color for pressed or disabled states.
         /// </summary>
-        public static readonly Color GoldDim     = new Color(0.550f, 0.430f, 0.180f, 1.00f); // pressed / disabled
+        public static readonly Color GoldDim     = new Color(0.46f, 0.38f, 0.29f, 1.00f); // pressed / disabled
 
         /// <summary>
         /// Cream color for body text.
@@ -62,27 +62,27 @@ namespace SilksongCoop.Mod.UI
         /// <summary>
         /// Title color for section headers.
         /// </summary>
-        public static readonly Color TextTitle   = new Color(0.970f, 0.830f, 0.400f, 1.00f); // section headers
+        public static readonly Color TextTitle   = new Color(0.91f, 0.84f, 0.69f, 1.00f); // section headers
 
         /// <summary>
         /// Green color for success/OK states.
         /// </summary>
-        public static readonly Color GreenOk     = new Color(0.400f, 0.850f, 0.450f, 1.00f);
+        public static readonly Color GreenOk     = new Color(0.58f, 0.76f, 0.66f, 1.00f);
         
         /// <summary>
         /// Yellow color for warning states.
         /// </summary>
-        public static readonly Color YellowWarn  = new Color(0.950f, 0.800f, 0.300f, 1.00f);
+        public static readonly Color YellowWarn  = new Color(0.86f, 0.72f, 0.48f, 1.00f);
         
         /// <summary>
         /// Red color for error states.
         /// </summary>
-        public static readonly Color RedError    = new Color(0.900f, 0.350f, 0.350f, 1.00f);
+        public static readonly Color RedError    = new Color(0.79f, 0.43f, 0.43f, 1.00f);
         
         /// <summary>
         /// Blue color for informational messages.
         /// </summary>
-        public static readonly Color BlueInfo    = new Color(0.51f, 0.74f, 0.82f, 1.00f);
+        public static readonly Color BlueInfo    = new Color(0.58f, 0.74f, 0.76f, 1.00f);
 
         #endregion
 
@@ -91,6 +91,8 @@ namespace SilksongCoop.Mod.UI
         // ── Cached skin (built once) ───────────────────────────────────────────
         private static GUISkin? _cached;
         private static Font? _font;
+        private static Font? _titleFont;
+        private static Texture2D? _texButton, _texButtonHover, _texTabActive;
         private static Texture2D? _texBgDeepest, _texBgPanel, _texBgField, _texBgSubtle;
         private static Texture2D? _texGold, _texGoldBright, _texGoldDim;
         private static Texture2D? _texWhite; // 1x1 pure white for DrawTexture bars
@@ -131,6 +133,12 @@ namespace SilksongCoop.Mod.UI
                 _font = null;
             }
 
+            if (_titleFont != null)
+            {
+                UnityEngine.Object.Destroy(_titleFont);
+                _titleFont = null;
+            }
+
             DestroyTexture(ref _texBgDeepest);
             DestroyTexture(ref _texBgPanel);
             DestroyTexture(ref _texBgField);
@@ -139,6 +147,9 @@ namespace SilksongCoop.Mod.UI
             DestroyTexture(ref _texGoldBright);
             DestroyTexture(ref _texGoldDim);
             DestroyTexture(ref _texWhite);
+            DestroyTexture(ref _texButton);
+            DestroyTexture(ref _texButtonHover);
+            DestroyTexture(ref _texTabActive);
         }
 
         private static void DestroyTexture(ref Texture2D? texture)
@@ -163,6 +174,29 @@ namespace SilksongCoop.Mod.UI
             return t;
         }
 
+        private static Texture2D MakeFramedTex(Color fill, Color edge)
+        {
+            var texture = new Texture2D(8, 8, TextureFormat.ARGB32, false) { hideFlags = HideFlags.DontSave };
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++)
+                    texture.SetPixel(x, y, x == 0 || y == 0 || x == 7 || y == 7 ? edge : fill);
+            texture.Apply(false);
+            return texture;
+        }
+
+        /// <summary>Draws a subtle frame and restores the caller's GUI color.</summary>
+        public static void DrawFrame(Rect rect, Color color)
+        {
+            if (Event.current.type != EventType.Repaint || rect.width < 2f || rect.height < 2f) return;
+            Color previous = GUI.color;
+            GUI.color = color;
+            GUI.DrawTexture(new Rect(rect.x, rect.y, rect.width, 1f), WhitePixel);
+            GUI.DrawTexture(new Rect(rect.x, rect.yMax - 1f, rect.width, 1f), WhitePixel);
+            GUI.DrawTexture(new Rect(rect.x, rect.y, 1f, rect.height), WhitePixel);
+            GUI.DrawTexture(new Rect(rect.xMax - 1f, rect.y, 1f, rect.height), WhitePixel);
+            GUI.color = previous;
+        }
+
         // ── Builder ────────────────────────────────────────────────────────────
         private static GUISkin BuildSkin()
         {
@@ -179,6 +213,9 @@ namespace SilksongCoop.Mod.UI
             _texGoldBright = MakeTex(GoldBright);
             _texGoldDim   = MakeTex(GoldDim);
             _texWhite     = MakeTex(Color.white);
+            _texButton = MakeFramedTex(BgField, GoldDim);
+            _texButtonHover = MakeFramedTex(BgSubtle, Gold);
+            _texTabActive = MakeFramedTex(BgSubtle, GoldBright);
 
             // ── Font setup (use Unity's default font at various sizes) ─────────
             // Cached so Release() can destroy the runtime-created font.
@@ -187,6 +224,13 @@ namespace SilksongCoop.Mod.UI
             // or a stripped system), so the UI never renders with a null font.
             if (_font == null) _font = GUI.skin != null ? GUI.skin.font : null;
             var font = _font;
+            var installedFonts = Font.GetOSInstalledFontNames();
+            foreach (string candidate in new[] { "Georgia", "Liberation Serif", "Times New Roman" })
+            {
+                if (!Array.Exists(installedFonts, name => string.Equals(name, candidate, StringComparison.OrdinalIgnoreCase))) continue;
+                _titleFont = Font.CreateDynamicFontFromOSFont(candidate, 16);
+                if (_titleFont != null) break;
+            }
 
             // ── WINDOW ──────────────────────────────────────────────────────────
             skin.window = new GUIStyle(skin.window)
@@ -229,10 +273,10 @@ namespace SilksongCoop.Mod.UI
             // ── BUTTON ─────────────────────────────────────────────────────────
             skin.button = new GUIStyle(skin.button)
             {
-                normal      = { background = _texBgField,   textColor = TextCream },
-                hover       = { background = _texBgSubtle,  textColor = GoldBright },
-                active      = { background = _texGoldDim,   textColor = TextCream },
-                focused     = { background = _texBgSubtle,  textColor = GoldBright },
+                normal      = { background = _texButton,      textColor = TextCream },
+                hover       = { background = _texButtonHover, textColor = GoldBright },
+                active      = { background = _texTabActive,   textColor = TextCream },
+                focused     = { background = _texButtonHover, textColor = GoldBright },
                 font = font,
                 fontSize = 13,
                 fontStyle = FontStyle.Bold,
@@ -308,6 +352,7 @@ namespace SilksongCoop.Mod.UI
             var titleStyle = new GUIStyle(skin.label)
             {
                 normal = { textColor = TextTitle },
+                font = _titleFont ?? font,
                 fontSize = 16,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleLeft,
@@ -329,10 +374,10 @@ namespace SilksongCoop.Mod.UI
             // "TabButton" — used for the top tab bar
             var tabStyle = new GUIStyle(skin.button)
             {
-                normal      = { background = _texBgPanel,   textColor = TextMuted },
-                hover       = { background = _texBgSubtle,  textColor = GoldBright },
-                active      = { background = _texGoldDim,   textColor = TextCream },
-                focused     = { background = _texBgSubtle,  textColor = GoldBright },
+                normal      = { background = _texButton,      textColor = TextMuted },
+                hover       = { background = _texButtonHover, textColor = GoldBright },
+                active      = { background = _texTabActive,   textColor = TextCream },
+                focused     = { background = _texButtonHover, textColor = GoldBright },
                 fontSize = 12,
                 fontStyle = FontStyle.Bold,
                 padding = new RectOffset(12, 12, 5, 5),
@@ -343,8 +388,8 @@ namespace SilksongCoop.Mod.UI
             // "TabActive" — currently-selected tab
             var tabActiveStyle = new GUIStyle(tabStyle)
             {
-                normal      = { background = _texGoldDim,   textColor = TextCream },
-                hover       = { background = _texGold,      textColor = TextCream },
+                normal      = { background = _texTabActive, textColor = TextCream },
+                hover       = { background = _texTabActive, textColor = GoldBright },
             };
             tabActiveStyle.name = "SilksongTabActive";
 

@@ -417,6 +417,7 @@ namespace SilksongCoop.Mod.UI
                 ? new Color(SilksongSkin.BgPanel.r, SilksongSkin.BgPanel.g, SilksongSkin.BgPanel.b, 0.88f)
                 : new Color(SilksongSkin.BgPanel.r, SilksongSkin.BgPanel.g, SilksongSkin.BgPanel.b, 0.55f);
             GUI.DrawTexture(new Rect(x, y, hudW, hudH), SilksongSkin.WhitePixel);
+            SilksongSkin.DrawFrame(new Rect(x, y, hudW, hudH), SilksongSkin.GoldDim);
 
             // Left accent bar identifies the partner and signals death.
             GUI.color = alive
@@ -441,14 +442,14 @@ namespace SilksongCoop.Mod.UI
             float barY = y + 22f;
 
             float hpFrac = peer.MaxHealth > 0 ? (float)peer.Health / peer.MaxHealth : 0f;
-            Color hpColor = alive ? new Color(0.85f, 0.25f, 0.25f) : new Color(0.45f, 0.30f, 0.30f);
+            Color hpColor = alive ? SilksongSkin.RedError : new Color(0.45f, 0.30f, 0.30f);
             DrawStatusBar(barX, barY, barW, barH, hpFrac, hpColor,
                 Loc.T("HP {0}/{1}", peer.Health, peer.MaxHealth));
 
             // Silk bar
             float silkY = y + 42f;
             float silkFrac = peer.MaxSilkSpools > 0 ? (float)peer.Silk / (peer.MaxSilkSpools * 9f) : 0f;
-            Color silkColor = alive ? new Color(0.30f, 0.55f, 0.90f) : new Color(0.30f, 0.36f, 0.50f);
+            Color silkColor = alive ? SilksongSkin.BlueInfo : new Color(0.30f, 0.36f, 0.39f);
             DrawStatusBar(barX, silkY, barW, barH, silkFrac, silkColor,
                 Loc.T("Silk {0}/{1}", peer.Silk, peer.MaxSilkSpools * 9));
 
@@ -604,10 +605,9 @@ namespace SilksongCoop.Mod.UI
             // A fine border gives the panel a quiet frame without obscuring the game.
             if (Event.current.type == EventType.Repaint)
             {
-                GUI.color = SilksongSkin.GoldDim;
-                GUI.DrawTexture(new Rect(0, 0, _layoutWidth, 1), SilksongSkin.WhitePixel);
-                GUI.DrawTexture(new Rect(0, _layoutHeight - 1, _layoutWidth, 1), SilksongSkin.WhitePixel);
-                GUI.color = Color.white;
+                SilksongSkin.DrawFrame(new Rect(0, 0, _layoutWidth, _layoutHeight), SilksongSkin.GoldDim);
+                SilksongSkin.DrawFrame(new Rect(4, 4, _layoutWidth - 8, _layoutHeight - 8),
+                    new Color(SilksongSkin.GoldDim.r, SilksongSkin.GoldDim.g, SilksongSkin.GoldDim.b, 0.35f));
             }
 
             // Title bar

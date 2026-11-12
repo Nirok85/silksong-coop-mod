@@ -180,6 +180,7 @@ namespace SilksongCoop.Mod.UI
 
                 // Dark semi-transparent background panel
                 GUI.DrawTexture(new Rect(x, y, TotalWidth, TotalHeight), _bgTex);
+                SilksongSkin.DrawFrame(new Rect(x, y, TotalWidth, TotalHeight), SilksongSkin.GoldDim);
 
                 // Title
                 // P2: cached styles — the old code allocated 8 new GUIStyle objects on

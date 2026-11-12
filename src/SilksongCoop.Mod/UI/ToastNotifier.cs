@@ -210,6 +210,9 @@ namespace SilksongCoop.Mod.UI
                 var bgRect = new Rect(x, y, toastWidth, toastHeight);
                 GUI.color = bg;
                 GUI.DrawTexture(bgRect, SilksongSkin.WhitePixel);
+                var frame = SilksongSkin.GoldDim;
+                frame.a *= alpha;
+                SilksongSkin.DrawFrame(bgRect, frame);
 
                 // Left accent bar (4px wide)
                 var accentRect = new Rect(x, y, 4f, toastHeight);
@@ -246,31 +249,31 @@ namespace SilksongCoop.Mod.UI
                 ToastKind.Success => (
                     SilksongSkin.BgDeepest,
                     SilksongSkin.GreenOk,
-                    new Color(0.80f, 1.00f, 0.85f, 1f),
+                    SilksongSkin.TextCream,
                     "✓"
                 ),
                 ToastKind.Warning => (
                     SilksongSkin.BgDeepest,
                     SilksongSkin.YellowWarn,
-                    new Color(1.00f, 0.95f, 0.75f, 1f),
+                    SilksongSkin.TextCream,
                     "⚠"
                 ),
                 ToastKind.Error => (
                     SilksongSkin.BgDeepest,
                     SilksongSkin.RedError,
-                    new Color(1.00f, 0.80f, 0.80f, 1f),
+                    SilksongSkin.TextCream,
                     "✕"
                 ),
                 ToastKind.Copy => (
                     SilksongSkin.BgDeepest,
                     SilksongSkin.Gold,
                     SilksongSkin.TextCream,
-                    "📋"
+                    "◇"
                 ),
                 _ => ( // Info
                     SilksongSkin.BgDeepest,
                     SilksongSkin.BlueInfo,
-                    new Color(0.85f, 0.90f, 1.00f, 1f),
+                    SilksongSkin.TextCream,
                     "ℹ"
                 ),
             };
