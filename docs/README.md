@@ -20,3 +20,9 @@ Versioned smoke reports, audit reports, campaign logs, protocol v8/v10
 specifications, and superseded plans record past project states. Their version,
 test counts, protocol numbers, and conclusions are historical snapshots. Use the
 current references above when making changes or preparing a release.
+
+## Current verification and planned work
+
+- [Verification status, 2026-11-14](verification-2026-11-14.md)
+- [Runtime visual/environment work checklist](../TODO.md)
+
