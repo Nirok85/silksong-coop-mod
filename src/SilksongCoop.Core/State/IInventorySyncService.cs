@@ -18,6 +18,7 @@ namespace SilksongCoop.Core.State
         event Action<string, ItemCategory>? OnItemUnlocked;
         event Action<string, ItemCategory>? OnRemoteItemUnlocked;
         event Action<ItemUnlockPacket>? OnOutgoingItemUnlockPacket;
+        event Action<NetworkPeerId?, ItemUnlockPacket>? OnOutgoingPeerItemUnlockPacket;
 
         void OnLocalItemDiscovered(string itemId, ItemCategory category, Guid? transactionId = null, bool force = false);
         void OnLocalItemDiscovered(int itemNumericId, ItemCategory category, Guid? transactionId = null, bool force = false);
@@ -26,5 +27,14 @@ namespace SilksongCoop.Core.State
         void SetLocalEquippedTools(IEnumerable<string> toolIds);
         bool IsItemUnlocked(string itemId);
         bool IsTransactionProcessed(Guid transactionId);
+
+        void ResetPeerState(NetworkPeerId peer);
+        bool HasPeerReceivedItem(NetworkPeerId peer, string itemId);
+        void MarkItemKnownByPeer(NetworkPeerId peer, string itemId);
+        IReadOnlyCollection<string> GetKnownItemsForPeer(NetworkPeerId peer);
+
+        void BroadcastInitialInventory(NetworkPeerId targetPeer);
+        void BroadcastInitialInventory(NetworkPeerId? targetPeer = null, int maxBatchSize = 20);
+        IReadOnlyList<IReadOnlyList<string>> CreateInitialInventoryBatches(int maxBatchSize = 20);
     }
 }

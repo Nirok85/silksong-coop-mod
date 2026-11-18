@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Compile production decisions directly. Program supplies deterministic API shims,
+         so these checks do not replace Unity-engine or in-game physics verification. -->
+    <Compile Include="../../src/SilksongCoop.Mod/Revive/UnityGroundProber.cs" Link="UnityGroundProber.cs" />
+    <Compile Include="../../src/SilksongCoop.Core/Revive/IGroundProber.cs" Link="IGroundProber.cs" />
+    <Compile Include="../../src/SilksongCoop.Core/Revive/SafeGroundSolver.cs" Link="SafeGroundSolver.cs" />
+  </ItemGroup>
+</Project>

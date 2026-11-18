@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/SilksongCoop.Core/SilksongCoop.Core.csproj" />
+    <Compile Include="../../src/SilksongCoop.Mod/SilksongCoopPlugin.WalletSeedRetry.cs" Link="Production/SilksongCoopPlugin.WalletSeedRetry.cs" />
+  </ItemGroup>
+</Project>

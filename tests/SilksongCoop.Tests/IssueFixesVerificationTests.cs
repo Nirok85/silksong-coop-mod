@@ -323,8 +323,8 @@ namespace SilksongCoop.Tests
             {
                 MaxHealth = 10,
                 CurrentHealth = 10,
-                MaxSilkSpools = 3,
-                CurrentSilk = 27,
+                MaxSilkSpools = 10,
+                CurrentSilk = 10,
                 NeedleUpgradeLevel = 4
             }));
         }
@@ -384,21 +384,26 @@ namespace SilksongCoop.Tests
             var received = new List<string>();
             inventory.OnRemoteItemUnlocked += (id, _) => received.Add(id);
 
-            inventory.HandleItemUnlockPacket(new NetworkPeerId(1), new ItemUnlockPacket
+            var peer = new NetworkPeerId(1);
+            var first = new ItemUnlockPacket
             {
                 Header = new PacketHeader(PacketType.ItemUnlockSync, 3, 1, 1),
                 ItemId = "heartPieces:+1",
                 Category = ItemCategory.KeyItem,
                 TransactionId = Guid.NewGuid()
-            });
-            inventory.HandleItemUnlockPacket(new NetworkPeerId(1), new ItemUnlockPacket
+            };
+            var second = new ItemUnlockPacket
             {
-                Header = new PacketHeader(PacketType.ItemUnlockSync, 3, 1, 2),
+                Header = new PacketHeader(PacketType.ItemUnlockSync, 3, 2, 2),
                 ItemId = "heartPieces:+1",
                 Category = ItemCategory.KeyItem,
                 TransactionId = Guid.NewGuid()
-            });
-
+            };
+            inventory.HandleItemUnlockPacket(peer, first);
+            inventory.HandleItemUnlockPacket(peer, second);
+            Assert.Equal(2, received.Count);
+            inventory.HandleItemUnlockPacket(peer, first);
+            inventory.HandleItemUnlockPacket(peer, second);
             Assert.Equal(2, received.Count);
         }
     }

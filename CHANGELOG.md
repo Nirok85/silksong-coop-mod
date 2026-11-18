@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+- Protocol v12 adds causal, bounded multipart wallet snapshots with physical pickup deduplication.
+- Preserve reliable unordered gaps, reject counter replays after GUID eviction, retry failed inventory application, and keep currency journals ordered under backpressure.
+- Exchange actual per-peer life state during readiness and reject stale resurrection notifications.
+- Bound deferred enemy damage proof by sender, sequence, encounter observations and age.
+- Check real hero bounds and solid ground during revive; run production adapter checks in CI and preflight.
+- Apply runtime tick-rate changes and synchronize permanent silk spool parts using raw silk capacity.
+- Fragment progression accounts for independent local and remote upgrades and defers while native conversion is in flight.
+
+These changes are not published. Two-instance gameplay and historical overlapping fragment pickups still require validation.
+
 Все значимые изменения проекта документируются в этом файле.
 
 Формат основан на [Keep a Changelog](https://keepachangelog.com/),

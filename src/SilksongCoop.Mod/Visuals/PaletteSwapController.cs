@@ -128,7 +128,11 @@ namespace SilksongCoop.Mod.Visuals
                 // 30 frames. The old code re-applied EVERY frame, whose `ren.materials`
                 // getter allocates managed arrays (and instances materials) 60+ times per
                 // second — heavy GC churn / native memory pressure during long sessions.
-                if (_needsUpdate || Time.frameCount - _lastEnforceFrame >= EnforceIntervalFrames)
+                // PERF-01: Player 1 (Host) never uses a hue shift or custom palette.
+                // Guard the periodic enforcement so it only runs if _isPlayer2 == true,
+                // completely avoiding redundant ApplyPaletteSwap() traversal on Player 1 every 30 frames.
+                bool periodicEnforce = _isPlayer2 && (Time.frameCount - _lastEnforceFrame >= EnforceIntervalFrames);
+                if (_needsUpdate || periodicEnforce)
                 {
                     // Pick up runtime hue changes (settings slider) for every Player 2
                     // instance, including the remote clone that the slider cannot address.

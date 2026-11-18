@@ -559,5 +559,91 @@ namespace SilksongCoop.Tests
             drain.Invoke(transport, null);
             Assert.Equal(1, disconnected);
         }
+
+        [Fact]
+        public void ReliableUnordered_DelayedZeroRemainsDeliverableAfterMoreThanWindowOfFutureTraffic()
+        {
+            var window = new LiteNetLibTransport.UnorderedReplayWindow();
+            for (uint sequence = 1; sequence <= 8192; sequence++)
+            {
+                var expected = sequence < 4096
+                    ? LiteNetLibTransport.ReplayStatus.Accepted
+                    : LiteNetLibTransport.ReplayStatus.Stale;
+                Assert.Equal(expected, window.Process(sequence));
+            }
+
+            // No future arrival may evict the missing first packet.
+            Assert.True(window.IsNew(0));
+            Assert.Equal(LiteNetLibTransport.ReplayStatus.Accepted, window.Process(0));
+            Assert.False(window.IsNew(0));
+            Assert.Equal(LiteNetLibTransport.ReplayStatus.Duplicate, window.Process(0));
+
+            // The sender retries refused future packets after the hole closes.
+            for (uint sequence = 4096; sequence <= 8192; sequence++)
+                Assert.Equal(LiteNetLibTransport.ReplayStatus.Accepted, window.Process(sequence));
+            Assert.Equal(LiteNetLibTransport.ReplayStatus.Duplicate, window.Process(1));
+            Assert.Equal(LiteNetLibTransport.ReplayStatus.Duplicate, window.Process(8192));
+        }
+
+        [Fact]
+        public void ReliableUnordered_ContiguousWatermarkAndRingWrapAcrossUintMaxValue()
+        {
+            var window = new LiteNetLibTransport.UnorderedReplayWindow(uint.MaxValue - 1);
+            Assert.Equal(LiteNetLibTransport.ReplayStatus.Accepted, window.Process(0));
+            Assert.Equal(LiteNetLibTransport.ReplayStatus.Duplicate, window.Process(0));
+            Assert.True(window.IsNew(uint.MaxValue - 1));
+            Assert.Equal(LiteNetLibTransport.ReplayStatus.Accepted, window.Process(uint.MaxValue - 1));
+            Assert.Equal(LiteNetLibTransport.ReplayStatus.Accepted, window.Process(uint.MaxValue));
+            Assert.False(window.IsNew(0));
+            Assert.Equal(LiteNetLibTransport.ReplayStatus.Duplicate, window.Process(0));
+            Assert.Equal(LiteNetLibTransport.ReplayStatus.Duplicate, window.Process(uint.MaxValue));
+            Assert.Equal(LiteNetLibTransport.ReplayStatus.Accepted, window.Process(1));
+        }
+
+        [Fact]
+        public void ReliableUnordered_FuturePacketIsNotAckedUntilItEntersReceiveWindow()
+        {
+            using var host = new LiteNetLibTransport(1, "Host") { RequireRoomCode = false };
+            using var client = new LiteNetLibTransport(2, "Client") { RequireRoomCode = false };
+            host.StartHost(0);
+            client.Connect($"127.0.0.1:{host.BoundPort}");
+            for (int i = 0; i < 100 && (!host.IsConnected || !client.IsConnected); i++)
+            {
+                host.PollEvents();
+                client.PollEvents();
+                Thread.Sleep(10);
+            }
+            Assert.True(host.IsConnected);
+            Assert.True(client.IsConnected);
+
+            const byte channel = 2;
+            var sendSequences = (Dictionary<(byte, DeliveryMethod), uint>)typeof(LiteNetLibTransport)
+                .GetField("_sendSequences", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(host)!;
+            var received = new List<byte>();
+            client.OnDataReceived += (_, data, offset, _) => received.Add(data[offset]);
+
+            // Simulate a delayed hole while a later datagram reaches the receiver first.
+            sendSequences[(channel, DeliveryMethod.ReliableUnordered)] = 4096;
+            Assert.True(host.Send(client.LocalPeerId, new byte[] { 2 }, 0, 1, DeliveryMethod.ReliableUnordered, channel));
+            for (int i = 0; i < 5; i++)
+            {
+                client.PollEvents();
+                host.PollEvents();
+                Thread.Sleep(10);
+            }
+            Assert.Empty(received);
+            Assert.Equal(1, host.ReliableBacklogCount);
+
+            sendSequences[(channel, DeliveryMethod.ReliableUnordered)] = 0;
+            Assert.True(host.Send(client.LocalPeerId, new byte[] { 1 }, 0, 1, DeliveryMethod.ReliableUnordered, channel));
+            for (int i = 0; i < 300 && (received.Count < 2 || host.ReliableBacklogCount != 0); i++)
+            {
+                client.PollEvents();
+                host.PollEvents();
+                Thread.Sleep(10);
+            }
+            Assert.Equal(new byte[] { 1, 2 }, received);
+            Assert.Equal(0, host.ReliableBacklogCount);
+        }
     }
 }

@@ -66,11 +66,23 @@ namespace SilksongCoop.Core.Localization
             if (string.IsNullOrEmpty(english)) return string.Empty;
 
             string template = english!;
+            bool isTranslated = false;
             if (language == CoopLanguage.Russian && Russian.TryGetValue(template, out string? translated))
             {
                 template = translated;
+                isTranslated = true;
             }
 
+            return FormatWithFallback(template, english!, isTranslated, args);
+        }
+
+        /// <summary>
+        /// Formats a template with arguments, falling back to formatting the English source
+        /// if the translated template throws FormatException. If English formatting also fails,
+        /// returns the raw unformatted English source.
+        /// </summary>
+        public static string FormatWithFallback(string template, string english, bool isTranslated, params object[]? args)
+        {
             if (args == null || args.Length == 0) return template;
 
             try
@@ -79,9 +91,22 @@ namespace SilksongCoop.Core.Localization
             }
             catch (FormatException)
             {
-                // A malformed translation must never break the UI; show the English
-                // source (unformatted) instead of throwing from OnGUI.
-                return english!;
+                // On FormatException when formatting translated strings with args,
+                // attempt to format the English template with args before falling back.
+                if (isTranslated)
+                {
+                    try
+                    {
+                        return string.Format(CultureInfo.InvariantCulture, english, args);
+                    }
+                    catch (FormatException)
+                    {
+                        return english;
+                    }
+                }
+
+                // A malformed English template returns unformatted English source
+                return english;
             }
         }
 

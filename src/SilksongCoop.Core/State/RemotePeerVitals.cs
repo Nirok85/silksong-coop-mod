@@ -3,10 +3,12 @@ using SilksongCoop.Core.Networking;
 namespace SilksongCoop.Core.State
 {
     /// <summary>
-    /// Vitals snapshot for one remote peer. The legacy single-partner properties on
-    /// <see cref="VitalsSyncService"/> mirror the first peer (primary) for compatibility.
+    /// Vitals snapshot for one remote peer. An immutable reference type to guarantee
+    /// atomic pointer publishing and prevent multi-word struct torn reads across threads.
+    /// The legacy single-partner properties on <see cref="VitalsSyncService"/> mirror
+    /// the first peer (primary) for compatibility.
     /// </summary>
-    public readonly struct RemotePeerVitals
+    public sealed class RemotePeerVitals
     {
         public NetworkPeerId Peer { get; }
         public int Health { get; }

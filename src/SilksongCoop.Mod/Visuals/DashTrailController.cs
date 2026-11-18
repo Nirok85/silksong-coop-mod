@@ -114,10 +114,11 @@ namespace SilksongCoop.Mod.Visuals
             }
 
             // Smoothly decay rim light intensity back to baseline
-            if (_rimLight != null && _rimLight.intensity > 0.1f)
+            // Fix (Defect 18): Check intensity > 0f and cutoff threshold <= 0.05f to guarantee rim light completely shuts off.
+            if (_rimLight != null && _rimLight.intensity > 0f)
             {
                 _rimLight.intensity = Mathf.Lerp(_rimLight.intensity, 0f, deltaTime * 5f);
-                if (_rimLight.intensity < 0.05f)
+                if (_rimLight.intensity <= 0.05f)
                 {
                     _rimLight.intensity = 0f;
                     _rimLightObject?.SetActive(false);

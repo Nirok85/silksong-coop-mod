@@ -354,6 +354,20 @@ namespace SilksongCoop.Tests
         }
 
         [Fact]
+        public void Currency_AllClaimedPickupsAreBroadcastOnReconnect()
+        {
+            var service = new VitalsSyncService();
+            service.InitializeState(5, 5, 9, 1, 0, initialRosaries: 100, initialShards: 0);
+            for (int i = 0; i < 100; i++)
+                service.OnLocalCurrencyChanged(CurrencyType.Rosaries, 1, 0, Guid.NewGuid(), pickupKey: (ulong)(i + 1), pickupX: i, pickupY: i);
+
+            int broadcast = 0;
+            service.OnOutgoingCurrencyBroadcast += p => { if (p.DeltaAmount == 0 && p.PickupKey != 0) broadcast++; };
+            service.BroadcastClaimedPickups();
+            Assert.Equal(100, broadcast);
+        }
+
+        [Fact]
         public void Currency_PickupKeyIsBroadcast()
         {
             var service = new VitalsSyncService();

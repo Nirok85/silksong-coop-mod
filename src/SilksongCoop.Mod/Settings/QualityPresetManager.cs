@@ -106,11 +106,24 @@ namespace SilksongCoop.Mod.Settings
                 _plugin.EnablePlayer2DashTrailConfig.Value = true;
         }
 
+        /// <summary>
+        /// Calculates the network tick rate for High preset, clamping against target frame rate if positive.
+        /// </summary>
+        public static int CalculateHighPresetTickRate(int targetFrameRate)
+        {
+            if (targetFrameRate > 0)
+                return Math.Clamp(targetFrameRate, 20, 60);
+            return 60;
+        }
+
         private void ApplyHighPreset()
         {
-            // Network: 60 Hz tick rate, maximum smoothness
+            // Network: 60 Hz tick rate, maximum smoothness, validated and clamped against frame rate
             if (_plugin.TickRateHzConfig != null)
-                _plugin.TickRateHzConfig.Value = 60;
+            {
+                int tickRate = CalculateHighPresetTickRate(UnityEngine.Application.targetFrameRate);
+                _plugin.TickRateHzConfig.Value = tickRate;
+            }
 
             // Visuals: enable all effects
             if (_plugin.EnablePlayer2DashTrailConfig != null)

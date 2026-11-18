@@ -22,6 +22,7 @@ namespace SilksongCoop.Core.State
         private float _remainingSpectatorTime;
         private (float X, float Y) _lastPartnerPosition = (0f, 0f);
         private uint _currentEpoch = 1;
+        private readonly Dictionary<NetworkPeerId, uint> _peerEpochs = new();
 
         // True when a higher epoch was adopted from a peer while this player was still in
         // its own respawn cycle. Finishing that cycle must NOT advance the epoch again:
@@ -209,7 +210,16 @@ namespace SilksongCoop.Core.State
         public uint CurrentEpoch
         {
             get { lock (_lock) { return _currentEpoch; } }
-            private set { lock (_lock) { _currentEpoch = value; } }
+            private set
+            {
+                lock (_lock)
+                {
+                    if (unchecked((int)(value - _currentEpoch)) > 0)
+                    {
+                        _currentEpoch = value;
+                    }
+                }
+            }
         }
 
         #endregion
@@ -561,6 +571,7 @@ namespace SilksongCoop.Core.State
             lock (_lock)
             {
                 _partners.Remove(peer);
+                _peerEpochs.Remove(peer);
                 _explicitPeers.Remove(peer);
                 _sameScenePeers.Remove(peer);
                 if (_partners.Count == 0)
@@ -580,6 +591,7 @@ namespace SilksongCoop.Core.State
             lock (_lock)
             {
                 _partners.Clear();
+                _peerEpochs.Clear();
                 _explicitPeers.Clear();
                 _sameScenePeers.Clear();
                 _reviveTargetPeer = null;
@@ -837,6 +849,40 @@ namespace SilksongCoop.Core.State
             }
         }
 
+        /// <summary>Captures actual local life state for one peer's readiness handshake.</summary>
+        public DeathLifecyclePacket CreateLifecycleSnapshot(float localX = 0f, float localY = 0f)
+        {
+            lock (_lock)
+            {
+                bool dead = _currentState != DeathState.Alive;
+                return new DeathLifecyclePacket
+                {
+                    Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, NetworkClock.NowMs),
+                    EventType = DeathEventType.LifecycleSnapshot,
+                    FallenPlayerIndex = dead ? (byte)1 : (byte)0,
+                    CoordinateX = dead ? _localDeathPosition.X : localX,
+                    CoordinateY = dead ? _localDeathPosition.Y : localY,
+                    RemainingSeconds = dead ? _remainingSpectatorTime : 0f,
+                    Epoch = _currentEpoch
+                };
+            }
+        }
+
+        private static bool IsOlderEpoch(uint candidate, uint reference) =>
+            unchecked((int)(candidate - reference)) < 0;
+
+        private void AdoptHigherEpoch(uint epoch)
+        {
+            lock (_lock)
+            {
+                if (unchecked((int)(epoch - _currentEpoch)) <= 0) return;
+                _currentEpoch = epoch;
+                if (_currentState != DeathState.Alive)
+                    _adoptedEpochDuringRespawn = true;
+            }
+        }
+
+
         /// <summary>
         /// BUG-A4: resynchronizes the death epoch for a newly established session. The epoch
         /// was never transmitted over the wire, so a client reconnecting to a host that had
@@ -858,6 +904,7 @@ namespace SilksongCoop.Core.State
                 _reviveTargetPosition = (0f, 0f);
                 _localDeathPosition = (0f, 0f);
                 _partners.Clear();
+                _peerEpochs.Clear();
                 _explicitPeers.Clear();
                 _sameScenePeers.Clear();
                 _pendingSoloBenchRespawn = false;
@@ -873,40 +920,54 @@ namespace SilksongCoop.Core.State
         {
             try
             {
-                // A solo bench-respawn is a recovery signal: it only clears our "partner
-                // is dead" flag and must survive an epoch mismatch (the two peers advance
-                // epochs independently when only one of them reloads at a bench).
-                if (packet.EventType == DeathEventType.SoloBenchRespawn)
+                if (packet.EventType == DeathEventType.EpochSync)
                 {
-                    // Mark only the sender alive: in a 3+ session the other peers keep
-                    // their own state. Do NOT overwrite the position: this packet carries
-                    // no coordinates (the sender is mid-reload).
+                    AdoptHigherEpoch(packet.Epoch);
+                    return;
+                }
+
+                if (packet.EventType == DeathEventType.LifecycleSnapshot)
+                {
+                    if (packet.FallenPlayerIndex > 1) return;
                     lock (_lock)
                     {
-                        GetOrCreatePartnerLocked(sender).Alive = true;
-                        _isPartnerAlive = true;
+                        if (_peerEpochs.TryGetValue(sender, out uint previous) &&
+                            IsOlderEpoch(packet.Epoch, previous)) return;
+                        _peerEpochs[sender] = packet.Epoch;
                     }
+                    AdoptHigherEpoch(packet.Epoch);
+                    if (packet.FallenPlayerIndex == 0)
+                    {
+                        // Unlike a revive request, a snapshot reports a completed remote
+                        // recovery even while the local player is still reloading.
+                        lock (_lock)
+                        {
+                            var partner = GetOrCreatePartnerLocked(sender);
+                            partner.Alive = true;
+                            partner.X = packet.CoordinateX;
+                            partner.Y = packet.CoordinateY;
+                            _isPartnerAlive = true;
+                            if (_partners.Count == 1)
+                                _lastPartnerPosition = (packet.CoordinateX, packet.CoordinateY);
+                        }
+                    }
+                    else
+                        OnRemotePartnerDied(sender, packet.CoordinateX, packet.CoordinateY);
                     return;
                 }
 
-                // BUG-A4: epochs are compared against our counter, but the peer may have
-                // survived more wipe cycles than we tracked (e.g. we reconnected mid-session).
-                // Adopt a HIGHER epoch so the session resynchronizes instead of silently
-                // dropping every death event; lower epochs remain stale and are ignored.
-                if (packet.Epoch > CurrentEpoch)
+                // A handshake establishes the sender's own epoch. A late joiner may
+                // legitimately be behind the local session; only that sender's older
+                // packets are stale. Legacy callers without a snapshot retain the
+                // global epoch guard until the initial lifecycle state is known.
+                lock (_lock)
                 {
-                    CurrentEpoch = packet.Epoch;
-
-                    // The peer finished the same wipe first. Remember that this epoch was
-                    // adopted so our own ResetAfterBenchRespawn does not increment it again.
-                    if (CurrentState != DeathState.Alive)
-                        _adoptedEpochDuringRespawn = true;
+                    uint previous = _peerEpochs.TryGetValue(sender, out uint known)
+                        ? known : _currentEpoch;
+                    if (IsOlderEpoch(packet.Epoch, previous)) return;
+                    _peerEpochs[sender] = packet.Epoch;
                 }
-                else if (packet.Epoch != CurrentEpoch)
-                {
-                    // Stale packet from a different epoch, ignore
-                    return;
-                }
+                AdoptHigherEpoch(packet.Epoch);
 
                 switch (packet.EventType)
                 {
@@ -927,9 +988,14 @@ namespace SilksongCoop.Core.State
                         break;
 
                     case DeathEventType.TeamWipeOccurred:
-                        bool alreadyWiping = CurrentState == DeathState.TeamWipe;
+                        bool alreadyWiping;
                         lock (_lock)
                         {
+                            alreadyWiping = _currentState == DeathState.TeamWipe;
+                            _currentState = DeathState.TeamWipe;
+                            _reviveTargetPeer = null;
+                            _pendingSoloBenchRespawn = false;
+
                             // A team wipe means the sender saw no living partner left, so
                             // every registered peer is down (each of them sends its own
                             // death packet too, but this keeps a 3+ session consistent even
@@ -944,31 +1010,22 @@ namespace SilksongCoop.Core.State
                             _isPartnerAlive = false;
                         }
 
-                        if (alreadyWiping)
+                        if (!alreadyWiping)
                         {
-                            // Duplicate/echo packet: state is already updated, do not fire
-                            // the wipe callback twice.
-                            break;
+                            OnTeamWipeTriggered?.Invoke();
                         }
-
-                        CurrentState = DeathState.TeamWipe;
-                        OnTeamWipeTriggered?.Invoke();
                         break;
 
                     case DeathEventType.BenchCheckpointUpdate:
-                        // Sent after every bench respawn. Besides syncing the epoch (adopted
-                        // above) it proves that THIS sender completed the reload and is alive
-                        // again. Only the sender is marked: in a 3+ session the other peers
-                        // keep their own alive/dead state.
+                    case DeathEventType.SoloBenchRespawn:
+                        // Recovery confirms only the sender's life state. Reject an
+                        // older epoch before reaching this branch, including stale
+                        // recovery packets arriving after a later death cycle.
                         lock (_lock)
                         {
                             GetOrCreatePartnerLocked(sender).Alive = true;
                             _isPartnerAlive = true;
                         }
-                        break;
-
-                    case DeathEventType.SoloBenchRespawn:
-                        // Handled before the epoch check (see entry point).
                         break;
                 }
             }
@@ -1009,41 +1066,73 @@ namespace SilksongCoop.Core.State
 
         private void BeginBenchRespawn(bool notifyPartner, bool notifyImmediately)
         {
-            if (CurrentState == DeathState.TeamWipe) return;
+            bool sendWipeImmediately = false;
+            bool triggerWipeCallback = false;
 
-            CurrentState = DeathState.TeamWipe;
             lock (_lock)
             {
-                _reviveTargetPeer = null;
-                _adoptedEpochDuringRespawn = false;
-                _pendingSoloBenchRespawn = !notifyPartner && !notifyImmediately;
-
-                if (notifyPartner)
+                if (_currentState == DeathState.TeamWipe)
                 {
-                    // A real team wipe: every peer is dead and will reload its own bench.
+                    if (!notifyPartner) return;
+
+                    // Escalate from solo bench respawn to team wipe
+                    _pendingSoloBenchRespawn = false;
                     foreach (var partner in _partners.Values)
                     {
                         partner.Alive = false;
                     }
                     _isPartnerAlive = false;
-                }
-                else if (_explicitPeers.Count == 0)
-                {
-                    // Legacy single-partner path: a solo fallback leaves the partner
-                    // alive in another room, so the aggregate must stay true. Lazy
-                    // packet-created entries belong to the same legacy pair.
-                    foreach (var partner in _partners.Values)
-                    {
-                        partner.Alive = true;
-                    }
-                    _isPartnerAlive = true;
-                }
-                // Multi-peer solo fallback: do not touch other peers. Marking every
-                // registered peer alive resurrected a genuinely dead third player.
-            }
-            OnTeamWipeTriggered?.Invoke();
 
-            if (notifyImmediately)
+                    if (notifyImmediately)
+                    {
+                        sendWipeImmediately = true;
+                    }
+                }
+                else
+                {
+                    _currentState = DeathState.TeamWipe;
+                    _remainingSpectatorTime = 0f;
+                    _reviveTargetPeer = null;
+                    _adoptedEpochDuringRespawn = false;
+                    _pendingSoloBenchRespawn = !notifyPartner && !notifyImmediately;
+
+                    if (notifyPartner)
+                    {
+                        // A real team wipe: every peer is dead and will reload its own bench.
+                        foreach (var partner in _partners.Values)
+                        {
+                            partner.Alive = false;
+                        }
+                        _isPartnerAlive = false;
+                    }
+                    else if (_explicitPeers.Count == 0)
+                    {
+                        // Legacy single-partner path: a solo fallback leaves the partner
+                        // alive in another room, so the aggregate must stay true. Lazy
+                        // packet-created entries belong to the same legacy pair.
+                        foreach (var partner in _partners.Values)
+                        {
+                            partner.Alive = true;
+                        }
+                        _isPartnerAlive = true;
+                    }
+                    // Multi-peer solo fallback: do not touch other peers. Marking every
+                    // registered peer alive resurrected a genuinely dead third player.
+
+                    triggerWipeCallback = true;
+                    if (notifyImmediately)
+                    {
+                        sendWipeImmediately = true;
+                    }
+                }
+            }
+
+            if (triggerWipeCallback)
+            {
+                OnTeamWipeTriggered?.Invoke();
+            }
+
+            if (sendWipeImmediately)
             {
                 SendBenchRespawnPacket(notifyPartner);
             }
@@ -1070,14 +1159,9 @@ namespace SilksongCoop.Core.State
         /// </summary>
         public void BroadcastEpochSync()
         {
-            var packet = new DeathLifecyclePacket
-            {
-                Header = new PacketHeader(PacketType.PlayerDeath, 4, 0, NetworkClock.NowMs),
-                EventType = DeathEventType.BenchCheckpointUpdate,
-                RemainingSeconds = 0f,
-                Epoch = CurrentEpoch
-            };
-            OnOutgoingDeathPacket?.Invoke(packet);
+            // A reload confirms actual local life state as well as the epoch. A pure
+            // EpochSync packet is reserved for epoch alignment and never resurrects.
+            OnOutgoingDeathPacket?.Invoke(CreateLifecycleSnapshot());
         }
 
         /// <summary>
@@ -1085,23 +1169,20 @@ namespace SilksongCoop.Core.State
         /// </summary>
         public void ResetAfterBenchRespawn()
         {
-            CurrentState = DeathState.Alive;
-            RemainingSpectatorTime = 0f;
-
-            bool advanceEpoch;
+            bool notifySoloBenchRespawn;
             lock (_lock)
             {
                 // Both peers advance the epoch for the same wipe. If this player adopted
                 // the peer's higher epoch while still reloading, advancing again would put
                 // the two peers on different epochs and hide genuine deaths.
-                advanceEpoch = !_adoptedEpochDuringRespawn;
+                if (!_adoptedEpochDuringRespawn)
+                {
+                    _currentEpoch++;
+                }
                 _adoptedEpochDuringRespawn = false;
-            }
-            if (advanceEpoch) CurrentEpoch++;
 
-            bool notifySoloBenchRespawn;
-            lock (_lock)
-            {
+                _currentState = DeathState.Alive;
+                _remainingSpectatorTime = 0f;
                 _reviveTargetPeer = null;
                 notifySoloBenchRespawn = _pendingSoloBenchRespawn;
                 _pendingSoloBenchRespawn = false;
@@ -1110,9 +1191,10 @@ namespace SilksongCoop.Core.State
                 {
                     // Legacy behaviour: both players reload the same bench after a wipe,
                     // so lazy packet-created partner entries become alive again too.
-                    foreach (var partner in _partners.Values)
+                    foreach (var partner in _partners)
                     {
-                        partner.Alive = true;
+                        partner.Value.Alive = true;
+                        _peerEpochs[partner.Key] = _currentEpoch;
                     }
                     _isPartnerAlive = true;
                 }

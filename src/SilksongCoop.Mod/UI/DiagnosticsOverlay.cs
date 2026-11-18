@@ -63,6 +63,17 @@ namespace SilksongCoop.Mod.UI
         private readonly Vector2[] _graphPoints = new Vector2[MaxGraphSamples];
         private readonly float[] _historyBuffer = new float[MaxGraphSamples];
 
+        // PERF-02: Cached summary strings and throttling to eliminate per-frame allocations in OnGUI
+        private string _cachedPartnerSummary = string.Empty;
+        private PeerDiagnosticsSnapshot _lastPeerSnapshot;
+        private bool _peerSnapshotInitialized;
+        private float _nextPeerSummaryRefreshTime;
+        private const float PeerSummaryRefreshInterval = 0.25f;
+
+        private string _cachedSessionSummary = string.Empty;
+        private float _nextSessionSummaryRefreshTime;
+        private const float SessionSummaryRefreshInterval = 0.25f;
+
         private GUIStyle CreateOverlayStyle(int fontSize, FontStyle style, Color textColor)
         {
             return new GUIStyle(GUI.skin.label)
@@ -156,6 +167,23 @@ namespace SilksongCoop.Mod.UI
         #region Public Methods
 
         /// <summary>
+        /// Formats partner summary string from a snapshot.
+        /// </summary>
+        public static string FormatPartnerSummary(PeerDiagnosticsSnapshot peer)
+        {
+            if (!peer.Connected) return string.Empty;
+            string scene = peer.SameScene ? Loc.T("same room") : Loc.T("other room");
+            string state = peer.PartnerAlive ? Loc.T("alive") : Loc.T("dead");
+            string interp = peer.HasInterpolationDelay
+                ? Loc.T("  |  interp {0:F0} ms", peer.InterpolationDelayMs)
+                : string.Empty;
+            return $"{Loc.T("Partner")}: {scene}, {state}{interp}";
+        }
+
+        public string CachedPartnerSummary => _cachedPartnerSummary;
+        public string CachedSessionSummary => _cachedSessionSummary;
+
+        /// <summary>
         /// Renders the diagnostics overlay GUI. Call from OnGUI when visible.
         /// </summary>
         public void OnGUI()
@@ -215,39 +243,55 @@ namespace SilksongCoop.Mod.UI
                     0f, 100f, SilksongSkin.BlueInfo, 1f / 1024f);
                 cursorY += GraphHeight + RowSpacing;
 
-                // Summary line
+                // Summary line (throttled to 250ms to eliminate per-frame allocations)
                 var summaryStyle = _summaryStyle ??= CreateOverlayStyle(11, FontStyle.Normal, Color.white);
-                string rejected = _diagnostics.RejectedPackets > 0
-                    ? Loc.T("  |  Rejected: {0}", _diagnostics.RejectedPackets)
-                    : string.Empty;
-                string tick = _tickRateProvider != null
-                    ? Loc.T("  |  Tick: {0:F0} Hz", _tickRateProvider())
-                    : string.Empty;
-                GUI.Label(new Rect(x + Padding, cursorY, TotalWidth - Padding * 2, 20),
-                    Loc.T("Session: {0:F0}s  |  Pkt out: {1}/s  in: {2}/s{3}{4}",
+                float now = Time.unscaledTime;
+                if (now >= _nextSessionSummaryRefreshTime || string.IsNullOrEmpty(_cachedSessionSummary))
+                {
+                    _nextSessionSummaryRefreshTime = now + SessionSummaryRefreshInterval;
+                    string rejected = _diagnostics.RejectedPackets > 0
+                        ? Loc.T("  |  Rejected: {0}", _diagnostics.RejectedPackets)
+                        : string.Empty;
+                    string tick = _tickRateProvider != null
+                        ? Loc.T("  |  Tick: {0:F0} Hz", _tickRateProvider())
+                        : string.Empty;
+                    _cachedSessionSummary = Loc.T("Session: {0:F0}s  |  Pkt out: {1}/s  in: {2}/s{3}{4}",
                         _diagnostics.SessionDuration,
                         _diagnostics.PacketsOutPerSecond,
                         _diagnostics.PacketsInPerSecond,
                         rejected,
-                        tick),
-                    summaryStyle);
+                        tick);
+                }
+                GUI.Label(new Rect(x + Padding, cursorY, TotalWidth - Padding * 2, 20),
+                    _cachedSessionSummary, summaryStyle);
 
-                // Partner state line: scene presence is the gate for position-based sync,
-                // so seeing "other room" here explains missing hits without opening F10.
+                // Partner state line (throttled to 250ms / state change to eliminate per-frame allocations)
                 cursorY += 18f;
                 if (_peerProvider != null)
                 {
-                    var peer = _peerProvider();
-                    if (peer.Connected)
+                    if (now >= _nextPeerSummaryRefreshTime)
                     {
-                        string scene = peer.SameScene ? Loc.T("same room") : Loc.T("other room");
-                        string state = peer.PartnerAlive ? Loc.T("alive") : Loc.T("dead");
-                        string interp = peer.HasInterpolationDelay
-                            ? Loc.T("  |  interp {0:F0} ms", peer.InterpolationDelayMs)
-                            : string.Empty;
+                        var peer = _peerProvider();
+                        bool changed = !_peerSnapshotInitialized ||
+                            peer.Connected != _lastPeerSnapshot.Connected ||
+                            peer.SameScene != _lastPeerSnapshot.SameScene ||
+                            peer.PartnerAlive != _lastPeerSnapshot.PartnerAlive ||
+                            peer.HasInterpolationDelay != _lastPeerSnapshot.HasInterpolationDelay ||
+                            Math.Abs(peer.InterpolationDelayMs - _lastPeerSnapshot.InterpolationDelayMs) > 1.0f;
 
+                        if (changed)
+                        {
+                            _lastPeerSnapshot = peer;
+                            _peerSnapshotInitialized = true;
+                            _cachedPartnerSummary = FormatPartnerSummary(peer);
+                        }
+                        _nextPeerSummaryRefreshTime = now + PeerSummaryRefreshInterval;
+                    }
+
+                    if (_lastPeerSnapshot.Connected && !string.IsNullOrEmpty(_cachedPartnerSummary))
+                    {
                         GUI.Label(new Rect(x + Padding, cursorY, TotalWidth - Padding * 2, 20),
-                            $"{Loc.T("Partner")}: {scene}, {state}{interp}", summaryStyle);
+                            _cachedPartnerSummary, summaryStyle);
                     }
                 }
             }

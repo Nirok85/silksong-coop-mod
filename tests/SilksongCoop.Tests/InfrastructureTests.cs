@@ -99,6 +99,45 @@ namespace SilksongCoop.Tests
         }
 
         [Fact]
+        public void AdaptiveTickRate_SetDefaultTickHz_UpdatesTargetAndClamps()
+        {
+            var rate = new AdaptiveTickRate(30f);
+            Assert.Equal(30f, rate.DefaultTickHz);
+            Assert.Equal(30f, rate.CurrentTickHz);
+
+            // Update target within valid bounds [15, 60]
+            rate.SetDefaultTickHz(45f);
+            Assert.Equal(45f, rate.DefaultTickHz);
+
+            // Clamping active rate when new default is lower than current
+            rate.SetDefaultTickHz(20f);
+            Assert.Equal(20f, rate.DefaultTickHz);
+            Assert.Equal(20f, rate.CurrentTickHz);
+
+            // Clamping to minimum (15 Hz)
+            rate.SetDefaultTickHz(5f);
+            Assert.Equal(15f, rate.DefaultTickHz);
+            Assert.Equal(15f, rate.CurrentTickHz);
+
+            // Clamping to maximum (60 Hz)
+            rate.SetDefaultTickHz(120f);
+            Assert.Equal(60f, rate.DefaultTickHz);
+
+            // Invalid rates fall back to default 30 Hz
+            rate.SetDefaultTickHz(float.NaN);
+            Assert.Equal(30f, rate.DefaultTickHz);
+
+            rate.SetDefaultTickHz(-10f);
+            Assert.Equal(30f, rate.DefaultTickHz);
+
+            rate.SetDefaultTickHz(0f);
+            Assert.Equal(30f, rate.DefaultTickHz);
+
+            rate.SetDefaultTickHz(float.PositiveInfinity);
+            Assert.Equal(30f, rate.DefaultTickHz);
+        }
+
+        [Fact]
         public void InterestManager_FiltersByDistance()
         {
             var interest = new global::SilksongCoop.Core.Networking.InterestManager { DefaultRadius = 10f, Hysteresis = 2f };

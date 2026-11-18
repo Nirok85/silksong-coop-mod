@@ -15,7 +15,7 @@ namespace SilksongCoop.Mod.Services
     {
         private readonly ISessionService _sessionService;
         private readonly ITransportService _transportService;
-        private readonly IGameplayActions _gameplay;
+        private readonly IReviveGameplayActions _gameplay;
         private readonly DeathLifecycleCoordinator _deathCoordinator;
 
         public INetworkDiagnostics? Diagnostics { get; set; }
@@ -23,7 +23,7 @@ namespace SilksongCoop.Mod.Services
         public DeathSyncManager(
             ISessionService sessionService,
             ITransportService transportService,
-            IGameplayActions gameplay,
+            IReviveGameplayActions gameplay,
             DeathLifecycleCoordinator deathCoordinator)
         {
             _sessionService = sessionService;

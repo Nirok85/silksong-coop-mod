@@ -5,7 +5,6 @@ using SilksongCoop.Core.Networking;
 using SilksongCoop.Core.Protocol;
 using SilksongCoop.Core.Protocol.Packets;
 using SilksongCoop.Core.State;
-using UnityEngine;
 
 namespace SilksongCoop.Mod.Services
 {
@@ -16,27 +15,29 @@ namespace SilksongCoop.Mod.Services
     {
         private readonly ISessionService _sessionService;
         private readonly ITransportService _transportService;
-        private readonly IGameplayActions _gameplay;
+        private readonly IInventoryGameplayActions _gameplay;
         private readonly IInventorySyncService _inventorySync;
 
         public INetworkDiagnostics? Diagnostics { get; set; }
 
-        public InventorySyncManager(ISessionService sessionService, ITransportService transportService, IGameplayActions gameplay, IInventorySyncService inventorySync)
+        public InventorySyncManager(ISessionService sessionService, ITransportService transportService, IInventoryGameplayActions gameplay, IInventorySyncService inventorySync)
         {
             _sessionService = sessionService;
             _transportService = transportService;
             _gameplay = gameplay;
             _inventorySync = inventorySync;
 
-            _inventorySync.OnOutgoingItemUnlockPacket += OnOutgoingItemUnlock;
+            _inventorySync.OnOutgoingPeerItemUnlockPacket += OnOutgoingPeerItemUnlock;
 
             // Fires for unlocks received from the partner and must be applied locally.
-            _inventorySync.OnRemoteItemUnlocked += OnRemoteItemUnlocked;
+            if (_inventorySync is InventorySyncService concrete) concrete.RemoteItemApplier = _gameplay.TryApplyRemoteItemUnlock;
+            else _inventorySync.OnRemoteItemUnlocked += OnRemoteItemUnlocked;
         }
 
         public void Dispose()
         {
-            _inventorySync.OnOutgoingItemUnlockPacket -= OnOutgoingItemUnlock;
+            _inventorySync.OnOutgoingPeerItemUnlockPacket -= OnOutgoingPeerItemUnlock;
+            if (_inventorySync is InventorySyncService concrete) concrete.RemoteItemApplier = null;
             _inventorySync.OnRemoteItemUnlocked -= OnRemoteItemUnlocked;
         }
 
@@ -48,19 +49,27 @@ namespace SilksongCoop.Mod.Services
         public void OnSessionStarted(bool isHost) { }
         public void OnSessionEnded() { }
 
-        private void OnOutgoingItemUnlock(ItemUnlockPacket packet)
+        private void OnOutgoingPeerItemUnlock(NetworkPeerId? targetPeer, ItemUnlockPacket packet)
         {
             if (RemoteApplyScope.IsActive) return;
             var transport = _transportService.ActiveTransport;
             var session = _sessionService.SessionState;
             if (transport == null || session?.IsConnected != true) return;
 
-            // Item unlocks are re-broadcast during peer catch-up (BroadcastInitialInventory),
-            // so a refusal only delays the unlock — but it must not be silent.
-            if (!PacketSender.SendToAll(
-                transport, packet, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency,
-                512, Diagnostics, "[InventorySyncManager]"))
-                SilksongCoopPlugin.LogWarn("[InventorySyncManager] Transport refused an item unlock broadcast.");
+            if (targetPeer.HasValue)
+            {
+                if (!PacketSender.SendTo(
+                    transport, targetPeer.Value, packet, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency,
+                    512, Diagnostics, "[InventorySyncManager]"))
+                    SilksongCoopPlugin.LogWarn($"[InventorySyncManager] Transport refused item unlock to peer {targetPeer.Value}.");
+            }
+            else
+            {
+                if (!PacketSender.SendToAll(
+                    transport, packet, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency,
+                    512, Diagnostics, "[InventorySyncManager]"))
+                    SilksongCoopPlugin.LogWarn("[InventorySyncManager] Transport refused an item unlock broadcast.");
+            }
         }
     }
 }

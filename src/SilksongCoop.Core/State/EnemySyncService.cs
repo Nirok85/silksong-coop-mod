@@ -579,7 +579,8 @@ namespace SilksongCoop.Core.State
                 if (!dead && localHitSinceSnapshot)
                     acceptedHp = Math.Min(entry.LastHp, Math.Max(0, hp));
 
-                bool accepted = dead || !localHitSinceSnapshot || acceptedHp < previousHp;
+                bool confirmingHp = !dead && hp == previousHp;
+                bool accepted = dead || !localHitSinceSnapshot || acceptedHp < previousHp || confirmingHp;
                 if (!accepted) return false;
 
                 entry.HasState = true;

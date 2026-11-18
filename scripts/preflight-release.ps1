@@ -132,15 +132,43 @@ else {
         $failures.Add("dotnet test failed with exit code $LASTEXITCODE")
         Write-Host '  [FAIL] tests failed' -ForegroundColor Red
     }
-    else {
-        Write-Host '  [ok]   tests passed' -ForegroundColor Green
+    $coreTestsSucceeded = $LASTEXITCODE -eq 0
+
+    Write-Host '==> Production source runtime checks' -ForegroundColor Cyan
+    $runtimeChecksSucceeded = $true
+    foreach ($checkProject in @('SilksongCoop.RuntimeChecks', 'SilksongCoop.ModSourceChecks', 'SilksongCoop.WalletPumpChecks')) {
+        $runtimeCheckArgs = @(
+            'run',
+            '--project', (Join-Path $root "tests/$checkProject/$checkProject.csproj"),
+            '-c', 'Release',
+            '-p:TreatWarningsAsErrors=true'
+        )
+        # These projects are separate from the game-dependent solution.
+        if ($NoRestore) {
+            $runtimeCheckArgs += '--no-restore'
+            Write-Host "  [note] $checkProject must be restored before using -NoRestore." -ForegroundColor Yellow
+        }
+        & dotnet @runtimeCheckArgs
+        if ($LASTEXITCODE -ne 0) {
+            $runtimeChecksSucceeded = $false
+            $failures.Add("$checkProject failed with exit code $LASTEXITCODE")
+            Write-Host "  [FAIL] $checkProject failed" -ForegroundColor Red
+        }
+    }
+    if ($coreTestsSucceeded -and $runtimeChecksSucceeded) {
+        Write-Host '  [ok]   tests and production source runtime checks passed' -ForegroundColor Green
     }
 }
 
-if ($buildSucceeded -and -not [string]::IsNullOrWhiteSpace($env:ManagedDir)) {
-    Write-Host '==> Game binding metadata' -ForegroundColor Cyan
-    & dotnet run --project (Join-Path $root 'tools/SilksongCoop.BindingCheck') -c Release -- $env:ManagedDir
-    if ($LASTEXITCODE -ne 0) { $failures.Add('game binding metadata check failed') }
+if ($buildSucceeded) {
+    if ([string]::IsNullOrWhiteSpace($env:ManagedDir)) {
+        Write-Warning 'Game binding metadata check skipped because ManagedDir is not set. This preflight result does not verify game-assembly bindings.'
+    }
+    else {
+        Write-Host '==> Game binding metadata' -ForegroundColor Cyan
+        & dotnet run --project (Join-Path $root 'tools/SilksongCoop.BindingCheck') -c Release -- $env:ManagedDir
+        if ($LASTEXITCODE -ne 0) { $failures.Add('game binding metadata check failed') }
+    }
 }
 
 Write-Host '==> Built DLL version' -ForegroundColor Cyan

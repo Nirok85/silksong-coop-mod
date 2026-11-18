@@ -3,13 +3,13 @@
 ![Version](https://img.shields.io/badge/Version-3.3.9-success)
 [![CI](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml)
 
-[Русская версия](README.ru.md) · [Download v3.3.9 beta.3](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.9-beta.3)
+[Русская версия](README.ru.md) · [Download v3.3.9](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.9)
 
 Explore Pharloom together in a two-player co-op mod for the Steam PC version of Silksong. Fight enemies together and share currency, upgrades and unlocks. Each player manages their own health, silk and equipped gear.
 
 ## Installation
 
-**Beta:** the redesigned interface has not yet been visually verified in game. All players need matching game and mod versions. This beta uses protocol v11.
+**Release:** all players need matching game and mod versions. This release uses [protocol v12](docs/protocol-v12.md); build and update every peer together.
 
 - **Windows x64.** Close the game and extract `SilksongCoop_v3.3.9.zip` into the game folder. The archive includes BepInEx 5.4.21. Keep `winhttp.dll` next to the game executable.
 - **Existing BepInEx 5.4.x install.** Download `SilksongCoop_v3.3.9_plugin-only.zip` and place both mod DLLs in `BepInEx/plugins/SilksongCoop/`. On Linux or macOS, use the BepInEx loader for your platform.

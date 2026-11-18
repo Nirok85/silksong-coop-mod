@@ -27,6 +27,15 @@ namespace SilksongCoop.Mod.Services
 
         /// <summary>Current adaptive transform tick rate in Hz (visible in the status tab).</summary>
         public float CurrentTickHz => _tickRate.CurrentTickHz;
+        public float DefaultTickHz => _tickRate.DefaultTickHz;
+
+        /// <summary>
+        /// Updates the default transform broadcast tick rate dynamically at runtime.
+        /// </summary>
+        public void SetTickRate(float tickHz)
+        {
+            _tickRate.SetDefaultTickHz(tickHz);
+        }
 
         /// <summary>
         /// Optional diagnostics sink, wired up after the Menu UI is created.

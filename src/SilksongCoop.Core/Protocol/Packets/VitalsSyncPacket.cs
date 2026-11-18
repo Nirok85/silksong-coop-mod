@@ -11,6 +11,7 @@ namespace SilksongCoop.Core.Protocol.Packets
         public byte CurrentHealth;
         public byte CurrentSilk;
         public byte MaxHealth;
+        /// <summary>Legacy field name; protocol v12 carries raw silkMax capacity, starting at nine.</summary>
         public byte MaxSilkSpools;
         public byte NeedleUpgradeLevel;
 

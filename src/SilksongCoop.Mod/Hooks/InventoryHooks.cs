@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using SilksongCoop.Core.Protocol.Packets;
+using SilksongCoop.Core.Progression;
 using SilksongCoop.Mod.State;
 
 namespace SilksongCoop.Mod.Hooks
@@ -16,26 +17,16 @@ namespace SilksongCoop.Mod.Hooks
         /// <summary>
         /// Set of ability boolean flags that should be synchronized between players.
         /// </summary>
-        public static readonly HashSet<string> SharedAbilityBools = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "hasDash",
-            "hasWalljump",
-            "hasDoubleJump",
-            "hasHarpoonDash",
-            "hasSilkSpecial",
-            "hasNeedleThrow",
-            "hasThreadSphere",
-            "hasParry",
-            "hasSilkCharge",
-            "hasSilkBomb",
-            "hasSilkBossNeedle",
-            "hasNeedolin",
-            "hasNeedolinMemoryPowerup",
-            "hasBrolly",
-            "hasChargeSlash",
-            "hasSuperJump",
-            "hasQuill"
-        };
+        // Retained as mutable compatibility snapshots; they cannot expand network authorization.
+        public static readonly HashSet<string> SharedAbilityBools =
+            new HashSet<string>(SharedSaveBoolPolicy.AbilityBools, StringComparer.Ordinal);
+
+        /// <summary>
+        /// Set of key item boolean flags authorized to be synchronized to PlayerData.
+        /// </summary>
+        // Retained for callers that inspect the historical public field.
+        public static readonly HashSet<string> AllowedKeyItemBools =
+            new HashSet<string>(SharedSaveBoolPolicy.KeyItemBools, StringComparer.Ordinal);
 
         private static HashSet<string>? _validatedAbilityBools;
         private static readonly object _abilityValidationLock = new object();
@@ -83,10 +74,18 @@ namespace SilksongCoop.Mod.Hooks
         /// </summary>
         public static bool IsSharedAbilityBool(string boolName)
         {
-            if (string.IsNullOrEmpty(boolName) || !SharedAbilityBools.Contains(boolName))
+            if (!SharedSaveBoolPolicy.IsAllowed(boolName, ItemCategory.Ability) || !SharedAbilityBools.Contains(boolName))
                 return false;
 
             return GetValidatedAbilityBools().Contains(boolName);
+        }
+
+        /// <summary>
+        /// Validates whether an incoming itemId and category represent an authorized PlayerData save boolean.
+        /// </summary>
+        public static bool IsAllowedSaveBool(string itemId, ItemCategory category)
+        {
+            return SharedSaveBoolPolicy.IsAllowed(itemId, category);
         }
 
         /// <summary>

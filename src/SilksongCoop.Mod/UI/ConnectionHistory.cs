@@ -98,6 +98,36 @@ namespace SilksongCoop.Mod.UI
             }
         }
 
+        /// <summary>
+        /// Parses a raw separator-delimited string into history entries, capping to MaxEntries,
+        /// deduplicating, and bounding split operations to avoid unbounded processing on corrupt data.
+        /// </summary>
+        public static List<string> ParseRawHistory(string raw, int maxEntries = MaxEntries, int maxTargetLength = MaxTargetLength)
+        {
+            var result = new List<string>(maxEntries);
+            if (string.IsNullOrEmpty(raw)) return result;
+
+            // Bound splitting to prevent unbounded string allocations if raw data is corrupt
+            var parts = raw.Split(new[] { Separator }, maxEntries * 4, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var p in parts)
+            {
+                if (result.Count >= maxEntries)
+                    break;
+
+                var trimmed = p.Trim();
+                if (!string.IsNullOrEmpty(trimmed) &&
+                    trimmed.Length <= maxTargetLength &&
+                    !result.Contains(trimmed) &&
+                    !RoomCodeCodec.TryDecode(trimmed, out _, out _))
+                {
+                    result.Add(trimmed);
+                    if (result.Count >= maxEntries)
+                        break;
+                }
+            }
+            return result;
+        }
+
         private void EnsureLoaded()
         {
             if (_loaded) return;
@@ -110,18 +140,9 @@ namespace SilksongCoop.Mod.UI
                 string raw = UnityEngine.PlayerPrefs.GetString(PrefsKey, "");
                 if (string.IsNullOrEmpty(raw)) return;
 
-                var parts = raw.Split(Separator);
-                foreach (var p in parts)
-                {
-                    var trimmed = p.Trim();
-                    if (!string.IsNullOrEmpty(trimmed) &&
-                        trimmed.Length <= MaxTargetLength &&
-                        !RoomCodeCodec.TryDecode(trimmed, out _, out _) &&
-                        _entries.Count < MaxEntries)
-                    {
-                        _entries.Add(trimmed);
-                    }
-                }
+                var parsed = ParseRawHistory(raw, MaxEntries, MaxTargetLength);
+                _entries.Clear();
+                _entries.AddRange(parsed);
                 Save();
             }
             catch (Exception ex)

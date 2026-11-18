@@ -34,6 +34,7 @@ namespace SilksongCoop.Mod.Hooks
                 if (SilksongCoopPlugin.Instance?.VitalsSync == null || !SilksongCoopPlugin.Instance.SessionState.IsConnected) return;
                 if (HeroController.instance == null || PlayerData.instance == null) return;
                 
+                SilksongCoopPlugin.Instance.NoteLocalHealthUpgrade(amount);
                 SilksongCoopPlugin.Instance.VitalsSync.OnLocalMaxHealthUpgrade(PlayerData.instance.maxHealthBase);
             }
             catch (Exception ex)
@@ -57,7 +58,8 @@ namespace SilksongCoop.Mod.Hooks
                 if (SilksongCoopPlugin.Instance?.VitalsSync == null || !SilksongCoopPlugin.Instance.SessionState.IsConnected) return;
                 if (HeroController.instance == null || PlayerData.instance == null) return;
                 
-                SilksongCoopPlugin.Instance.VitalsSync.OnLocalMaxSilkUpgrade(PlayerData.instance.silkMax / 9);
+                SilksongCoopPlugin.Instance.NoteLocalSilkUpgrade(amount);
+                SilksongCoopPlugin.Instance.VitalsSync.OnLocalMaxSilkUpgrade(PlayerData.instance.silkMax);
             }
             catch (Exception ex)
             {
@@ -217,7 +219,7 @@ namespace SilksongCoop.Mod.Hooks
                 {
                     SilksongCoopPlugin.Instance?.BroadcastHeartPieces(value);
                 }
-                else if (intName == "silkParts")
+                else if (intName == "silkSpoolParts")
                 {
                     SilksongCoopPlugin.Instance?.BroadcastSilkParts(value);
                 }
@@ -257,9 +259,9 @@ namespace SilksongCoop.Mod.Hooks
                 {
                     SilksongCoopPlugin.Instance?.BroadcastHeartPieces(pd.heartPieces);
                 }
-                else if (intName == "silkParts")
+                else if (intName == "silkSpoolParts")
                 {
-                    SilksongCoopPlugin.Instance?.BroadcastSilkParts(pd.silkParts);
+                    SilksongCoopPlugin.Instance?.BroadcastSilkParts(pd.silkSpoolParts);
                 }
             }
             catch (Exception ex)

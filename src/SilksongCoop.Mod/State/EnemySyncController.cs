@@ -61,6 +61,11 @@ namespace SilksongCoop.Mod.State
 
         private SilksongCoopPlugin? _plugin;
         private readonly EnemySyncService _service = new EnemySyncService();
+        /// <summary>
+        /// Local multi-peer enemy authority mapping (enemyKey -> authoritative peer).
+        /// Cleared alongside _service.Reset() in ResetSession to prevent stale authority leaking.
+        /// </summary>
+        private readonly Dictionary<ulong, NetworkPeerId> _authorityMap = new Dictionary<ulong, NetworkPeerId>();
         private ConditionalWeakTable<HealthManager, KeyHolder> _keyCache = new ConditionalWeakTable<HealthManager, KeyHolder>();
         private struct SnapshotState
         {
@@ -110,6 +115,7 @@ namespace SilksongCoop.Mod.State
         private readonly Dictionary<ulong, PendingDeadEnemy> _pendingDeadEnemies =
             new Dictionary<ulong, PendingDeadEnemy>();
         private readonly Queue<ulong> _pendingDeadOrder = new Queue<ulong>();
+        private readonly DeferredEnemyDamageLedger _unloadedEnemyDamage = new DeferredEnemyDamageLedger();
         private float _pendingDeadRetryAt;
         private readonly Dictionary<ulong, WorldEventPacket> _worldEvents = new Dictionary<ulong, WorldEventPacket>();
         private readonly Queue<ulong> _worldEventOrder = new Queue<ulong>();
@@ -186,6 +192,27 @@ namespace SilksongCoop.Mod.State
         }
 
         /// <summary>
+        /// Sets or updates the authority for a specific enemy.
+        /// </summary>
+        public void SetEnemyAuthority(ulong enemyKey, NetworkPeerId peerId)
+        {
+            _authorityMap[enemyKey] = peerId;
+        }
+
+        /// <summary>
+        /// Attempts to get the authority for a specific enemy.
+        /// </summary>
+        public bool TryGetEnemyAuthority(ulong enemyKey, out NetworkPeerId peerId)
+        {
+            return _authorityMap.TryGetValue(enemyKey, out peerId);
+        }
+
+        /// <summary>
+        /// Gets the count of tracked enemy authority entries (for diagnostics and testing).
+        /// </summary>
+        public int AuthorityMapCount => _authorityMap.Count;
+
+        /// <summary>
         /// Clears all per-session state. Host snapshot timestamps restart when the host
         /// process restarts, so stale entries must not reject the new session's packets.
         /// </summary>
@@ -193,6 +220,7 @@ namespace SilksongCoop.Mod.State
         {
             RefreshSaveScope();
             _service.Reset();
+            _authorityMap.Clear();
             _keyCache = new ConditionalWeakTable<HealthManager, KeyHolder>();
             _lastSnapshot.Clear();
             _enemyIndex.Clear();
@@ -219,6 +247,7 @@ namespace SilksongCoop.Mod.State
             _pendingWorldEventOrder.Clear();
             _pendingDeadEnemies.Clear();
             _pendingDeadOrder.Clear();
+            _unloadedEnemyDamage.Reset();
             _pendingDeadRetryAt = 0f;
             // A new session may come from a different host whose revisions restart from a
             // lower value, so applied revisions must not carry over.
@@ -263,6 +292,7 @@ namespace SilksongCoop.Mod.State
         private void ClearSaveScopedReplayState()
         {
             _service.Reset();
+            _authorityMap.Clear();
             _lastSnapshot.Clear();
             _enemyIndex.Clear();
             _enemyIndexDirty = true;
@@ -279,6 +309,7 @@ namespace SilksongCoop.Mod.State
             _pendingWorldEventOrder.Clear();
             _pendingDeadEnemies.Clear();
             _pendingDeadOrder.Clear();
+            _unloadedEnemyDamage.Reset();
             _replayQueue.Clear();
             _appliedWorldRevisions.Clear();
             _appliedPersistentRevisions.Clear();
@@ -456,17 +487,26 @@ namespace SilksongCoop.Mod.State
                 allowProximity: !dead && sameScene);
             if (target == null)
             {
+                if (!_unloadedEnemyDamage.TryRecord(packet.EnemyKey, sender.Value,
+                        packet.Header.TickSequence, packet.Hp, packet.Damage,
+                        NetworkClock.NowMs, out int totalClaimDamage))
+                    return;
+
                 // Cache a death for a not-yet-loaded enemy instead of recording it as
                 // applied. Recording it here used to lose the kill forever and made the
                 // later duplicate look like a stale packet.
                 if (dead && packet.EnemyKey != 0)
                 {
+                    if (!localHost && session?.RemotePeerId.HasValue == true &&
+                        session.RemotePeerId.Value != sender)
+                        return; // Only the host can authorize an unloaded death on a client.
                     // The host is authoritative for every enemy it simulates. When the
                     // enemy is not loaded there is no host HP to merge, so a client's kill
                     // claim must at least prove that a damaging hit happened. A zero-damage
                     // claim used to be cached and then applied as an authoritative snapshot
                     // when the scene loaded, bypassing the hosted HP check entirely.
-                    if (localHost && packet.Damage <= 0)
+                    // Only unique events from the current, unexpired encounter prove damage.
+                    if (localHost && totalClaimDamage <= 0)
                     {
                         SilksongCoopPlugin.LogWarn(
                             $"[EnemySync] Ignored deferred client death claim for {packet.EnemyKey}: no damage");
@@ -483,11 +523,17 @@ namespace SilksongCoop.Mod.State
                             PositionY = packet.PositionY
                         },
                         packet.Header.Timestamp,
-                        packet.Damage,
+                        (short)Math.Clamp(totalClaimDamage, 0, short.MaxValue),
                         fromRemoteClaim: true);
                 }
                 return;
             }
+
+            if (!_unloadedEnemyDamage.TryObserve(sender.Value, packet.Header.TickSequence))
+                return;
+            _unloadedEnemyDamage.Forget(packet.EnemyKey);
+            if (_pendingDeadEnemies.TryGetValue(packet.EnemyKey, out var priorClaim) && priorClaim.FromRemoteClaim)
+                _pendingDeadEnemies.Remove(packet.EnemyKey);
 
             // The authority model is defined in docs/state-authority.md. While the host
             // actively simulates this enemy, its absolute HP is authoritative and every
@@ -951,18 +997,21 @@ namespace SilksongCoop.Mod.State
                 {
                     if (entry.IsDead)
                         CachePendingDeadEnemy(entry, packet.Header.Timestamp);
-                    else
+                    else if (_service.TryAcceptSnapshot(entry.EnemyKey, entry.Hp, entry.IsDead, packet.Header.Timestamp))
+                    {
                         _pendingDeadEnemies.Remove(entry.EnemyKey);
+                        _unloadedEnemyDamage.Forget(entry.EnemyKey);
+                    }
                     continue;
                 }
 
                 // A fresh snapshot for the loaded object supersedes a cached death (for
                 // example a boss-rush encounter that respawned the same boss).
-                _pendingDeadEnemies.Remove(entry.EnemyKey);
-
                 if (!_service.TryAcceptSnapshot(entry.EnemyKey, entry.Hp, entry.IsDead, packet.Header.Timestamp))
                     continue;
 
+                _pendingDeadEnemies.Remove(entry.EnemyKey);
+                _unloadedEnemyDamage.Forget(entry.EnemyKey);
                 ApplyEnemyState(entry.EnemyKey, target, entry.Hp, entry.IsDead, authoritative: true);
             }
 
@@ -1945,6 +1994,9 @@ namespace SilksongCoop.Mod.State
                 return;
             }
 
+            bool reloadedSameScene = _sceneHandle != -1 &&
+                string.Equals(scene, _sceneName, StringComparison.Ordinal);
+            if (reloadedSameScene) DiscardDeferredClaims();
             _sceneName = scene;
             _sceneHandle = sceneHandle;
             _keyCache = new ConditionalWeakTable<HealthManager, KeyHolder>();
@@ -2026,6 +2078,33 @@ namespace SilksongCoop.Mod.State
             _pendingDeadRetryAt = Time.unscaledTime + 0.25f;
         }
 
+        private void DiscardDeferredClaims()
+        {
+            _unloadedEnemyDamage.ClearEncounters();
+            List<ulong>? claims = null;
+            foreach (var pair in _pendingDeadEnemies)
+                if (pair.Value.FromRemoteClaim)
+                    (claims ??= new List<ulong>()).Add(pair.Key);
+            if (claims != null)
+                foreach (ulong key in claims) _pendingDeadEnemies.Remove(key);
+        }
+
+        /// <summary>
+        /// Gets the accumulated damage for an unloaded enemy (diagnostics/tests).
+        /// </summary>
+        public int GetUnloadedEnemyDamage(ulong enemyKey)
+        {
+            return _unloadedEnemyDamage.GetDamage(enemyKey, NetworkClock.NowMs);
+        }
+
+        /// <summary>
+        /// Clears accumulated damage for an unloaded enemy (diagnostics/tests).
+        /// </summary>
+        public void ClearUnloadedEnemyDamage(ulong enemyKey)
+        {
+            _unloadedEnemyDamage.Forget(enemyKey);
+        }
+
         private void PumpPendingDeadEnemies()
         {
             if (_pendingDeadEnemies.Count == 0) return;
@@ -2035,6 +2114,12 @@ namespace SilksongCoop.Mod.State
             foreach (var pair in _pendingDeadEnemies)
             {
                 var pending = pair.Value;
+                if (pending.FromRemoteClaim && _plugin?.SessionState?.IsHost == true &&
+                    _unloadedEnemyDamage.GetDamage(pending.Entry.EnemyKey, NetworkClock.NowMs) <= 0)
+                {
+                    (resolved ??= new List<ulong>()).Add(pair.Key);
+                    continue;
+                }
                 // Pending deaths belong to a specific enemy in a scene that was not loaded
                 // when the packet arrived. Only an exact key match may apply them; the
                 // proximity fallback could otherwise kill an unrelated enemy in the scene
@@ -2052,11 +2137,12 @@ namespace SilksongCoop.Mod.State
                 if (_plugin?.SessionState?.IsHost == true &&
                     pending.FromRemoteClaim)
                 {
-                    bool reject = pending.Damage <= 0;
+                    int totalDamage = _unloadedEnemyDamage.GetDamage(pending.Entry.EnemyKey, NetworkClock.NowMs);
+                    bool reject = totalDamage <= 0;
                     if (!reject && target != null)
                     {
                         int currentHp = target.hp;
-                        if (currentHp > 0 && pending.Damage < currentHp)
+                        if (currentHp > 0 && totalDamage < currentHp)
                             reject = true;
                     }
                     if (reject)
@@ -2083,7 +2169,11 @@ namespace SilksongCoop.Mod.State
             if (resolved != null)
             {
                 for (int i = 0; i < resolved.Count; i++)
-                    _pendingDeadEnemies.Remove(resolved[i]);
+                {
+                    ulong resolvedKey = resolved[i];
+                    _pendingDeadEnemies.Remove(resolvedKey);
+                    _unloadedEnemyDamage.Forget(resolvedKey);
+                }
             }
 
             while (_pendingDeadOrder.Count > 0 &&
@@ -2091,6 +2181,8 @@ namespace SilksongCoop.Mod.State
             {
                 _pendingDeadOrder.Dequeue();
             }
+
+
 
             _pendingDeadRetryAt = Time.unscaledTime +
                 (_pendingDeadEnemies.Count == 0 ? 5f : 0.25f);
@@ -2110,6 +2202,7 @@ namespace SilksongCoop.Mod.State
 
             if (inSequence) return;
 
+            DiscardDeferredClaims();
             var droppedKeys = _deadRegistry.DropSequenceBosses();
             if (droppedKeys.Count == 0) return;
 
@@ -2119,6 +2212,7 @@ namespace SilksongCoop.Mod.State
                 _service.Forget(key);
                 _lastSnapshot.Remove(key);
                 _pendingDeadEnemies.Remove(key);
+                _unloadedEnemyDamage.Forget(key);
             }
 
             while (_pendingDeadOrder.Count > 0 &&

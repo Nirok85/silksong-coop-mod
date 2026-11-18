@@ -28,6 +28,8 @@ namespace SilksongCoop.Mod.Services
         /// <summary>Peers already warned about a filling journal; warns once per peer.</summary>
         private readonly HashSet<NetworkPeerId> _journalWarned = new();
         private readonly HashSet<NetworkPeerId> _currencyPeersReady = new();
+        private readonly Dictionary<NetworkPeerId, HashSet<Guid>> _currencySent = new();
+        private readonly Dictionary<NetworkPeerId, (WalletSeedPacket[] Parts, int Next)> _seedSends = new();
 
         private const int MaxUnconfirmedTransactions = 4096;
 
@@ -81,6 +83,7 @@ namespace SilksongCoop.Mod.Services
             var session = _sessionService.SessionState;
             if (session?.IsConnected != true || !session.RemotePeerId.HasValue) return;
 
+            foreach (var peer in _currencyPeersReady.ToArray()) FlushCurrencyJournal(peer);
             if (_walletReconcilePlayerData != null && !(bool)CurrencyUpdateQueued.GetValue(null))
                 OnCurrencyQueueDrained();
         }
@@ -90,6 +93,8 @@ namespace SilksongCoop.Mod.Services
         public void OnSessionEnded()
         {
             _currencyPeersReady.Clear();
+            _currencySent.Clear();
+            _seedSends.Clear();
             _walletReconcilePlayerData = null;
         }
 
@@ -100,11 +105,18 @@ namespace SilksongCoop.Mod.Services
             _journalWarned.Clear();
         }
 
-        internal void OnCurrencyPeerDisconnected(NetworkPeerId peer) => _currencyPeersReady.Remove(peer);
+        internal void OnCurrencyPeerDisconnected(NetworkPeerId peer)
+        {
+            _currencyPeersReady.Remove(peer);
+            _currencySent.Remove(peer);
+            _seedSends.Remove(peer);
+        }
 
         internal void ForgetCurrencyPeer(NetworkPeerId peer)
         {
             _currencyJournal.Remove(peer);
+            _currencySent.Remove(peer);
+            _seedSends.Remove(peer);
             _exhaustedCurrencyJournals.Remove(peer);
             _journalWarned.Remove(peer);
         }
@@ -116,14 +128,14 @@ namespace SilksongCoop.Mod.Services
             if (!_currencyPeersReady.Add(peer)) return;
             if (!_currencyJournal.TryGetValue(peer, out var journal))
                 _currencyJournal.Add(peer, journal = new List<CurrencySyncPacket>());
-            foreach (var packet in journal)
-                SendCurrencyTo(peer, packet);
+            FlushCurrencyJournal(peer);
         }
 
         internal void ReceiveCurrencyReceipt(NetworkPeerId peer, Guid transactionId)
         {
             if (_currencyJournal.TryGetValue(peer, out var journal))
                 journal.RemoveAll(packet => packet.TransactionId == transactionId);
+            if (_currencySent.TryGetValue(peer, out var sent)) sent.Remove(transactionId);
         }
 
         internal long GetPendingCurrencyDelta(NetworkPeerId peer, Core.Protocol.Packets.CurrencyType currency)
@@ -136,23 +148,42 @@ namespace SilksongCoop.Mod.Services
         }
 
         /// <summary>True when the transport accepted the seed for delivery.</summary>
-        internal bool SendWalletSeed(NetworkPeerId peer, (int Rosaries, int Shards) balances)
+        internal bool SendWalletSeed(NetworkPeerId peer, WalletSeedPacket seed)
         {
             var transport = _transportService.ActiveTransport;
             if (transport == null) return false;
-            return PacketSender.SendTo(transport, peer, new WalletSeedPacket
+            if (!_seedSends.TryGetValue(peer, out var pending))
+                pending = (seed.CreateChunks(), 0);
+            while (pending.Next < pending.Parts.Length)
             {
-                Header = new PacketHeader(PacketType.WalletSeed, NetworkChannels.Currency, 0, NetworkClock.NowMs),
-                Rosaries = balances.Rosaries,
-                Shards = balances.Shards
-            }, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, PacketHeader.HeaderSize + 8, Diagnostics);
+                if (!PacketSender.SendTo(transport, peer, pending.Parts[pending.Next],
+                        DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, WalletSeedPacket.MaxWireSize, Diagnostics))
+                {
+                    _seedSends[peer] = pending;
+                    return false;
+                }
+                pending.Next++;
+            }
+            _seedSends.Remove(peer);
+            return true;
         }
 
-        private void SendCurrencyTo(NetworkPeerId peer, CurrencySyncPacket packet)
+        internal CurrencySyncPacket[] GetPendingCurrencyPackets(NetworkPeerId peer) =>
+            _currencyJournal.TryGetValue(peer, out var journal) ? journal.ToArray() : Array.Empty<CurrencySyncPacket>();
+
+        private void FlushCurrencyJournal(NetworkPeerId peer)
         {
             var transport = _transportService.ActiveTransport;
-            if (transport != null)
-                PacketSender.SendTo(transport, peer, packet, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, 64, Diagnostics);
+            if (transport == null || !_currencyPeersReady.Contains(peer) || !_currencyJournal.TryGetValue(peer, out var journal)) return;
+            if (!_currencySent.TryGetValue(peer, out var sent)) _currencySent[peer] = sent = new HashSet<Guid>();
+            int budget = 32;
+            foreach (var packet in journal)
+            {
+                if (sent.Contains(packet.TransactionId)) continue;
+                if (budget-- <= 0) break;
+                if (!PacketSender.SendTo(transport, peer, packet, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, 64, Diagnostics)) break;
+                sent.Add(packet.TransactionId);
+            }
         }
 
         private PlayerData? _walletReconcilePlayerData;
@@ -164,14 +195,10 @@ namespace SilksongCoop.Mod.Services
 
         private void OnOutgoingCurrency(CurrencySyncPacket packet)
         {
-            if (packet.DeltaAmount == 0)
-            {
-                SendPacket(packet, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency);
-                return;
-            }
-
             var session = _sessionService.SessionState;
-            if (SilksongCoopPlugin.Instance?.CanTrackCurrency != true || session == null) return;
+            if (session == null) return;
+
+            if (packet.DeltaAmount != 0 && SilksongCoopPlugin.Instance?.CanTrackCurrency != true) return;
             foreach (var peer in session.RemotePeerIds)
                 if (!_currencyJournal.ContainsKey(peer))
                     _currencyJournal.Add(peer, new List<CurrencySyncPacket>());
@@ -200,7 +227,7 @@ namespace SilksongCoop.Mod.Services
                             steam.FailReliablePeer(pair.Key);
                         else
                         {
-                            SilksongCoopPlugin.Instance.DisconnectFromSession(DisconnectReason.ConnectionFailed);
+                            SilksongCoopPlugin.Instance?.DisconnectFromSession(DisconnectReason.ConnectionFailed);
                             return;
                         }
                     }
@@ -211,7 +238,7 @@ namespace SilksongCoop.Mod.Services
                 if (pair.Value.Count < MaxUnconfirmedTransactions / 2) _journalWarned.Remove(pair.Key);
 
                 pair.Value.Add(packet);
-                if (_currencyPeersReady.Contains(pair.Key)) SendCurrencyTo(pair.Key, packet);
+                if (_currencyPeersReady.Contains(pair.Key)) FlushCurrencyJournal(pair.Key);
             }
         }
 
@@ -254,7 +281,7 @@ namespace SilksongCoop.Mod.Services
             if (pd == null) return;
             using (RemoteApplyScope.Begin())
             {
-                int newMaxSilk = newSpools * 9;
+                int newMaxSilk = newSpools; // Protocol v12 transmits raw capacity.
                 if (newMaxSilk > pd.silkMax)
                 {
                     pd.silkMax = newMaxSilk;

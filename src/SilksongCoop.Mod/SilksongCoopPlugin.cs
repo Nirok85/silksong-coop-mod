@@ -59,6 +59,7 @@ namespace SilksongCoop.Mod
         /// </summary>
         /// <param name="message">The message to log.</param>
         public static void LogWarn(string message) => Instance?.Logger.LogWarning(message);
+        public static void LogError(string message) => Instance?.Logger.LogError(message);
 
         public static IServiceContainer? Container { get; private set; }
         public static IEventBus? EventBus { get; private set; }
@@ -96,32 +97,12 @@ namespace SilksongCoop.Mod
         #endregion
 
         private readonly Dictionary<NetworkPeerId, RemoteSceneSequence> _remoteScenes = new();
-        private readonly HashSet<NetworkPeerId> _readySent = new();
-        private readonly Dictionary<NetworkPeerId, Guid> _readyForCatchUp = new();
-        private readonly Dictionary<NetworkPeerId, Guid> _walletPeerInstances = new();
-        private string? _walletRoom;
-        private PlayerData? _walletSave;
-        private Guid _walletSaveInstance;
-        private bool _awaitingWalletSeed;
-        /// <summary>Time.unscaledTime when _awaitingWalletSeed was set; drives the timeout.</summary>
-        private float _awaitingWalletSeedSince;
-        /// <summary>Peers whose wallet seed the transport refused; retried each readiness pump.</summary>
-        private readonly Dictionary<NetworkPeerId, byte> _walletSeedOutstanding = new();
-        /// <summary>Bounded retries before a refused wallet seed fails the session.</summary>
-        private const byte WalletSeedMaxAttempts = 240;
-        /// <summary>Seconds a client waits for the host's wallet seed before giving up.</summary>
-        private const float WalletSeedTimeoutSeconds = 20f;
-        private readonly HashSet<NetworkPeerId> _initialStateSent = new();
-        private readonly Queue<(NetworkPeerId Peer, byte[] Data)> _deferredGamePackets = new();
-        private readonly Dictionary<NetworkPeerId, BenchCheckpointSyncPacket> _pendingCheckpoints = new();
-        private bool _initializedVitalsForConnection;
-        private BenchCheckpointSyncPacket? _lastBenchCheckpoint;
-        private PlayerData? _benchSave;
+        private readonly Dictionary<NetworkPeerId, bool> _walletPeerBootstrapCompleted = new();
 
         internal bool CanTrackCurrency => SessionState?.IsConnected == true ||
-            (_walletSave != null && ReferenceEquals(_walletSave, PlayerData.instance) &&
+            (HandshakeCoordinator?.WalletSave != null && ReferenceEquals(HandshakeCoordinator.WalletSave, PlayerData.instance) &&
              (_reconnectPending || (SessionState?.CurrentRoomCode != null &&
-                                    SessionState.CurrentRoomCode == _walletRoom)));
+                                    SessionState.CurrentRoomCode == HandshakeCoordinator.WalletRoom)));
         private uint _sceneGeneration;
         private int? _departedSceneHandle;
 
@@ -144,6 +125,11 @@ namespace SilksongCoop.Mod
         public EnemySyncController? EnemySync { get; private set; }
         public QuestStateSyncManager? QuestStateSync { get; private set; }
 
+        public Coordinators.ReviveLifecycleCoordinator ReviveCoordinator { get; private set; } = null!;
+        public Coordinators.InventoryApplicationCoordinator InventoryCoordinator { get; private set; } = null!;
+        public Coordinators.PeerHandshakeCoordinator HandshakeCoordinator { get; private set; } = null!;
+        public Coordinators.IncomingPacketRouter PacketRouter { get; private set; } = null!;
+
         // Orchestrator services that decouple network hot-path from the plugin.
         private readonly System.Collections.Generic.List<ISyncOrchestrator> _orchestrators = new System.Collections.Generic.List<ISyncOrchestrator>();
         private NetworkOrchestrator? _networkOrchestrator;
@@ -155,15 +141,6 @@ namespace SilksongCoop.Mod
 
         #region Private Fields
         private Harmony? _harmony;
-
-        // BUG-04: atomic flag (0 = not in progress, 1 = in progress). A volatile bool used
-        // as check-then-set had a TOCTOU race window; Interlocked CAS makes it atomic.
-        private int _teamWipeInProgress;
-
-        // BUG-15: set while DeathHooks.PrefixPlayerDead runs its death branch. TriggerTeamWipe
-        // skips its explicit PlayerDead coroutine in that case — the game's own invocation
-        // already runs the original method, so starting it again would reload the bench twice.
-        private bool _insidePlayerDeadHook;
 
         // BUG-A1: true while the mod itself disabled the hero's physics (EnterSpectatorMode).
         // The game's bench-respawn flow never restores OUR disables, so OnBenchRespawnCompleted
@@ -186,12 +163,6 @@ namespace SilksongCoop.Mod
         private int _reconnectAttempts;
         private bool _reconnectIsSteam;
         private string? _reconnectAddress;
-
-        // Last counter value broadcast to the peer. Counters are shared progress, so after
-        // the connect-time baseline both sides exchange deltas instead of absolute values —
-        // an absolute overwrite let the peer's partial count clobber ours (issue #2.3).
-        private int _lastHeartPiecesBroadcast = -1;
-        private int _lastSilkPartsBroadcast = -1;
 
         private Core.State.DesyncDetector? _desyncDetector;
         private Action<Core.State.DesyncDetector.DesyncDetectedEvent>? _desyncHandler;
@@ -244,6 +215,8 @@ namespace SilksongCoop.Mod
             Container.Register<IInventorySyncService>(InventorySync);
             Container.Register(this);
             Container.Register<IGameplayActions>(this);
+            Container.Register<IInventoryGameplayActions>(this);
+            Container.Register<IReviveGameplayActions>(this);
 
             // Initialize BepInEx configuration
             try
@@ -255,6 +228,7 @@ namespace SilksongCoop.Mod
                 Player2HueShiftConfig = Config.Bind("Visuals", "Player2HueShift", 0.58f, "Hue shift for Player 2 cloak (0.58 = azure blue)");
                 DefaultUdpPortConfig = Config.Bind("Network", "DefaultUdpPort", 7777, "Default UDP port for direct connections");
                 TickRateHzConfig = Config.Bind("Network", "TickRateHz", 30, "Network replication tick rate (20-60 Hz)");
+                TickRateHzConfig.SettingChanged += (_, _) => _networkOrchestrator?.SetTickRate(TickRateHzConfig.Value);
                 AutoReconnectConfig = Config.Bind("Network", "AutoReconnect", true, "Automatically attempt to reconnect after an unexpected disconnect");
                 MaxReconnectAttemptsConfig = Config.Bind("Network", "MaxReconnectAttempts", 5, "Maximum number of automatic reconnection attempts (1-10)");
                 SteamMaxPlayersConfig = Config.Bind("Network", "SteamMaxPlayers", 2,
@@ -419,8 +393,43 @@ namespace SilksongCoop.Mod
                         CloneSpawner!,
                         TickRateHzConfig?.Value ?? 30f);
                     _vitalsSyncManager = new VitalsSyncManager(sessionService, transportService, VitalsSync, DeathCoordinator, EnemySync);
-                    _inventorySyncManager = new InventorySyncManager(sessionService, transportService, this, InventorySync);
-                    _deathSyncManager = new DeathSyncManager(sessionService, transportService, this, DeathCoordinator);
+
+                    ReviveCoordinator = new Coordinators.ReviveLifecycleCoordinator(
+                        sessionService, DeathCoordinator, GroundProber,
+                        () => CloneSpawner, () => MenuUI, coroutineRunner: this,
+                        ReviveCooldownConfig, ReviveHealthPercentConfig, ReviveInvulnerabilityConfig);
+                    InventoryCoordinator = new Coordinators.InventoryApplicationCoordinator(
+                        sessionService, InventorySync, VitalsSync,
+                        () => ActiveTransport, () => MenuUI?.Diagnostics);
+                    HandshakeCoordinator = new Coordinators.PeerHandshakeCoordinator(
+                        sessionService, VitalsSync, DeathCoordinator, InventorySync,
+                        QuestStateSync, EnemySync, ReviveCoordinator, InventoryCoordinator,
+                        () => _vitalsSyncManager, () => ActiveTransport, () => MenuUI?.Diagnostics, () => IsSaveReady,
+                        reason => DisconnectFromSession(reason));
+                    PacketRouter = new Coordinators.IncomingPacketRouter(
+                        sessionService, HandshakeCoordinator, ReviveCoordinator,
+                        InventoryCoordinator, VitalsSync, DeathCoordinator,
+                        QuestStateSync, EnemySync, () => CloneSpawner,
+                        () => MenuUI, () => MenuUI?.Diagnostics, () => _vitalsSyncManager,
+                        () => IsSaveReady, () => CanSendSceneTransform, () => ActiveTransport,
+                        reason => DisconnectFromSession(reason), () => _desyncDetector);
+
+                    Container.Register<IReviveGameplayActions>(ReviveCoordinator);
+                    Container.Register<IInventoryGameplayActions>(InventoryCoordinator);
+                    Container.Register<IGameplayActions>(this);
+                    Container.Register(ReviveCoordinator);
+                    Container.Register(InventoryCoordinator);
+                    Container.Register(HandshakeCoordinator);
+                    Container.Register(PacketRouter);
+
+                    _orchestrators.Add(ReviveCoordinator);
+                    _orchestrators.Add(InventoryCoordinator);
+                    _orchestrators.Add(HandshakeCoordinator);
+
+                    var inventoryActions = Container.Resolve<IInventoryGameplayActions>();
+                    var reviveActions = Container.Resolve<IReviveGameplayActions>();
+                    _inventorySyncManager = new InventorySyncManager(sessionService, transportService, inventoryActions, InventorySync);
+                    _deathSyncManager = new DeathSyncManager(sessionService, transportService, reviveActions, DeathCoordinator);
                     _desyncDetector = new Core.State.DesyncDetector(EventBus!);
                     _desyncHandler = e =>
                         Logger.LogWarning($"[Coop] Desync detected ({e.Context}): local={e.LocalChecksum} remote={e.RemoteChecksum}");
@@ -641,6 +650,20 @@ namespace SilksongCoop.Mod
             VitalsSync?.ClearRemotePeers();
             DeathCoordinator?.ClearRemotePeers();
             SessionState?.SetDisconnected(DisconnectReason.GracefulDisconnect);
+
+            if (_reviveInvulnerabilityActive)
+            {
+                var hero = HeroController.instance;
+                if (hero != null && hero.gameObject != null)
+                {
+                    hero.cState.invulnerable = false;
+                    hero.cState.recoiling = false;
+                    hero.SetDamageMode(GlobalEnums.DamageMode.FULL_DAMAGE);
+                    var pulse = hero.GetComponent<InvulnerablePulse>();
+                    pulse?.StopInvulnerablePulse();
+                }
+                _reviveInvulnerabilityActive = false;
+            }
         }
 
         /// <summary>
@@ -687,10 +710,17 @@ namespace SilksongCoop.Mod
                 EnemySync?.ResetSession();
                 QuestStateSync?.ResetSession();
 
-                if (recoveringFromSpectator || Spectator.IsActive)
+                bool isWipeOrRecoveryActive = IsTeamWipeInProgress ||
+                    DeathCoordinator?.CurrentState == DeathState.TeamWipe;
+
+                if ((recoveringFromSpectator || Spectator.IsActive) && !isWipeOrRecoveryActive)
                 {
                     ExitSpectatorMode();
                     if (respawnSpectator) TriggerTeamWipe();
+                }
+                else if (Spectator.IsActive)
+                {
+                    ExitSpectatorMode();
                 }
 
                 RefreshLocalVisuals(false);
@@ -811,9 +841,7 @@ namespace SilksongCoop.Mod
                 FacingRight = facingRight
             };
             if (!PacketValidator.ValidateBenchCheckpoint(packet)) return;
-            _lastBenchCheckpoint = packet;
-            _benchSave = pd;
-            _pendingCheckpoints.Clear();
+            HandshakeCoordinator?.BroadcastBenchCheckpoint(packet);
             if (ActiveTransport != null && SessionState?.IsConnected == true)
             {
                 // The checkpoint is kept in _lastBenchCheckpoint and re-sent during peer
@@ -838,367 +866,23 @@ namespace SilksongCoop.Mod
 
         private bool TryApplyRemoteBenchCheckpoint(string sceneName, string respawnMarker, int spawnType, bool facingRight)
         {
-            try
-            {
-                // Validate against the actual loaded scene and its respawn markers before
-                // writing a checkpoint into the local save.
-                var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
-                if (!scene.isLoaded || scene.name != sceneName || GameManager.instance?.IsGameplayScene() != true)
-                    return false;
-
-                bool foundMarker = false;
-                foreach (var marker in RespawnMarker.Markers)
-                {
-                    if (marker == null || marker.gameObject.scene != scene || marker.name != respawnMarker) continue;
-                    foundMarker = true;
-                    break;
-                }
-                if (!foundMarker) return false;
-
-                using (RemoteApplyScope.Begin())
-                {
-                    var pd = PlayerData.instance;
-                    if (pd != null)
-                    {
-                        pd.SetBenchRespawn(respawnMarker, sceneName, spawnType, facingRight);
-                        Logger.LogInfo($"[Coop] Applied remote bench checkpoint: {sceneName} / {respawnMarker}");
-                        return true;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning($"[Coop] Failed applying remote bench checkpoint: {ex.Message}");
-            }
-            return false;
+            return HandshakeCoordinator != null && HandshakeCoordinator.TryApplyRemoteBenchCheckpoint(sceneName, respawnMarker, spawnType, facingRight);
         }
 
-        /// <summary>
-        /// Broadcasts collected heart pieces count to the remote peer.
-        /// </summary>
-        /// <param name="count">Number of heart pieces collected.</param>
-        public void BroadcastHeartPieces(int count)
-        {
-            BroadcastCounterDelta("heartPieces", "heartPiecesInit", count, ref _lastHeartPiecesBroadcast);
-        }
+        public void NoteLocalHealthUpgrade(int amount) => InventoryCoordinator?.NoteLocalHealthUpgrade(amount);
+        public void NoteLocalSilkUpgrade(int amount) => InventoryCoordinator?.NoteLocalSilkUpgrade(amount);
 
-        /// <summary>
-        /// Sends the connect-time heart-piece baseline. Both peers exchange it; the
-        /// receiver merges with <c>Math.Max</c> so neither side regresses.
-        /// </summary>
-        public void BroadcastHeartPiecesBaseline(int count)
-        {
-            BroadcastCounterBaseline("heartPiecesInit", count, ref _lastHeartPiecesBroadcast);
-        }
+        public void BroadcastHeartPieces(int count) => InventoryCoordinator?.BroadcastHeartPieces(count);
+        public void BroadcastHeartPiecesBaseline(int count) => InventoryCoordinator?.BroadcastHeartPiecesBaseline(count);
 
-        /// <summary>
-        /// Broadcasts collected silk parts count to the remote peer.
-        /// </summary>
-        /// <param name="count">Number of silk parts collected.</param>
-        public void BroadcastSilkParts(int count)
-        {
-            BroadcastCounterDelta("silkParts", "silkPartsInit", count, ref _lastSilkPartsBroadcast);
-        }
+        public void BroadcastSilkParts(int count) => InventoryCoordinator?.BroadcastSilkParts(count);
+        public void BroadcastSilkPartsBaseline(int count) => InventoryCoordinator?.BroadcastSilkPartsBaseline(count);
 
-        /// <summary>
-        /// Sends the connect-time silk-part baseline (max-merged on the receiver).
-        /// </summary>
-        public void BroadcastSilkPartsBaseline(int count)
-        {
-            BroadcastCounterBaseline("silkPartsInit", count, ref _lastSilkPartsBroadcast);
-        }
+        public void BroadcastInitialInventory() => InventoryCoordinator?.BroadcastInitialInventory(null);
+        public void BroadcastInitialInventory(NetworkPeerId? targetPeer) => InventoryCoordinator?.BroadcastInitialInventory(targetPeer);
 
-        private void BroadcastCounterBaseline(string prefix, int count, ref int lastBroadcast)
-        {
-            try
-            {
-                lastBroadcast = count;
-                if (SessionState?.IsConnected != true) return;
-                InventorySync?.OnLocalCounterChanged($"{prefix}:{count}", ItemCategory.KeyItem);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning($"[Coop] Failed broadcasting counter baseline: {ex.Message}");
-            }
-        }
-
-        private void BroadcastCounterDelta(string prefix, string initPrefix, int count, ref int lastBroadcast)
-        {
-            try
-            {
-                if (SessionState?.IsConnected != true) return;
-                if (lastBroadcast < 0)
-                {
-                    // No baseline for this session yet (e.g. a pickup raced the connect
-                    // handshake). Re-anchor on the current value instead of emitting a
-                    // bogus delta from a previous session's count.
-                    BroadcastCounterBaseline(initPrefix, count, ref lastBroadcast);
-                    return;
-                }
-
-                int delta = count - lastBroadcast;
-                lastBroadcast = count;
-                if (delta == 0) return;
-
-                string encodedDelta = delta > 0 ? $"+{delta}" : delta.ToString();
-                InventorySync?.OnLocalCounterChanged($"{prefix}:{encodedDelta}", ItemCategory.KeyItem);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning($"[Coop] Failed broadcasting counter delta: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Broadcasts the local player's initial inventory state to the connected peer.
-        /// The current session's remote peer is the recipient; in a 2-player session there
-        /// is exactly one (see BUG-12 — the peer parameter was never used).
-        /// </summary>
-        public void BroadcastInitialInventory()
-        {
-            try
-            {
-                var pd = PlayerData.instance;
-                if (pd == null || InventorySync == null) return;
-
-                // 1. Shared ability bools (validated against the game's PlayerData)
-                foreach (var boolName in Hooks.InventoryHooks.GetValidatedAbilityBools())
-                {
-                    if (pd.GetBool(boolName))
-                    {
-                        InventorySync.OnLocalItemDiscovered(boolName, ItemCategory.Ability, force: true);
-                    }
-                }
-
-                // 2. Unlocked tools
-                try
-                {
-                    var unlocked = ToolItemManager.GetUnlockedTools();
-                    if (unlocked != null)
-                    {
-                        foreach (var tool in unlocked)
-                        {
-                            if (tool != null && !string.IsNullOrEmpty(tool.name))
-                            {
-                                InventorySync.OnLocalItemDiscovered(tool.name, ItemCategory.Tool, force: true);
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning($"[Coop] Tool enumeration fallback: {ex.Message}");
-                }
-
-                // 3. Current crest
-                if (!string.IsNullOrEmpty(pd.CurrentCrestID))
-                {
-                    InventorySync.OnLocalItemDiscovered(pd.CurrentCrestID, ItemCategory.Crest, force: true);
-                }
-
-                // 4. Heart pieces & silk parts (BUG-B5: counters bypass the unlock dedup —
-                // the same value recurs in every upgrade cycle). Send a baseline, not a
-                // delta: both sides max-merge so neither partial count is overwritten.
-                BroadcastHeartPiecesBaseline(pd.heartPieces);
-                BroadcastSilkPartsBaseline(pd.silkParts);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning($"[Coop] Failed broadcasting initial inventory: {ex.Message}");
-            }
-        }
-        #endregion
-
-        #region Inventory and Item Sync
-        /// <summary>
-        /// Applies a remote item unlock to the local player's inventory.
-        /// </summary>
-        /// <param name="itemId">The identifier of the item to unlock.</param>
-        /// <param name="category">The category of the item.</param>
-        public void ApplyRemoteItemUnlock(string itemId, ItemCategory category)
-        {
-            if (string.IsNullOrEmpty(itemId))
-            {
-                Logger.LogWarning("[Coop] ApplyRemoteItemUnlock called with null or empty itemId");
-                return;
-            }
-
-            try
-            {
-                using (RemoteApplyScope.Begin())
-                {
-                    var playerData = PlayerData.instance;
-                    if (playerData == null)
-                    {
-                        Logger.LogWarning("[Coop] Cannot apply remote item unlock: PlayerData.instance is null");
-                        return;
-                    }
-
-                // MED-02: Partial health and silk fragment synchronization.
-                // Counters are shared progress: the connect-time baseline is max-merged,
-                // and subsequent packets carry a signed delta. Absolute overwrites made
-                // the two players' partial counts swap with each other on connect (#2.3).
-                if (itemId.StartsWith("heartPiecesInit:"))
-                {
-                    if (int.TryParse(itemId.Substring("heartPiecesInit:".Length), out int baseline))
-                    {
-                        // Persistent state is 0..3 (4 is transiently visible before the
-                        // game resets it). Cap so a baseline can never award a second mask.
-                        int merged = Math.Max(playerData.heartPieces, Math.Clamp(baseline, 0, 3));
-                        playerData.heartPieces = merged;
-                        _lastHeartPiecesBroadcast = merged;
-                    }
-                    return;
-                }
-                if (itemId.StartsWith("silkPartsInit:"))
-                {
-                    if (int.TryParse(itemId.Substring("silkPartsInit:".Length), out int baseline))
-                    {
-                        int merged = Math.Max(playerData.silkParts, Math.Clamp(baseline, 0, 2));
-                        playerData.silkParts = merged;
-                        _lastSilkPartsBroadcast = merged;
-                    }
-                    return;
-                }
-                if (itemId.StartsWith("heartPieces:"))
-                {
-                    if (int.TryParse(itemId.Substring("heartPieces:".Length), out int value))
-                    {
-                        bool isDelta = itemId["heartPieces:".Length] == '+' || itemId["heartPieces:".Length] == '-';
-                        // A peer may only report the small deltas the game produces (±1 per
-                        // pickup, at most one mask's worth per packet). Without this bound a
-                        // modified client could ask for millions of AddToMaxHealth calls in a
-                        // single frame and freeze the host.
-                        if (isDelta && (value < -8 || value > 8))
-                        {
-                            Logger.LogWarning($"[Coop] Rejected heart-piece delta {value}");
-                            return;
-                        }
-
-                        int next = isDelta
-                            ? playerData.heartPieces + value
-                            : Math.Max(playerData.heartPieces, Math.Clamp(value, 0, 3));
-
-                        // 4 pieces = 1 mask. Bound the work: at most two masks can be
-                        // completed by a single valid packet.
-                        next = Math.Clamp(next, 0, 11);
-                        int masks = next / 4;
-                        next %= 4;
-                        for (int i = 0; i < masks; i++)
-                        {
-                            HeroController.instance?.AddToMaxHealth(1);
-                        }
-                        playerData.heartPieces = next;
-                        _lastHeartPiecesBroadcast = next;
-                    }
-                    return;
-                }
-                if (itemId.StartsWith("silkParts:"))
-                {
-                    if (int.TryParse(itemId.Substring("silkParts:".Length), out int value))
-                    {
-                        bool isDelta = itemId["silkParts:".Length] == '+' || itemId["silkParts:".Length] == '-';
-                        if (isDelta && (value < -6 || value > 6))
-                        {
-                            Logger.LogWarning($"[Coop] Rejected silk-part delta {value}");
-                            return;
-                        }
-
-                        int next = isDelta
-                            ? playerData.silkParts + value
-                            : Math.Max(playerData.silkParts, Math.Clamp(value, 0, 2));
-
-                        // 3 parts = 1 spool.
-                        next = Math.Clamp(next, 0, 8);
-                        int spools = next / 3;
-                        next %= 3;
-                        for (int i = 0; i < spools; i++)
-                        {
-                            HeroController.instance?.AddToMaxSilk(1);
-                        }
-                        playerData.silkParts = next;
-                        _lastSilkPartsBroadcast = next;
-                    }
-                    return;
-                }
-
-                switch (category)
-                {
-                    case ItemCategory.Crest:
-                        try
-                        {
-                            var localCrest = playerData.CurrentCrestID;
-                            var crest = ToolItemManager.GetCrestByName(itemId);
-                            
-                            if (crest != null)
-                            {
-                                crest.Unlock();
-                                if (playerData.CurrentCrestID != localCrest)
-                                {
-                                    ToolItemManager.SetEquippedCrest(localCrest);
-                                }
-                            }
-                            else if (playerData.ToolEquips != null)
-                            {
-                                var data = playerData.ToolEquips.GetData(itemId);
-                                data.IsUnlocked = true;
-                                playerData.ToolEquips.SetData(itemId, data);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.LogError($"[Coop] Failed to apply crest unlock '{itemId}': {ex.Message}");
-                        }
-                        break;
-
-                    case ItemCategory.Tool:
-                        try
-                        {
-                            var tool = ToolItemManager.GetToolByName(itemId);
-                            if (tool != null)
-                            {
-                                tool.Unlock(null, ToolItem.PopupFlags.None);
-                            }
-                            else
-                            {
-                                var data = playerData.GetToolData(itemId);
-                                data.IsUnlocked = true;
-                                playerData.SetToolData(itemId, data);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.LogError($"[Coop] Failed to apply tool unlock '{itemId}': {ex.Message}");
-                        }
-                        break;
-
-                    case ItemCategory.Ability:
-                    case ItemCategory.KeyItem:
-                        try
-                        {
-                            var toolSkill = ToolItemManager.GetToolByName(itemId);
-                            if (toolSkill != null)
-                            {
-                                toolSkill.Unlock(null, ToolItem.PopupFlags.None);
-                            }
-                            else
-                            {
-                                playerData.SetBool(itemId, true);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.LogError($"[Coop] Failed to apply ability unlock '{itemId}': {ex.Message}");
-                        }
-                        break;
-                }
-            }
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError($"[Coop] Failed applying remote item unlock for {itemId} ({category}): {ex.Message}");
-            }
-        }
+        public void ApplyRemoteItemUnlock(string itemId, ItemCategory category) => InventoryCoordinator?.ApplyRemoteItemUnlock(itemId, category);
+        public bool TryApplyRemoteItemUnlock(string itemId, ItemCategory category) => InventoryCoordinator?.TryApplyRemoteItemUnlock(itemId, category) ?? false;
         #endregion
 
         #region Transport Event Wiring
@@ -1227,13 +911,12 @@ namespace SilksongCoop.Mod
                         // Issue #2.2: never inherit a wipe/spectator latch from the previous
                         // session. If the old session ended mid-wipe, this flag stayed set until
                         // the game was restarted and every later team wipe silently no-oped.
-                        Interlocked.Exchange(ref _teamWipeInProgress, 0);
+                        ReviveCoordinator?.ResetTeamWipeLatch();
                         // Clearing the flag without restoring the hero would leave it with
                         // gravity/colliders/rendering disabled if a reconnect raced the bench
                         // reload. ExitSpectatorMode performs the actual restore.
                         if (Spectator.IsActive) ExitSpectatorMode();
-                        _lastHeartPiecesBroadcast = -1;
-                        _lastSilkPartsBroadcast = -1;
+                        InventoryCoordinator?.OnSessionStarted(transport.IsHost);
                         EnemySync?.ResetSession();
                         InventorySync?.ResetSessionState();
                         QuestStateSync?.ResetSession();
@@ -1302,10 +985,7 @@ namespace SilksongCoop.Mod
 
                     _vitalsSyncManager?.OnCurrencyPeerDisconnected(peer);
                     _remoteScenes.Remove(peer);
-                    _pendingCheckpoints.Remove(peer);
-                    _readySent.Remove(peer);
-                    _readyForCatchUp.Remove(peer);
-                    _initialStateSent.Remove(peer);
+                    HandshakeCoordinator?.ResetPeerState(peer);
                     SessionState.RemoveRemotePeer(peer);
                     CloneSpawner?.DespawnRemotePlayer(peer);
                     VitalsSync?.RemoveRemotePeer(peer);
@@ -1340,7 +1020,6 @@ namespace SilksongCoop.Mod
                         DeathCoordinator?.CurrentState == DeathState.RespawningAtPartner;
 
                     SessionState.SetDisconnected(reason);
-                    ResetPeerReadiness();
                     ResetDesyncTracking();
                     _vitalsSyncManager?.OnSessionEnded();
                     EventBus?.Publish(new SessionEndedEvent { Reason = reason });
@@ -1351,18 +1030,34 @@ namespace SilksongCoop.Mod
                     RefreshLocalVisuals(false);
                     DeathCoordinator?.ClearRemotePeers();
 
-                    // New peer = new inventory session. Clear the once-per-item dedup on
-                    // disconnect (before any packet of the next session can arrive) so the
-                    // next BroadcastInitialInventory is not swallowed.
-                    InventorySync?.ResetSessionState();
+                    // Multi-peer safe: If other peers remain connected in a 3+ session, only reset this peer's state.
+                    if (SessionState.RemotePeerIds.Count > 1)
+                    {
+                        InventorySync?.ResetPeerState(peer);
+                        HandshakeCoordinator?.ResetPeerState(peer);
+                        PacketRouter?.ClearPeer(peer);
+                    }
+                    else
+                    {
+                        InventorySync?.ResetSessionState();
+                        HandshakeCoordinator?.ResetPeerReadiness();
+                        PacketRouter?.Clear();
+                    }
                     EnemySync?.ResetSession();
                     QuestStateSync?.ResetSession();
 
-                    if (recoveringFromSpectator)
+                    bool isWipeOrRecoveryActive = IsTeamWipeInProgress ||
+                        DeathCoordinator?.CurrentState == DeathState.TeamWipe;
+
+                    if (recoveringFromSpectator && !isWipeOrRecoveryActive)
                     {
                         Logger.LogWarning("[Coop] Partner disconnected while in spectator mode. Exiting spectator and respawning at bench.");
                         ExitSpectatorMode();
                         TriggerTeamWipe();
+                    }
+                    else if (Spectator.IsActive)
+                    {
+                        ExitSpectatorMode();
                     }
 
                     // A UDP host keeps its socket bound after a peer timeout (so the guest
@@ -1420,556 +1115,19 @@ namespace SilksongCoop.Mod
 
             transport.OnDataReceived += (peer, data, offset, length) =>
             {
-                try
-                {
-                    // BUG-07: ignore data from a transport that is not active — a stale peer
-                    // on the other transport must not inject packets into the live session.
-                    if (!ReferenceEquals(transport, ActiveTransport)) return;
-
-                    SessionState?.RecordReceived(length);
-                    MenuUI?.Diagnostics?.RecordReceived(length);
-
-                    var span = new ReadOnlySpan<byte>(data, offset, length);
-                    if (!IsSaveReady && IsKnownPeer(peer) &&
-                        PacketHeader.TryReadFrom(span, out var header) &&
-                        header.IsValidPacketType && header.PacketId != PacketType.PeerReady)
-                    {
-                        if (header.PacketId == PacketType.TransformSync ||
-                            header.PacketId == PacketType.ActionTrigger) return;
-                        if (_deferredGamePackets.Count == 4096)
-                        {
-                            Logger.LogWarning("[Coop] Save load packet queue exhausted; disconnecting.");
-                            DisconnectFromSession();
-                            return;
-                        }
-                        _deferredGamePackets.Enqueue((peer, span.ToArray()));
-                        return;
-                    }
-
-                    if (IsSaveReady && (!_initializedVitalsForConnection || _deferredGamePackets.Count > 0))
-                        PumpPeerReadiness();
-                    ProcessPacket(peer, span);
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning($"[Coop] Error processing packet from {peer}: {ex.Message}");
-                }
+                PacketRouter?.HandleDataReceived(transport, ActiveTransport, peer, data, offset, length);
             };
         }
 
-        private void ApplyWalletSeed(NetworkPeerId peer, Core.Protocol.Packets.CurrencyType currency, int total)
-        {
-            VitalsSync.SeedWallet(currency, total,
-                _vitalsSyncManager?.GetPendingCurrencyDelta(peer, currency) ?? 0);
-        }
+        private void ApplyWalletSeed(NetworkPeerId peer, WalletSeedPacket seed) => HandshakeCoordinator?.ApplyWalletSeed(peer, seed);
 
         internal void OnCurrencyQueueDrained() => _vitalsSyncManager?.OnCurrencyQueueDrained();
         internal void ScheduleWalletReconcile() => _vitalsSyncManager?.ScheduleWalletReconcile();
 
-        private void ResetPeerReadiness()
-        {
-            _readySent.Clear();
-            _readyForCatchUp.Clear();
-            _initialStateSent.Clear();
-            _deferredGamePackets.Clear();
-            _pendingCheckpoints.Clear();
-            _remoteScenes.Clear();
-            _initializedVitalsForConnection = false;
-            _awaitingWalletSeed = false;
-            _walletSeedOutstanding.Clear();
-        }
+        private void ResetPeerReadiness() => HandshakeCoordinator?.ResetPeerReadiness();
+        private void PumpPeerReadiness() => HandshakeCoordinator?.PumpPeerReadiness();
 
-        private void PumpPeerReadiness()
-        {
-            if (!IsSaveReady || ActiveTransport == null || SessionState?.IsConnected != true) return;
-            if (!_initializedVitalsForConnection)
-            {
-                var pd = PlayerData.instance;
-                string? room = ActiveTransport is SteamP2PTransport steam
-                    ? steam.CurrentLobbyId.m_SteamID.ToString()
-                    : SessionState.CurrentRoomCode;
-                bool resume = ReferenceEquals(_walletSave, pd) && !string.IsNullOrEmpty(room) && _walletRoom == room;
-                if (!resume)
-                {
-                    _walletSave = pd;
-                    _walletRoom = room;
-                    _walletSaveInstance = Guid.NewGuid();
-                    _walletPeerInstances.Clear();
-                    QuestStateSync?.ClearAuthoredChanges();
-                    _vitalsSyncManager?.ResetCurrencyJournal();
-                }
-                VitalsSync.InitializeState(pd.health, pd.maxHealthBase, pd.silk,
-                    Math.Max(1, pd.silkMax / 9), pd.nailUpgrades, pd.geo, pd.ShellShards, preserveWallet: resume);
-                _initializedVitalsForConnection = true;
-            }
-
-            PumpWalletSeed();
-            PumpWalletSeedTimeout();
-
-            while (_deferredGamePackets.Count > 0)
-            {
-                var pending = _deferredGamePackets.Dequeue();
-                ProcessPacket(pending.Peer, pending.Data);
-            }
-
-            foreach (var peer in SessionState.RemotePeerIds)
-            {
-                if (!_readySent.Contains(peer))
-                {
-                    if (!PacketSender.SendTo(ActiveTransport, peer, new PeerReadyPacket
-                    {
-                        Header = new PacketHeader(PacketType.PeerReady, NetworkChannels.Currency, 0, NetworkClock.NowMs),
-                        SaveInstance = _walletSaveInstance
-                    }, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, PacketHeader.HeaderSize + 16))
-                        continue;
-
-                    _readySent.Add(peer);
-                }
-
-                if (_readyForCatchUp.TryGetValue(peer, out var saveInstance) && _initialStateSent.Add(peer))
-                {
-                    bool existingPeer = _walletPeerInstances.TryGetValue(peer, out var previousSave);
-                    bool resumedPeer = existingPeer && previousSave == saveInstance;
-                    if (resumedPeer && _vitalsSyncManager?.CanResumeCurrencyPeer(peer) == false)
-                    {
-                        Logger.LogWarning($"[Coop] Cannot resume wallet sync for {peer}: currency journal exhausted.");
-                        if (ActiveTransport is SteamP2PTransport steam)
-                            steam.FailReliablePeer(peer);
-                        else
-                        {
-                            DisconnectFromSession(DisconnectReason.ConnectionFailed);
-                            return;
-                        }
-                        continue;
-                    }
-                    _walletPeerInstances[peer] = saveInstance;
-                    if (!resumedPeer)
-                    {
-                        VitalsSync.ResetCurrencyPeer(peer);
-                        if (existingPeer || SessionState.IsHost)
-                            _vitalsSyncManager?.ForgetCurrencyPeer(peer);
-                        if (SessionState.IsHost)
-                        {
-                            // A refused reliable send previously left the client waiting for
-                            // a seed forever. Queue a bounded retry instead of assuming
-                            // the send succeeded.
-                            if (_vitalsSyncManager?.SendWalletSeed(peer, VitalsSync.GetWalletBalances()) != true)
-                                _walletSeedOutstanding[peer] = WalletSeedMaxAttempts;
-                        }
-                        else if (SessionState.RemotePeerId == peer)
-                        {
-                            _awaitingWalletSeed = true;
-                            _awaitingWalletSeedSince = Time.unscaledTime;
-                        }
-                    }
-                    if (SessionState.IsHost || resumedPeer || SessionState.RemotePeerId != peer)
-                        _vitalsSyncManager?.EnableCurrencyPeer(peer);
-
-                    EnemySync?.BeginCatchUpForNewPeer();
-                    VitalsSync.BroadcastCurrentVitals();
-                    VitalsSync.BroadcastClaimedPickups();
-                    BroadcastInitialInventory();
-                    QuestStateSync?.ReplayAuthoredChanges(peer);
-                    if (_lastBenchCheckpoint.HasValue && ReferenceEquals(_benchSave, PlayerData.instance) &&
-                        SessionState.IsHost)
-                    {
-                        // One-shot catch-up item: a refusal means the partner stays on an
-                        // older checkpoint until the next bench touch, so make it visible.
-                        if (!PacketSender.SendTo(ActiveTransport, peer, _lastBenchCheckpoint.Value,
-                                DeliveryMethod.ReliableOrdered, NetworkChannels.Death, 1024, MenuUI?.Diagnostics))
-                            SilksongCoopPlugin.LogWarn("[Coop] Transport refused the bench checkpoint catch-up; it is re-sent at the next bench.");
-                    }
-
-                    // Tell the peer this save instance's initial burst was dispatched.
-                    // Additive within protocol v11: an older 3.3.9 build rejects the
-                    // unknown type and continues without it. Same reliable Currency
-                    // channel as PeerReady/wallet seed, so the marker stays ordered
-                    // behind them.
-                    if (!PacketSender.SendTo(ActiveTransport, peer, new CatchUpCompletePacket
-                    {
-                        Header = new PacketHeader(PacketType.CatchUpComplete, NetworkChannels.Currency, 0, NetworkClock.NowMs),
-                        SaveInstance = saveInstance
-                    }, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, PacketHeader.HeaderSize + 16, MenuUI?.Diagnostics))
-                        SilksongCoopPlugin.LogWarn("[Coop] Transport refused the catch-up-complete marker.");
-                }
-
-                if (_pendingCheckpoints.TryGetValue(peer, out var bench) &&
-                    TryApplyRemoteBenchCheckpoint(bench.SceneName, bench.RespawnMarker, bench.SpawnType, bench.FacingRight))
-                {
-                    _pendingCheckpoints.Remove(peer);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Retries wallet seeds the transport refused, and fails the session when the seed
-        /// cannot be delivered. Without this a refused seed left the client blocked on
-        /// <see cref="_awaitingWalletSeed"/> for the rest of the connection.
-        /// </summary>
-        private void PumpWalletSeed()
-        {
-            if (_walletSeedOutstanding.Count == 0) return;
-            if (SessionState?.IsConnected != true || SessionState.IsHost != true || ActiveTransport == null)
-            {
-                _walletSeedOutstanding.Clear();
-                return;
-            }
-
-            List<NetworkPeerId>? delivered = null;
-            foreach (var pair in _walletSeedOutstanding)
-            {
-                if (_vitalsSyncManager?.SendWalletSeed(pair.Key, VitalsSync.GetWalletBalances()) == true)
-                {
-                    delivered ??= new List<NetworkPeerId>();
-                    delivered.Add(pair.Key);
-                    continue;
-                }
-
-                if (pair.Value > 1)
-                {
-                    _walletSeedOutstanding[pair.Key] = (byte)(pair.Value - 1);
-                    continue;
-                }
-
-                _walletSeedOutstanding.Clear();
-                SilksongCoopPlugin.LogWarn("[Coop] Wallet seed could not be delivered; disconnecting.");
-                DisconnectFromSession(DisconnectReason.ConnectionFailed);
-                return;
-            }
-
-            if (delivered != null)
-            {
-                foreach (var peer in delivered) _walletSeedOutstanding.Remove(peer);
-            }
-        }
-
-        /// <summary>
-        /// Client-side backstop: when the host's wallet seed never arrives, fail the session
-        /// with a visible reason instead of silently disabling currency sync until the next
-        /// reconnect.
-        /// </summary>
-        private void PumpWalletSeedTimeout()
-        {
-            if (!_awaitingWalletSeed) return;
-            if (SessionState?.IsConnected != true || SessionState.IsHost == true)
-            {
-                _awaitingWalletSeed = false;
-                return;
-            }
-
-            if (Time.unscaledTime - _awaitingWalletSeedSince <= WalletSeedTimeoutSeconds) return;
-
-            SilksongCoopPlugin.LogWarn("[Coop] Wallet seed was not received in time; disconnecting.");
-            _awaitingWalletSeed = false;
-            DisconnectFromSession(DisconnectReason.ConnectionFailed);
-        }
-
-        /// <summary>
-        /// True when <paramref name="peer"/> is the current session partner or one of the
-        /// additional peers registered for a future multi-peer transport. The legacy
-        /// single-peer path always registers exactly one peer.
-        /// </summary>
-        private bool IsWorldAuthority(NetworkPeerId peer, ulong origin)
-        {
-            bool accepted = SessionState?.IsHost == false && SessionState.RemotePeerId == peer &&
-                            peer.Value == origin;
-            if (!accepted) MenuUI?.Diagnostics?.RecordRejected();
-            return accepted;
-        }
-
-        private bool IsKnownPeer(NetworkPeerId peer)
-        {
-            var session = SessionState;
-            if (session == null) return false;
-
-            if (session.RemotePeerId.HasValue && session.RemotePeerId.Value == peer)
-                return true;
-
-            var peers = session.RemotePeerIds;
-            for (int i = 0; i < peers.Count; i++)
-            {
-                if (peers[i] == peer) return true;
-            }
-
-            return false;
-        }
-
-        /// <summary>
-        /// Dispatches one framed packet.
-        /// </summary>
-        private void ProcessPacket(NetworkPeerId peer, ReadOnlySpan<byte> span)
-        {
-            try
-            {
-                // Every gameplay packet must come from a registered session peer. Without
-                // this, a queued packet from a previous connection (or a second endpoint in
-                // a future multi-peer transport) could mutate the new session's state.
-                if (!IsKnownPeer(peer))
-                {
-                    MenuUI?.Diagnostics?.RecordRejected();
-                    return;
-                }
-
-                // Desync checksums use their own magic, so they are recognised before the
-                // regular header parser and never reach it as "garbage".
-                if (DesyncChecksumFrame.TryRead(span, out uint round, out uint checksum))
-                {
-                    _desyncDetector?.OnRemoteChecksumReceived(checksum, round, Time.unscaledTime);
-                    return;
-                }
-
-                if (span.Length < PacketHeader.HeaderSize)
-                {
-                    MenuUI?.Diagnostics?.RecordRejected();
-                    return;
-                }
-
-                if (!PacketHeader.TryReadFrom(span, out var header))
-                {
-                    MenuUI?.Diagnostics?.RecordRejected();
-                    return;
-                }
-
-                if (!header.IsValidPacketType)
-                {
-                    MenuUI?.Diagnostics?.RecordRejected();
-                    return;
-                }
-
-                var reader = new PacketReader(span);
-                switch (header.PacketId)
-                {
-                    case PacketType.PeerReady:
-                        reader.ReadHeader();
-                        var saveInstance = reader.ReadGuid();
-                        if (reader.Remaining != 0 || saveInstance == Guid.Empty) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        if (_readyForCatchUp.TryAdd(peer, saveInstance)) PumpPeerReadiness();
-                        break;
-
-                    case PacketType.CatchUpComplete:
-                        reader.ReadHeader();
-                        var completedInstance = reader.ReadGuid();
-                        if (reader.Remaining != 0 || completedInstance == Guid.Empty ||
-                            completedInstance != _walletSaveInstance)
-                        {
-                            // The marker carries OUR save instance (echoed from the
-                            // PeerReady token); anything else is stale or forged.
-                            MenuUI?.Diagnostics?.RecordRejected();
-                            return;
-                        }
-                        // Readiness said the peer can apply state; this says its initial
-                        // burst was actually dispatched. Diagnostic only — the wallet-seed
-                        // retry and timeout remain the correctness mechanism.
-                        Logger.LogInfo($"[Coop] Initial catch-up complete for {peer.DisplayName}.");
-                        break;
-
-                    case PacketType.TransformSync:
-                        var trans = TransformSyncPacket.Deserialize(ref reader);
-                        if (reader.Remaining != 0 || !PacketValidator.ValidateTransformSync(trans)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        _remoteScenes.TryGetValue(peer, out var remoteScene);
-                        if (!remoteScene.AcceptTransform(trans.SceneGeneration, header.TickSequence)) break;
-                        _remoteScenes[peer] = remoteScene;
-                        int localSceneHash = GameManager.instance != null ? GameManager.instance.sceneNameHash : 0;
-                        // BUG-B6: strict equality — while a scene is loading the local hash
-                        // is 0, and the old "either side 0 counts as same scene" rule made
-                        // the clone pop in and flicker on the black loading screen. Hide
-                        // until both hashes are known and equal.
-                        bool isSameScene = CanSendSceneTransform && trans.SceneNameHash != 0 && trans.SceneNameHash == localSceneHash;
-                        CloneSpawner?.UpdateRemoteTransform(
-                            peer,
-                            trans.PositionX, trans.PositionY,
-                            trans.VelocityX, trans.VelocityY,
-                            trans.FacingDirection,
-                            trans.StateFlags,
-                            trans.AnimationClipHash,
-                            trans.NormalizedTime,
-                            header.Timestamp,
-                            isSameScene,
-                            header.TickSequence);
-                        break;
-
-                    case PacketType.BenchCheckpointSync:
-                        var bench = BenchCheckpointSyncPacket.Deserialize(ref reader);
-                        if (reader.Remaining != 0 || !PacketValidator.ValidateBenchCheckpoint(bench)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        if (TryApplyRemoteBenchCheckpoint(bench.SceneName, bench.RespawnMarker, bench.SpawnType, bench.FacingRight))
-                            _pendingCheckpoints.Remove(peer);
-                        else
-                            _pendingCheckpoints[peer] = bench;
-                        break;
-
-                    case PacketType.ActionTrigger:
-                        var action = ActionTriggerPacket.Deserialize(ref reader);
-                        if (reader.Remaining != 0 || !PacketValidator.ValidateActionTrigger(action)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        // A hidden clone still sits at its last position in this scene.
-                        // Its attack must not damage enemies in a room the partner has
-                        // already left (issue #2.4).
-                        if (CloneSpawner == null || !CloneSpawner.IsRemoteInSameScene(peer) ||
-                            !_remoteScenes.TryGetValue(peer, out var actionScene) ||
-                            !actionScene.HasTransform || actionScene.Generation != action.SceneGeneration)
-                        {
-                            break;
-                        }
-                        CloneSpawner.TriggerRemoteAction(peer, action.Action, (byte)action.Parameter, action.OriginX, action.OriginY);
-                        break;
-
-                    case PacketType.VitalsSync:
-                        var vitals = VitalsSyncPacket.Deserialize(ref reader);
-                        if (reader.Remaining != 0 || !PacketValidator.ValidateVitalsSync(vitals)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        VitalsSync?.HandleVitalsPacket(peer, vitals);
-                        break;
-
-                    case PacketType.CurrencySync:
-                        var currency = CurrencySyncPacket.Deserialize(ref reader);
-                        if (reader.Remaining != 0 || !PacketValidator.ValidateCurrencySync(currency)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        if (currency.DeltaAmount == 0 && currency.PickupKey == 0) break;
-                        VitalsSync.HandleCurrencyPacket(peer, currency);
-                        if (currency.DeltaAmount != 0 && ActiveTransport != null)
-                        {
-                            // A refused receipt keeps the transaction in the sender's journal
-                            // (counted toward exhaustion), so surface the refusal in the log.
-                            if (!PacketSender.SendTo(ActiveTransport, peer, new CurrencyReceiptPacket
-                            {
-                                Header = new PacketHeader(PacketType.CurrencyReceipt, NetworkChannels.Currency, 0, NetworkClock.NowMs),
-                                TransactionId = currency.TransactionId
-                            }, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, PacketHeader.HeaderSize + 16))
-                                SilksongCoopPlugin.LogWarn("[Coop] Transport refused a currency receipt; journal keeps the transaction unconfirmed.");
-                        }
-                        break;
-
-                    case PacketType.WalletSeed:
-                        reader.ReadHeader();
-                        int rosaries = reader.ReadInt32();
-                        int shards = reader.ReadInt32();
-                        if (reader.Remaining != 0 || rosaries > PacketValidator.MaxReasonableCurrency ||
-                            shards > PacketValidator.MaxReasonableCurrency)
-                        {
-                            MenuUI?.Diagnostics?.RecordRejected();
-                            return;
-                        }
-                        if (_awaitingWalletSeed && !SessionState.IsHost && SessionState.RemotePeerId == peer)
-                        {
-                            _awaitingWalletSeed = false;
-                            ApplyWalletSeed(peer, Core.Protocol.Packets.CurrencyType.Rosaries, rosaries);
-                            ApplyWalletSeed(peer, Core.Protocol.Packets.CurrencyType.ShellShards, shards);
-                            _vitalsSyncManager?.EnableCurrencyPeer(peer);
-                        }
-                        break;
-
-                    case PacketType.CurrencyReceipt:
-                        reader.ReadHeader();
-                        var receipt = reader.ReadGuid();
-                        if (reader.Remaining != 0 || receipt == Guid.Empty) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        _vitalsSyncManager?.ReceiveCurrencyReceipt(peer, receipt);
-                        break;
-
-                    case PacketType.PlayerDeath:
-                        var death = DeathLifecyclePacket.Deserialize(ref reader);
-                        if (reader.Remaining != 0 || !PacketValidator.ValidateDeathLifecycle(death)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        if (DeathCoordinator != null)
-                        {
-                            bool wasAlive = DeathCoordinator.IsRemotePeerAlive(peer);
-                            DeathCoordinator.HandleDeathPacket(peer, death);
-                            bool isAlive = DeathCoordinator.IsRemotePeerAlive(peer);
-
-                            if (death.EventType == DeathEventType.SoloBenchRespawn)
-                            {
-                                // The partner fell in another room and used the local
-                                // bench fallback; tell the survivor instead of leaving
-                                // them with a silent "dead" HUD.
-                                MenuUI?.SetStatusMessage(Loc.T("Partner revived at the last bench."));
-                            }
-                            else if (wasAlive && !isAlive)
-                            {
-                                MenuUI?.SetStatusMessage(Loc.T("{0} died", peer.DisplayName));
-                            }
-                            else if (!wasAlive && isAlive &&
-                                     death.EventType == DeathEventType.PartnerReviveTrigger)
-                            {
-                                MenuUI?.SetStatusMessage(Loc.T("{0} revived", peer.DisplayName));
-                            }
-                            // Apply visibility per sender: with 3+ peers the aggregate
-                            // "some partner is alive" flag cannot decide whether THIS
-                            // clone should be hidden.
-                            if (wasAlive != isAlive)
-                            {
-                                ApplyRemoteDeathVisibility(peer, death.EventType);
-                            }
-                            else if (death.EventType == DeathEventType.PartnerReviveTrigger && isAlive)
-                            {
-                                ApplyRemoteDeathVisibility(peer, death.EventType);
-                            }
-                            else if ((death.EventType == DeathEventType.SoloDeathOccurred || death.EventType == DeathEventType.TeamWipeOccurred) && !isAlive)
-                            {
-                                ApplyRemoteDeathVisibility(peer, death.EventType);
-                            }
-                        }
-                        else
-                        {
-                            ApplyRemoteDeathVisibility(peer, death.EventType);
-                        }
-                        break;
-
-                    case PacketType.SceneTransition:
-                        // BUG-20: explicit "partner left the scene" signal — hide the clone
-                        // immediately and drop buffered snapshots so it never lingers at
-                        // its last position during the remote's scene load.
-                        var scene = SceneTransitionPacket.Deserialize(ref reader);
-                        if (reader.Remaining != 0 || !PacketValidator.ValidateSceneTransition(scene)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        _remoteScenes.TryGetValue(peer, out var departed);
-                        if (scene.TransitionPhase == 0 && departed.AcceptDeparture(header.TickSequence))
-                        {
-                            _remoteScenes[peer] = departed;
-                            CloneSpawner?.SetRemoteScenePresence(peer, false);
-                        }
-                        break;
-
-                    case PacketType.EnemySync:
-                        var enemyPacket = EnemySyncPacket.Deserialize(ref reader);
-                        if (reader.Remaining != 0 || !PacketValidator.ValidateEnemySync(enemyPacket)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        EnemySync?.ApplyRemoteHit(enemyPacket, peer);
-                        break;
-
-                    case PacketType.EnemySnapshot:
-                        var enemySnapshot = EnemySnapshotPacket.Deserialize(ref reader);
-                        if (reader.Remaining != 0 || !PacketValidator.ValidateEnemySnapshot(enemySnapshot)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        EnemySync?.ApplyRemoteSnapshot(enemySnapshot, peer);
-                        break;
-
-                    case PacketType.WorldEvent:
-                        var worldEvent = WorldEventPacket.Deserialize(ref reader);
-                        if (reader.Remaining != 0 || !PacketValidator.ValidateWorldEvent(worldEvent)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        if (IsWorldAuthority(peer, worldEvent.OriginPeerId))
-                            EnemySync?.ApplyRemoteWorldEvent(worldEvent, peer);
-                        break;
-
-                    case PacketType.PersistentState:
-                        var persistentState = PersistentStatePacket.Deserialize(ref reader);
-                        if (reader.Remaining != 0 || !PacketValidator.ValidatePersistentState(persistentState)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        if (IsWorldAuthority(peer, persistentState.OriginPeerId))
-                            EnemySync?.ApplyRemotePersistentState(persistentState);
-                        break;
-
-                    case PacketType.QuestState:
-                        QuestStatePacket questState;
-                        try { questState = QuestStatePacket.Deserialize(ref reader); }
-                        catch (FormatException) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        if (reader.Remaining != 0 || !PacketValidator.ValidateQuestState(questState)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        QuestStateSync?.ApplyRemote(questState);
-                        break;
-
-                    case PacketType.ItemUnlockSync:
-                        var item = ItemUnlockPacket.Deserialize(ref reader);
-                        if (reader.Remaining != 0 || !PacketValidator.ValidateItemUnlock(item)) { MenuUI?.Diagnostics?.RecordRejected(); return; }
-                        InventorySync?.HandleItemUnlockPacket(peer, item);
-                        break;
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning($"[Coop] Error processing packet from {peer}: {ex.Message}");
-            }
-        }
-
+        private void ProcessPacket(NetworkPeerId peer, ReadOnlySpan<byte> span) => PacketRouter?.ProcessPacket(peer, span);
         #endregion
 
         #region Frame Update and Lifecycle
@@ -2039,6 +1197,9 @@ namespace SilksongCoop.Mod
             {
                 switch (eventType)
                 {
+                    case DeathEventType.LifecycleSnapshot:
+                        CloneSpawner?.SetRemotePartnerAlive(peer, DeathCoordinator?.IsRemotePeerAlive(peer) ?? false);
+                        break;
                     case DeathEventType.SoloDeathOccurred:
                     case DeathEventType.TeamWipeOccurred:
                         CloneSpawner?.SetRemotePartnerAlive(peer, false);
@@ -2078,7 +1239,7 @@ namespace SilksongCoop.Mod
                 PumpPeerReadiness();
                 ActiveTransport?.PollEvents();
                 PumpPeerReadiness();
-
+                PacketRouter?.DrainDeferredPackets();
                 _networkOrchestrator?.Update();
                 foreach (var orch in _orchestrators)
                 {
@@ -2089,7 +1250,8 @@ namespace SilksongCoop.Mod
                 UpdateDesyncDetector();
                 QuestStateSync?.Poll();
 
-                if (Keybinds != null && Keybinds.IsKeyDown(KeybindManager.ToggleSpectatorCamera))
+                bool isSpectating = Spectator.IsActive || DeathCoordinator?.CurrentState == DeathState.Spectating;
+                if (isSpectating && Keybinds != null && Keybinds.IsKeyDown(KeybindManager.ToggleSpectatorCamera))
                 {
                     _spectatorCameraFollow = !_spectatorCameraFollow;
                     MenuUI?.SetStatusMessage(_spectatorCameraFollow
@@ -2224,12 +1386,8 @@ namespace SilksongCoop.Mod
             if (SessionState != null && SessionState.Status != SessionStatus.Disconnected)
                 DisconnectFromSession(respawnSpectator: false);
             VitalsSync?.ClearClaimedPickups();
-            _walletSave = null;
-            _walletRoom = null;
             _departedSceneHandle = null;
-            _lastBenchCheckpoint = null;
-            _benchSave = null;
-            _walletPeerInstances.Clear();
+            HandshakeCoordinator?.OnSessionEnded();
             QuestStateSync?.ClearAuthoredChanges();
             _vitalsSyncManager?.ResetCurrencyJournal();
             _sessionSaveScope.Reset();

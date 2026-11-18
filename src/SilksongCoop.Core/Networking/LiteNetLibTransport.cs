@@ -175,6 +175,7 @@ namespace SilksongCoop.Core.Networking
         private readonly Dictionary<byte, uint> _latestSequencedReceived = new();
         private readonly HashSet<byte> _sequencedInitialized = new();
         private readonly Dictionary<byte, SortedDictionary<uint, byte[]>> _pendingReliable = new();
+        private readonly List<uint> _staleKeysScratch = new();
         private readonly LinkedList<SentReliablePacket> _unacknowledged = new();
         private readonly Dictionary<(byte channel, DeliveryMethod method, uint sequence), LinkedListNode<SentReliablePacket>> _unacknowledgedIndex = new();
         private const int MaxUnacknowledgedPackets = NetworkLimits.ReliableBacklogCap;
@@ -201,40 +202,59 @@ namespace SilksongCoop.Core.Networking
         private readonly Queue<DeferredEvent> _pendingEvents = new();
         private long _sessionGeneration;
 
-        // ReliableUnordered has its own sequence space but no ordering window. Duplicates
-        // are possible because retransmissions are allowed, so remember recently delivered
-        // sequences (bounded) and still ACK duplicates.
+        // ReliableUnordered delivers immediately within a bounded window rooted at the
+        // oldest missing sequence. Future packets beyond that window are not ACKed, so
+        // advancing traffic cannot evict an undelivered reliable packet permanently.
         private readonly Dictionary<byte, UnorderedReplayWindow> _receivedUnordered = new();
 
-        private sealed class UnorderedReplayWindow
+        internal enum ReplayStatus
+        {
+            Accepted,
+            Duplicate,
+            Stale
+        }
+
+        internal sealed class UnorderedReplayWindow
         {
             private const uint Capacity = 4096;
-            private readonly uint[] _sequences = new uint[Capacity];
             private readonly bool[] _seen = new bool[Capacity];
-            private uint _latest;
-            private bool _initialized;
+            private uint _nextExpected;
+
+            internal UnorderedReplayWindow(uint initialSequence = 0)
+            {
+                _nextExpected = initialSequence;
+            }
+
+            public ReplayStatus Process(uint sequence)
+            {
+                // Everything below the contiguous watermark has already been delivered.
+                // ACK duplicates even after their individual ring slots are reclaimed.
+                if (IsSequenceOlder(sequence, _nextExpected)) return ReplayStatus.Duplicate;
+
+                // Keep a hole reachable forever. Reject far-future packets without ACK
+                // rather than letting them advance the window past a missing delivery.
+                if (unchecked(sequence - _nextExpected) >= Capacity) return ReplayStatus.Stale;
+
+                uint slot = sequence % Capacity;
+                if (_seen[slot]) return ReplayStatus.Duplicate;
+                _seen[slot] = true;
+
+                while (_seen[_nextExpected % Capacity])
+                {
+                    _seen[_nextExpected % Capacity] = false;
+                    _nextExpected = unchecked(_nextExpected + 1);
+                }
+                return ReplayStatus.Accepted;
+            }
 
             public bool IsNew(uint sequence)
             {
-                if (!_initialized || IsSequenceNewer(sequence, _latest)) return true;
-                if (unchecked(_latest - sequence) >= Capacity) return false;
-                uint slot = sequence % Capacity;
-                return !_seen[slot] || _sequences[slot] != sequence;
+                return !IsSequenceOlder(sequence, _nextExpected) &&
+                    unchecked(sequence - _nextExpected) < Capacity &&
+                    !_seen[sequence % Capacity];
             }
 
-            public bool Accept(uint sequence)
-            {
-                if (!IsNew(sequence)) return false;
-                if (!_initialized || IsSequenceNewer(sequence, _latest))
-                {
-                    _latest = sequence;
-                    _initialized = true;
-                }
-                uint slot = sequence % Capacity;
-                _sequences[slot] = sequence;
-                _seen[slot] = true;
-                return true;
-            }
+            public bool Accept(uint sequence) => Process(sequence) == ReplayStatus.Accepted;
         }
 
         // BUG-A3: last time the client sent its Handshake frame. The initial datagram and
@@ -399,6 +419,7 @@ namespace SilksongCoop.Core.Networking
             _latestSequencedReceived.Clear();
             _sequencedInitialized.Clear();
             _pendingReliable.Clear();
+            _staleKeysScratch.Clear();
             _unacknowledged.Clear();
             _unacknowledgedIndex.Clear();
             _receivedUnordered.Clear();
@@ -1559,7 +1580,7 @@ namespace SilksongCoop.Core.Networking
             return sequence == expected ||
                    (IsSequenceNewer(sequence, expected) &&
                     (!_pendingReliable.TryGetValue(channel, out var pending) ||
-                     (pending.Count < 256 && !pending.ContainsKey(sequence))));
+                     (pending.Count < 256 && (pending.Count == 0 || !pending.ContainsKey(sequence)))));
         }
 
         private bool AcceptUnreliable(byte channel, uint sequence)
@@ -1606,16 +1627,17 @@ namespace SilksongCoop.Core.Networking
                     if (pending.Count >= MaxPendingPerChannel && IsSequenceNewer(sequence, expected))
                     {
                         // Reclaim entries that can no longer be needed (stale duplicates).
-                        var staleKeys = new List<uint>();
-                        foreach (var key in pending.Keys)
+                        _staleKeysScratch.Clear();
+                        foreach (var pair in pending)
                         {
-                            if (IsSequenceOlder(key, expected))
-                                staleKeys.Add(key);
+                            if (IsSequenceOlder(pair.Key, expected))
+                                _staleKeysScratch.Add(pair.Key);
                         }
-                        foreach (var key in staleKeys)
+                        for (int i = 0; i < _staleKeysScratch.Count; i++)
                         {
-                            pending.Remove(key);
+                            pending.Remove(_staleKeysScratch[i]);
                         }
+                        _staleKeysScratch.Clear();
 
                         if (pending.Count >= MaxPendingPerChannel)
                         {
@@ -1632,7 +1654,7 @@ namespace SilksongCoop.Core.Networking
                         expected++;
                         _expectedReceiveSequences[channel] = expected;
 
-                        while (pending.TryGetValue(expected, out var nextData))
+                        while (pending.Count > 0 && pending.TryGetValue(expected, out var nextData))
                         {
                             pending.Remove(expected);
                             DispatchData(nextData);
@@ -1655,7 +1677,9 @@ namespace SilksongCoop.Core.Networking
                 {
                     if (!_receivedUnordered.TryGetValue(channel, out var window))
                         _receivedUnordered[channel] = window = new UnorderedReplayWindow();
-                    if (!window.Accept(sequence)) return true;
+                    var status = window.Process(sequence);
+                    if (status == ReplayStatus.Duplicate) return true;
+                    if (status == ReplayStatus.Stale) return false;
                     DispatchData(payload.ToArray());
                     return true;
                 }

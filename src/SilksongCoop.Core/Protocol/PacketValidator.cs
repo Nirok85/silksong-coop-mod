@@ -24,7 +24,7 @@ namespace SilksongCoop.Core.Protocol
         /// game legitimately produces, so honest sessions are unaffected.
         /// </summary>
         public const int MaxReasonableMaxHealth = 64;
-        public const int MaxReasonableSilkSpools = 16;
+        public const int MaxReasonableSilkSpools = 64;
         public const int MaxReasonableCurrency = 100_000_000;
 
         // Enemy HP is much larger than player HP (bosses reach thousands), but still finite.
@@ -95,8 +95,8 @@ namespace SilksongCoop.Core.Protocol
                 return false;
             }
 
-            // Silk is stored per spool (9 units each); allow a small margin, then cap.
-            int maxSilk = Math.Max(9, packet.MaxSilkSpools * 9);
+            // Protocol v12 carries raw silk capacity, with a native starting capacity of nine.
+            int maxSilk = Math.Max(9, (int)packet.MaxSilkSpools);
             if (packet.CurrentSilk > maxSilk)
             {
                 return false;
@@ -163,6 +163,7 @@ namespace SilksongCoop.Core.Protocol
             if (packet.RemainingSeconds < 0f || float.IsNaN(packet.RemainingSeconds) || float.IsInfinity(packet.RemainingSeconds))
                 return false;
 
+            if (packet.EventType == DeathEventType.LifecycleSnapshot && packet.FallenPlayerIndex > 1) return false;
             if (packet.Epoch == 0)
                 return false;
 
@@ -420,6 +421,8 @@ namespace SilksongCoop.Core.Protocol
             DeathEventType.TeamWipeOccurred => true,
             DeathEventType.BenchCheckpointUpdate => true,
             DeathEventType.SoloBenchRespawn => true,
+            DeathEventType.LifecycleSnapshot => true,
+            DeathEventType.EpochSync => true,
             _ => false
         };
 

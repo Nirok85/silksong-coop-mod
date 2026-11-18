@@ -52,5 +52,20 @@ if (currency.Name.IsNil || !currency.GetFields().Select(metadata.GetFieldDefinit
     missing++;
 }
 
-if (missing == 0) Console.WriteLine($"Verified {methods.Length} game methods and the currency queue field.");
+var playerData = metadata.TypeDefinitions.Select(metadata.GetTypeDefinition)
+    .FirstOrDefault(t => metadata.GetString(t.Name) == "PlayerData");
+foreach (var name in new[] { "silkMax", "silkSpoolParts", "heartPieces", "maxHealthBase" })
+{
+    var field = playerData.Name.IsNil ? default : playerData.GetFields().Select(metadata.GetFieldDefinition)
+        .FirstOrDefault(f => metadata.GetString(f.Name) == name);
+    var signature = field.Name.IsNil ? Array.Empty<byte>() : metadata.GetBlobBytes(field.Signature);
+    // Field signature 0x06, Int32 element 0x08. Flag 0x80 is NonSerialized.
+    if (signature.Length != 2 || signature[0] != 0x06 || signature[1] != 0x08 || ((int)field.Attributes & 0x80) != 0)
+    {
+        Console.Error.WriteLine($"Missing or incompatible persistent Int32 field: PlayerData.{name}");
+        missing++;
+    }
+}
+
+if (missing == 0) Console.WriteLine($"Verified {methods.Length} game methods, the currency queue field and four persistent progression fields.");
 return missing == 0 ? 0 : 1;

@@ -3,7 +3,7 @@
 ![Версия](https://img.shields.io/badge/Version-3.3.9-success)
 [![CI](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml)
 
-[English version](README.md) · [Скачать v3.3.9 beta.3](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.9-beta.3)
+[English version](README.md) · [Скачать v3.3.9 beta.3](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.9)
 
 Исследуйте Фарлум вдвоём в Steam-версии Silksong для ПК. Сражайтесь вместе и делитесь валютой, улучшениями и открытиями. Текущее здоровье, шёлк и экипировка у каждого свои.
 
@@ -11,7 +11,7 @@
 
 **Бета:** обновлённый интерфейс ещё не проверен визуально в игре. У обоих игроков должны совпадать версии игры и мода.
 
-Эта бета использует протокол v11. Обновите мод у всех участников.
+Опубликованная beta.3 использует протокол v11. Неопубликованные исправления стабильности в этой рабочей копии используют [протокол v12](docs/protocol-v12.md). Обновите мод у всех участников.
 
 - **Windows x64.** Закройте игру и распакуйте `SilksongCoop_v3.3.9.zip` в её папку. BepInEx 5.4.21 уже в архиве. Файл `winhttp.dll` должен лежать рядом с исполняемым файлом игры.
 - **Если BepInEx 5.4.x уже установлен.** Скачайте `SilksongCoop_v3.3.9_plugin-only.zip` и положите обе DLL мода в `BepInEx/plugins/SilksongCoop/`. На Linux и macOS используйте BepInEx для своей платформы.

@@ -17,7 +17,11 @@ namespace SilksongCoop.Core.Protocol.Packets
         /// in another room during the revive countdown). The receiver must only mark the
         /// partner as alive again — it must NOT wipe its own living player.
         /// </summary>
-        SoloBenchRespawn = 5
+        SoloBenchRespawn = 5,
+        /// <summary>Initial peer life state. FallenPlayerIndex is 0 for alive, 1 for dead.</summary>
+        LifecycleSnapshot = 6,
+        /// <summary>Synchronizes epoch without asserting the sender is alive.</summary>
+        EpochSync = 7
     }
 
     /// <summary>

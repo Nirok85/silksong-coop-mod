@@ -64,6 +64,23 @@ namespace SilksongCoop.Mod.Services
             return Send(transport, target, packet, method, channel, bufferSize, diagnostics, null);
         }
 
+        /// <summary>
+        /// Same as <see cref="SendTo{T}"/> but keeps a caller-specific log prefix.
+        /// </summary>
+        public static bool SendTo<T>(
+            INetworkTransport transport,
+            NetworkPeerId target,
+            T packet,
+            DeliveryMethod method,
+            byte channel,
+            int bufferSize,
+            INetworkDiagnostics? diagnostics,
+            string? logContext)
+            where T : struct, IPacket
+        {
+            return Send(transport, target, packet, method, channel, bufferSize, diagnostics, logContext);
+        }
+
         private static bool Send<T>(
             INetworkTransport transport,
             NetworkPeerId? target,
@@ -75,7 +92,14 @@ namespace SilksongCoop.Mod.Services
             string? logContext)
             where T : struct, IPacket
         {
-            if (transport == null) return false;
+            string prefix = string.IsNullOrEmpty(logContext) ? "[PacketSender]" : logContext!;
+            string targetDesc = target.HasValue ? $"peer {target.Value.Value}" : "all peers";
+
+            if (transport == null)
+            {
+                CoopLog.Warn($"{prefix} Failed sending {typeof(T).Name} to {targetDesc}: transport is null");
+                return false;
+            }
 
             byte[]? buffer = null;
             try
@@ -87,15 +111,18 @@ namespace SilksongCoop.Mod.Services
                 bool accepted = target.HasValue
                     ? transport.Send(target.Value, buffer, 0, writer.Position, method, channel)
                     : transport.SendToAll(buffer, 0, writer.Position, method, channel);
-                if (!accepted) return false;
+                if (!accepted)
+                {
+                    CoopLog.Warn($"{prefix} Failed sending {typeof(T).Name} to {targetDesc}: transport refused");
+                    return false;
+                }
 
                 diagnostics?.RecordSent(writer.Position);
                 return true;
             }
             catch (Exception ex)
             {
-                string prefix = string.IsNullOrEmpty(logContext) ? "[PacketSender]" : logContext!;
-                CoopLog.Warn($"{prefix} Failed sending {typeof(T).Name}: {ex.Message}");
+                CoopLog.Warn($"{prefix} Failed sending {typeof(T).Name} to {targetDesc}: {ex.Message}");
                 return false;
             }
             finally

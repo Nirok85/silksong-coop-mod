@@ -10,6 +10,12 @@ dotnet build tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj -c Release -p:Tr
 The test project references `SilksongCoop.Core` only — it must not reference
 `SilksongCoop.Mod` (the Mod needs the game's managed assemblies).
 
+## Production adapter checks
+
+`dotnet run --project tests/SilksongCoop.RuntimeChecks -c Release` compiles the production `UnityGroundProber.cs` against small Unity API shims. It checks body bounds, trigger filtering, blocked clearance and bounded query buffers. CI and release preflight run it separately from the Core suite. With `-NoRestore`, restore this project beforehand because it is outside the solution.
+
+The `E2ERemediationTests` simulation helpers are model tests, not actual Unity end-to-end tests. Production Core regressions cover wallet snapshot capture/serialization/assembly/application, counter replay, lifecycle handshakes and deferred damage. Real Unity physics, pickup FSM interleaving and two-instance gameplay still require in-game verification.
+
 ## Test harness
 
 - `MockNetworkTransport` — in-memory transport with configurable latency, jitter,

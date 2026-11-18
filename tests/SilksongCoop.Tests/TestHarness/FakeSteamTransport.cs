@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using SilksongCoop.Core.Networking;
 
 namespace SilksongCoop.Tests.TestHarness
@@ -10,8 +11,11 @@ namespace SilksongCoop.Tests.TestHarness
     /// </summary>
     public class FakeSteamTransport : INetworkTransport
     {
+        public const int SteamHeartbeatTimeoutMs = 15000;
+
         private FakeSteamTransport? _peer;
         private bool _connected;
+        private readonly Queue<(NetworkPeerId Sender, byte[]? Data, byte Channel, bool IsPong)> _incomingQueue = new();
 
         public bool IsHost { get; }
         public bool IsConnected => _connected;
@@ -23,6 +27,10 @@ namespace SilksongCoop.Tests.TestHarness
         public int RoundTripTimeMs { get; set; } = 30;
         public int PacketLossPercent { get; set; }
         public int ReliableBacklogCount { get; private set; }
+
+        public long LastPongReceivedMs { get; set; }
+        public Func<long>? TimeProvider { get; set; }
+        private long NowMs() => TimeProvider != null ? TimeProvider() : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         public event Action<NetworkPeerId>? OnPeerConnected;
         public event Action<NetworkPeerId, DisconnectReason>? OnPeerDisconnected;
@@ -45,12 +53,24 @@ namespace SilksongCoop.Tests.TestHarness
 
         public void SetPeer(FakeSteamTransport peer) => _peer = peer;
 
+        public void EnqueueIncomingPacket(NetworkPeerId sender, byte[] data, byte channel)
+        {
+            _incomingQueue.Enqueue((sender, data, channel, false));
+        }
+
+        public void EnqueueIncomingPong(NetworkPeerId sender)
+        {
+            _incomingQueue.Enqueue((sender, null, 0, true));
+        }
+
         public void StartHost(int port = 7777)
         {
             _connected = true;
+            LastPongReceivedMs = NowMs();
             if (_peer == null) return;
 
             _peer._connected = true;
+            _peer.LastPongReceivedMs = _peer.NowMs();
             OnPeerConnected?.Invoke(_peer.LocalPeerId);
             _peer.OnPeerConnected?.Invoke(LocalPeerId);
         }
@@ -60,6 +80,7 @@ namespace SilksongCoop.Tests.TestHarness
             // Simulated join: host must already be listening.
             if (_peer == null) return;
             _connected = true;
+            LastPongReceivedMs = NowMs();
             OnPeerConnected?.Invoke(_peer.LocalPeerId);
         }
 
@@ -75,7 +96,31 @@ namespace SilksongCoop.Tests.TestHarness
             OnPeerDisconnected?.Invoke(_peer?.LocalPeerId ?? new NetworkPeerId(0), DisconnectReason.GracefulDisconnect);
         }
 
-        public void PollEvents() { }
+        public void PollEvents()
+        {
+            if (!_connected) return;
+
+            // 1. Drain incoming P2P packet queue first so queued pongs/data refresh liveness timestamps
+            while (_incomingQueue.Count > 0)
+            {
+                var (sender, data, channel, isPong) = _incomingQueue.Dequeue();
+                LastReceivedChannel = channel;
+                LastPongReceivedMs = NowMs();
+                if (!isPong && data != null && data.Length > 0)
+                {
+                    OnDataReceived?.Invoke(sender, data, 0, data.Length);
+                }
+            }
+
+            // 2. Evaluate heartbeat timeout after draining incoming packets
+            long now = NowMs();
+            if (LastPongReceivedMs == 0) LastPongReceivedMs = now;
+            if (now - LastPongReceivedMs > SteamHeartbeatTimeoutMs)
+            {
+                _connected = false;
+                OnPeerDisconnected?.Invoke(_peer?.LocalPeerId ?? new NetworkPeerId(0), DisconnectReason.Timeout);
+            }
+        }
 
         public byte LastReceivedChannel { get; private set; }
         public int SimulatedRttMs { get; set; } = 30;

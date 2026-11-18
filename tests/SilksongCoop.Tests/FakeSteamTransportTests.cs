@@ -82,5 +82,59 @@ namespace SilksongCoop.Tests
             Assert.Empty(session.RemotePeerIds);
             Assert.Null(session.RemotePeerId);
         }
+
+        [Fact]
+        public void PollEvents_QueuedPongPacket_PreventsHeartbeatTimeout()
+        {
+            var (host, client) = FakeSteamTransport.CreatePair();
+            long currentTime = 10000;
+            host.TimeProvider = () => currentTime;
+            client.TimeProvider = () => currentTime;
+            host.StartHost();
+
+            Assert.True(host.IsConnected);
+            Assert.True(client.IsConnected);
+
+            // Advance time past the heartbeat timeout threshold (15000ms)
+            currentTime += FakeSteamTransport.SteamHeartbeatTimeoutMs + 1000; // 16s later
+
+            // A Pong packet arrived and is waiting in the incoming Steam queue
+            host.EnqueueIncomingPong(client.LocalPeerId);
+
+            bool disconnected = false;
+            host.OnPeerDisconnected += (_, reason) =>
+            {
+                if (reason == DisconnectReason.Timeout) disconnected = true;
+            };
+
+            // Execute PollEvents: incoming queue must be drained before checking timeout
+            host.PollEvents();
+
+            Assert.False(disconnected, "Peer should not be disconnected when queued Pong is available");
+            Assert.True(host.IsConnected, "Host should remain connected after processing queued Pong");
+            Assert.Equal(currentTime, host.LastPongReceivedMs);
+        }
+
+        [Fact]
+        public void PollEvents_WithoutQueuedPongPacket_TimesOutAfterThreshold()
+        {
+            var (host, client) = FakeSteamTransport.CreatePair();
+            long currentTime = 10000;
+            host.TimeProvider = () => currentTime;
+            host.StartHost();
+
+            currentTime += FakeSteamTransport.SteamHeartbeatTimeoutMs + 1000;
+
+            bool timeoutOccurred = false;
+            host.OnPeerDisconnected += (_, reason) =>
+            {
+                if (reason == DisconnectReason.Timeout) timeoutOccurred = true;
+            };
+
+            host.PollEvents();
+
+            Assert.True(timeoutOccurred, "Host should disconnect when no packet was received and timeout exceeded");
+            Assert.False(host.IsConnected, "Host should no longer be connected after timeout");
+        }
     }
 }

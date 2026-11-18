@@ -120,6 +120,9 @@ namespace SilksongCoop.Mod.Networking
         private long _lastAdditionalHeartbeatMs;
         private int _pollChannelStart = MinChannel;
         private byte[] _discardBuffer = new byte[MaxSteamDatagramBytes];
+        private readonly List<CSteamID> _stalePeersScratch = new();
+        private readonly List<CSteamID> _failedReliablePeersScratch = new();
+        private readonly byte[] _additionalHeartbeatBuffer = new byte[9];
 
         #endregion // Fields and State
 
@@ -285,6 +288,11 @@ namespace SilksongCoop.Mod.Networking
             catch (Exception ex)
             {
                 Logger?.LogWarning($"Steam initialization error: {ex.Message}");
+            }
+
+            if (localId == 0)
+            {
+                localId = 1;
             }
 
             LocalPeerId = new NetworkPeerId(localId, localName);
@@ -896,9 +904,11 @@ namespace SilksongCoop.Mod.Networking
         private void DisconnectFailedReliablePeers()
         {
             if (_failedReliablePeers.Count == 0) return;
-            var failed = new List<CSteamID>(_failedReliablePeers);
-            foreach (var peer in failed)
+            _failedReliablePeersScratch.Clear();
+            _failedReliablePeersScratch.AddRange(_failedReliablePeers);
+            for (int i = 0; i < _failedReliablePeersScratch.Count; i++)
             {
+                var peer = _failedReliablePeersScratch[i];
                 if (!_failedReliablePeers.Remove(peer)) continue;
                 if (peer != _remoteSteamId && !_additionalPeers.ContainsKey(peer.m_SteamID)) continue;
 
@@ -912,6 +922,7 @@ namespace SilksongCoop.Mod.Networking
                     NotifyAdditionalPeerDisconnected(peer, DisconnectReason.ConnectionFailed);
                 }
             }
+            _failedReliablePeersScratch.Clear();
         }
 
         private void ClosePrimaryPeerSession(DisconnectReason reason)
@@ -1032,6 +1043,10 @@ namespace SilksongCoop.Mod.Networking
                 }
             }
 
+            // Drain incoming packet queue before checking heartbeat timeout so queued
+            // pongs and data packets refresh liveness timestamps first.
+            DrainIncomingP2PPackets();
+
             // Application-level RTT/loss probes (legacy Steam P2P has no counters).
             if (IsConnected && _remoteSteamId != CSteamID.Nil)
             {
@@ -1082,30 +1097,40 @@ namespace SilksongCoop.Mod.Networking
                     SendAdditionalPeerHeartbeats(now);
                 }
 
-                List<CSteamID>? stale = null;
+                _stalePeersScratch.Clear();
                 foreach (var pair in _additionalPeers)
                 {
                     if (now - pair.Value.LastSeenMs > SteamHeartbeatTimeoutMs)
                     {
-                        (stale ??= new List<CSteamID>()).Add(pair.Value.SteamId);
+                        _stalePeersScratch.Add(pair.Value.SteamId);
                     }
                 }
 
-                if (stale != null)
+                if (_stalePeersScratch.Count > 0)
                 {
-                    for (int i = 0; i < stale.Count; i++)
+                    for (int i = 0; i < _stalePeersScratch.Count; i++)
                     {
-                        Logger?.LogWarning($"[Steam] Additional peer heartbeat timed out: {stale[i].m_SteamID}");
-                        try { SteamNetworking.CloseP2PSessionWithUser(stale[i]); } catch { /* best-effort */ }
-                        NotifyAdditionalPeerDisconnected(stale[i], DisconnectReason.Timeout);
+                        var peer = _stalePeersScratch[i];
+                        Logger?.LogWarning($"[Steam] Additional peer heartbeat timed out: {peer.m_SteamID}");
+                        try { SteamNetworking.CloseP2PSessionWithUser(peer); } catch { /* best-effort */ }
+                        NotifyAdditionalPeerDisconnected(peer, DisconnectReason.Timeout);
                     }
+                    _stalePeersScratch.Clear();
                 }
             }
 
             DisconnectFailedReliablePeers();
             FlushReliableQueue();
+        }
 
-            // 2. Poll only the channels used by the protocol (2-4) and reuse buffer.
+        /// <summary>
+        /// Polls incoming P2P packets from Steam channels 2-4 and dispatches them.
+        /// Must be called before checking heartbeat timeouts so queued pongs and
+        /// data refresh liveness timestamps first.
+        /// </summary>
+        private void DrainIncomingP2PPackets()
+        {
+            // Poll only the channels used by the protocol (2-4) and reuse buffer.
             // Channels are visited round-robin with a per-channel cap, so a single noisy
             // channel cannot starve the others.
             int processedDatagrams = 0;
@@ -1361,9 +1386,8 @@ namespace SilksongCoop.Mod.Networking
         /// </summary>
         private void SendAdditionalPeerHeartbeats(long now)
         {
-            byte[] ping = new byte[9];
-            ping[0] = RttPing;
-            Buffer.BlockCopy(BitConverter.GetBytes(now), 0, ping, 1, 8);
+            _additionalHeartbeatBuffer[0] = RttPing;
+            Buffer.BlockCopy(BitConverter.GetBytes(now), 0, _additionalHeartbeatBuffer, 1, 8);
 
             foreach (var pair in _additionalPeers)
             {
@@ -1373,7 +1397,7 @@ namespace SilksongCoop.Mod.Networking
                 try
                 {
                     SteamNetworking.SendP2PPacket(
-                        entry.SteamId, ping, (uint)ping.Length,
+                        entry.SteamId, _additionalHeartbeatBuffer, (uint)_additionalHeartbeatBuffer.Length,
                         EP2PSend.k_EP2PSendUnreliableNoDelay, RttChannel);
                 }
                 catch (Exception ex)

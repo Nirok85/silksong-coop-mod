@@ -65,6 +65,7 @@ namespace SilksongCoop.Mod.UI
         private bool _watermarkConnected;
         private SessionStatus _watermarkStatus;
         private NetworkPeerId? _watermarkPeerId;
+        private int _watermarkRtt;
 
         // Disconnect confirmation
         private bool _showDisconnectConfirm = false;
@@ -146,22 +147,41 @@ namespace SilksongCoop.Mod.UI
             _showOnboarding = !(SilksongCoopPlugin.Instance?.OnboardingCompletedConfig?.Value ?? true);
         }
 
+        private static PeerDiagnosticsSnapshot _cachedPeerSnapshot;
+        private static float _nextPeerDiagnosticsTime;
+        private const float PeerDiagnosticsInterval = 0.25f;
+
         /// <summary>
         /// Snapshot of the partner's scene presence and interpolation delay for the F11
-        /// overlay. Kept here because the Unity-side clone spawner owns the live values.
+        /// overlay. Throttled to 250ms to eliminate per-frame querying allocations.
         /// </summary>
         private static PeerDiagnosticsSnapshot BuildPeerDiagnostics()
         {
+            float now = Time.unscaledTime;
+            if (now < _nextPeerDiagnosticsTime)
+            {
+                return _cachedPeerSnapshot;
+            }
+            _nextPeerDiagnosticsTime = now + PeerDiagnosticsInterval;
+
             var snapshot = new PeerDiagnosticsSnapshot();
             var plugin = SilksongCoopPlugin.Instance;
             var session = plugin?.SessionState;
-            if (plugin == null || session == null || !session.IsConnected) return snapshot;
+            if (plugin == null || session == null || !session.IsConnected)
+            {
+                _cachedPeerSnapshot = snapshot;
+                return snapshot;
+            }
 
             snapshot.Connected = true;
             snapshot.PartnerAlive = plugin.DeathCoordinator?.IsPartnerAlive ?? true;
 
             var peerId = session.RemotePeerId;
-            if (!peerId.HasValue) return snapshot;
+            if (!peerId.HasValue)
+            {
+                _cachedPeerSnapshot = snapshot;
+                return snapshot;
+            }
 
             snapshot.SameScene = plugin.CloneSpawner?.IsRemoteInSameScene(peerId.Value) == true;
             if (plugin.CloneSpawner != null &&
@@ -171,6 +191,7 @@ namespace SilksongCoop.Mod.UI
                 snapshot.InterpolationDelayMs = delayMs;
             }
 
+            _cachedPeerSnapshot = snapshot;
             return snapshot;
         }
 
@@ -327,9 +348,13 @@ namespace SilksongCoop.Mod.UI
         }
 
         /// <summary>
+        /// Public entry point for updating watermark, removing RTT update latency.
+        /// </summary>
+        public void UpdateWatermark() => RefreshWatermarkIfNeeded();
+
+        /// <summary>
         /// Rebuilds the cached watermark at most four times per second, or immediately
-        /// when the connection state/peer/room changes. RTT changes are picked up by the
-        /// timer so a jittering value cannot rebuild the string on every frame.
+        /// when the connection state/peer/room/rtt changes.
         /// </summary>
         private void RefreshWatermarkIfNeeded()
         {
@@ -337,11 +362,13 @@ namespace SilksongCoop.Mod.UI
             bool connected = _sessionState != null && _sessionState.IsConnected;
             SessionStatus status = _sessionState?.Status ?? SessionStatus.Disconnected;
             NetworkPeerId? peerId = _sessionState?.RemotePeerId;
+            int rtt = _sessionState?.RoundTripTimeMs ?? 0;
 
             bool identityChanged = !_watermarkInitialized ||
                                    connected != _watermarkConnected ||
                                    status != _watermarkStatus ||
-                                   peerId != _watermarkPeerId;
+                                   peerId != _watermarkPeerId ||
+                                   rtt != _watermarkRtt;
 
             if (!identityChanged && now < _nextWatermarkRefreshTime) return;
 
@@ -349,6 +376,7 @@ namespace SilksongCoop.Mod.UI
             _watermarkConnected = connected;
             _watermarkStatus = status;
             _watermarkPeerId = peerId;
+            _watermarkRtt = rtt;
             _nextWatermarkRefreshTime = now + WatermarkRefreshInterval;
 
             if (connected)
@@ -356,7 +384,6 @@ namespace SilksongCoop.Mod.UI
                 string peerName = peerId.HasValue
                     ? peerId.Value.DisplayName
                     : Loc.T("Partner");
-                int rtt = _sessionState?.RoundTripTimeMs ?? 0;
                 string quality = rtt <= 0 ? "–" : rtt < 50 ? "●" : rtt < 150 ? "◐" : "○";
                 _watermarkText = $"[F10] Co-op  {quality} {peerName}  {(rtt > 0 ? $"{rtt}ms" : Loc.T("n/a"))}";
                 _watermarkColor = rtt <= 0 ? SilksongSkin.TextCream : rtt < 50 ? SilksongSkin.GreenOk : rtt < 150 ? SilksongSkin.YellowWarn : SilksongSkin.RedError;
@@ -376,6 +403,15 @@ namespace SilksongCoop.Mod.UI
                 _watermarkText = "[F10] Silksong Co-op";
                 _watermarkColor = SilksongSkin.TextCream;
             }
+        }
+
+        /// <summary>
+        /// Calculates the vitals HUD page using scaled / pause-safe time to prevent auto-flipping while paused.
+        /// </summary>
+        public static int CalculateHudPage(int pages, float time)
+        {
+            if (pages <= 1) return 0;
+            return (int)(time / 5f) % pages;
         }
 
         // ─── Partner vitals HUD (top-right) ───────────────────────────────────
@@ -403,7 +439,8 @@ namespace SilksongCoop.Mod.UI
                 slots = Mathf.FloorToInt((Screen.height - y - 18f + gap) / (hudH + gap));
             if (slots <= 0) return;
             int pages = (eligible + slots - 1) / slots;
-            int page = pages > 1 ? (int)(Time.unscaledTime / 5f) % pages : 0;
+            // MED-05: Use scaled time (Time.time / 5f) so the HUD does not flip pages while the game or inventory is paused
+            int page = CalculateHudPage(pages, Time.time);
             int first = page * slots;
             int eligibleIndex = 0;
             int shown = 0;
@@ -471,10 +508,10 @@ namespace SilksongCoop.Mod.UI
 
             // Silk bar
             float silkY = y + 57f;
-            float silkFrac = peer.MaxSilkSpools > 0 ? (float)peer.Silk / (peer.MaxSilkSpools * 9f) : 0f;
+            float silkFrac = peer.MaxSilkSpools > 0 ? (float)peer.Silk / ((float)peer.MaxSilkSpools) : 0f;
             Color silkColor = alive ? SilksongSkin.BlueInfo : new Color(0.30f, 0.36f, 0.39f);
             GUI.color = SilksongSkin.TextCream;
-            GUI.Label(new Rect(barX, y + 43f, barW, 14f), Loc.T("Silk {0}/{1}", peer.Silk, peer.MaxSilkSpools * 9), _barLabelStyle ?? Skin.label);
+            GUI.Label(new Rect(barX, y + 43f, barW, 14f), Loc.T("Silk {0}/{1}", peer.Silk, peer.MaxSilkSpools), _barLabelStyle ?? Skin.label);
             DrawStatusBar(barX, silkY, barW, barH, silkFrac, silkColor);
 
             GUI.color = Color.white;

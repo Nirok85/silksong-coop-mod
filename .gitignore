@@ -60,3 +60,6 @@ backups/
 # BenchmarkDotNet
 BenchmarkDotNet.Artifacts/
 
+
+# Graphify generated output
+graphify-out/

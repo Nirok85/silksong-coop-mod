@@ -55,6 +55,15 @@ jobs:
       - name: Restore
         run: dotnet restore tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj
 
+      - name: Restore production source runtime checks
+        run: dotnet restore tests/SilksongCoop.RuntimeChecks/SilksongCoop.RuntimeChecks.csproj
+
+      - name: Restore production Mod source checks
+        run: dotnet restore tests/SilksongCoop.ModSourceChecks/SilksongCoop.ModSourceChecks.csproj
+
+      - name: Restore production wallet retry checks
+        run: dotnet restore tests/SilksongCoop.WalletPumpChecks/SilksongCoop.WalletPumpChecks.csproj
+
       - name: Build Core (warnings as errors)
         run: dotnet build src/SilksongCoop.Core/SilksongCoop.Core.csproj -c Release -p:TreatWarningsAsErrors=true
 
@@ -65,6 +74,21 @@ jobs:
           --logger "trx;LogFileName=results.trx"
           --results-directory "${{ runner.temp }}/test-results"
           --blame-hang --blame-hang-timeout 5m
+
+      - name: Run production source runtime checks
+        run: >-
+          dotnet run --project tests/SilksongCoop.RuntimeChecks/SilksongCoop.RuntimeChecks.csproj
+          -c Release --no-restore -p:TreatWarningsAsErrors=true
+
+      - name: Run production Mod source checks
+        run: >-
+          dotnet run --project tests/SilksongCoop.ModSourceChecks/SilksongCoop.ModSourceChecks.csproj
+          -c Release --no-restore -p:TreatWarningsAsErrors=true
+
+      - name: Run production wallet retry checks
+        run: >-
+          dotnet run --project tests/SilksongCoop.WalletPumpChecks/SilksongCoop.WalletPumpChecks.csproj
+          -c Release --no-restore -p:TreatWarningsAsErrors=true
 
       - name: Verify test results
         if: always()
@@ -200,7 +224,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MOD_RESULT: ${{ needs.mod.result }}
-      REQUIRE_MOD: ${{ inputs.require_mod || (startsWith(github.ref, 'refs/tags/v') && vars.SILKSONG_MOD_RUNNER_ENABLED == 'true') }}
+      REQUIRE_MOD: ${{ inputs.require_mod || startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Report Mod build coverage
         shell: bash

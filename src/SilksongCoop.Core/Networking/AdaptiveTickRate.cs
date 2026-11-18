@@ -9,12 +9,13 @@ namespace SilksongCoop.Core.Networking
     {
         private readonly float _minTickHz = 15f;
         private readonly float _maxTickHz = 60f;
-        private readonly float _defaultTickHz = 30f;
+        private float _defaultTickHz = 30f;
 
         private float _currentTickHz;
         private float _lastUpdateTime;
 
         public float CurrentTickHz => _currentTickHz;
+        public float DefaultTickHz => _defaultTickHz;
 
         /// <summary>
         /// Seconds between network ticks. Never returns zero or infinity, even if the
@@ -32,6 +33,15 @@ namespace SilksongCoop.Core.Networking
             _defaultTickHz = Math.Min(Math.Max(defaultHz, _minTickHz), _maxTickHz);
             _currentTickHz = _defaultTickHz;
             _lastUpdateTime = float.NegativeInfinity; // apply the first sample immediately
+        }
+
+        public void SetDefaultTickHz(float defaultHz)
+        {
+            if (float.IsNaN(defaultHz) || float.IsInfinity(defaultHz) || defaultHz <= 0f)
+                defaultHz = 30f;
+
+            _defaultTickHz = Math.Min(Math.Max(defaultHz, _minTickHz), _maxTickHz);
+            _currentTickHz = Math.Min(Math.Max(_currentTickHz, _minTickHz), _defaultTickHz);
         }
 
         /// <summary>

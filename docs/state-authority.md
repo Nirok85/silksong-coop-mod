@@ -5,7 +5,7 @@ receiver resolves conflicts, and which failures are accepted by design. When cod
 and this document disagree, the code is wrong unless the document is updated in
 the same change.
 
-## Current development build (protocol v11)
+## Current development build (unreleased protocol v12)
 
 | State | Writer(s) | Receiver rule | Conflict resolution |
 |---|---|---|---|
@@ -149,7 +149,7 @@ These rules currently cover:
 
 ## Revision rules
 
-See [protocol v11](protocol-v11.md) for the current wire contract. Revision comparisons use modular arithmetic within the host stream.
+See [protocol v12](protocol-v12.md) for the current development wire contract. Published beta.3 uses v11. Revision comparisons use modular arithmetic within the host stream.
 The wire origin must equal the authenticated host transport peer ID.
 Receivers discard replays of their own updates. Persistent-state replay uses
 header sequence `0` and preserves values last changed locally in the save.

@@ -9,7 +9,7 @@ namespace SilksongCoop.Core.State
     /// <summary>
     /// Synchronizes player vitals (health, silk, upgrades) and currency between co-op peers.
     /// </summary>
-    public class VitalsSyncService : IVitalsSyncService
+    public partial class VitalsSyncService : IVitalsSyncService
     {
         #region Fields and Properties
 
@@ -29,6 +29,9 @@ namespace SilksongCoop.Core.State
         // A join snapshot seeds the starting balance. Once a currency has changed,
         // only transactions can update it because snapshots have no causal watermark.
         private readonly HashSet<CurrencyType> _activeCurrencies = new();
+        private readonly HashSet<CurrencyType> _seededCurrencies = new();
+        private long _preSeedRemoteDeltaRosaries;
+        private long _preSeedRemoteDeltaShards;
         private int _sharedRosaries;
         private int _sharedShellShards;
 
@@ -216,9 +219,15 @@ namespace SilksongCoop.Core.State
                 // legitimate transactions dropped).
                 _lastCurrencySequences.Clear();
                 _activeCurrencies.Clear();
+                _seededCurrencies.Clear();
+                _preSeedRemoteDeltaRosaries = 0;
+                _preSeedRemoteDeltaShards = 0;
                 _processedTransactions.Clear();
                 _transactionOrder.Clear();
                 _currencySequence = 0;
+                _seedTransactions.Clear();
+                _collectingWalletSeed = false;
+                WalletSeedOverflow = false;
                 // _claimedPickups intentionally survives: a peer that connects later must be
                 // told which drops were already collected so it can remove its local copies.
             }
@@ -276,7 +285,7 @@ namespace SilksongCoop.Core.State
         {
             lock (_stateLock)
             {
-                LocalSilk = Math.Min(SharedMaxSilkSpools * 9, newSilk);
+                LocalSilk = Math.Min(Math.Max(9, SharedMaxSilkSpools), newSilk);
             }
             BroadcastCurrentVitals();
         }
@@ -601,14 +610,26 @@ namespace SilksongCoop.Core.State
                 return (_sharedRosaries, _sharedShellShards);
         }
 
-        public void SeedWallet(CurrencyType currency, int total, long pendingLocalDelta)
+        public void SeedWallet(CurrencyType currency, int total, long pendingLocalDelta, long pendingRemoteDelta = 0)
         {
             int visible;
             lock (_transactionLock)
             {
-                int value = (int)Math.Clamp(total + pendingLocalDelta, int.MinValue, PacketValidator.MaxReasonableCurrency);
-                if (currency == CurrencyType.Rosaries) _sharedRosaries = value;
-                else _sharedShellShards = value;
+                long remoteDelta = pendingRemoteDelta;
+
+                int value = (int)Math.Clamp(total + pendingLocalDelta + remoteDelta, int.MinValue, PacketValidator.MaxReasonableCurrency);
+                if (currency == CurrencyType.Rosaries)
+                {
+                    _sharedRosaries = value;
+                    _preSeedRemoteDeltaRosaries = 0;
+                }
+                else
+                {
+                    _sharedShellShards = value;
+                    _preSeedRemoteDeltaShards = 0;
+                }
+                _seededCurrencies.Add(currency);
+                _activeCurrencies.Add(currency);
                 visible = Math.Max(0, value);
             }
 
@@ -697,7 +718,7 @@ namespace SilksongCoop.Core.State
                     // Reject replayed/out-of-order snapshots even after their GUID has been
                     // evicted from the 500-entry FIFO. Packets from this build always carry
                     // a per-sender sequence; the value 0 keeps older/manual callers working.
-                    if (packet.PickupUniqueId > 0)
+                    if (packet.PickupUniqueId > 0 || _lastCurrencySequences.ContainsKey(sequenceKey))
                     {
                         // Wraparound-safe: a uint sequence that has wrapped is still newer when
                         // the signed difference is positive. A reconnect resets the sequences,
@@ -738,6 +759,17 @@ namespace SilksongCoop.Core.State
                     int previousClamped = Math.Max(0, previousInternal);
                     if (delta != 0)
                     {
+                        if (!_seededCurrencies.Contains(packet.Currency))
+                        {
+                            if (isRosaries) _preSeedRemoteDeltaRosaries += delta;
+                            else _preSeedRemoteDeltaShards += delta;
+                        }
+
+                        if (_collectingWalletSeed)
+                        {
+                            if (_seedTransactions.Count >= 4096) WalletSeedOverflow = true;
+                            else _seedTransactions.Add((sender, packet, delta));
+                        }
                         _activeCurrencies.Add(packet.Currency);
                         int next = (int)Math.Clamp((long)previousInternal + delta, int.MinValue, PacketValidator.MaxReasonableCurrency);
                         if (isRosaries) _sharedRosaries = next;
@@ -890,10 +922,10 @@ namespace SilksongCoop.Core.State
                 int rosaries, shards;
                 lock (_transactionLock)
                 {
-                    // Only the most recent drops matter for a newly connected scene; sending
-                    // the whole 1024-entry window would flood the handshake.
-                    int skip = Math.Max(0, _claimedPickups.Count - 64);
-                    snapshot = _claimedPickups.GetRange(skip, _claimedPickups.Count - skip);
+                    // A reconnecting peer must learn about every claimed pickup, otherwise an
+                    // older drop can remain collectible and be credited twice. The list is
+                    // already bounded to MaxTrackedPickupKeys, so this is a bounded handshake.
+                    snapshot = new List<ClaimedPickup>(_claimedPickups);
                     rosaries = SharedRosaries;
                     shards = SharedShellShards;
                 }
