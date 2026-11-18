@@ -224,7 +224,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MOD_RESULT: ${{ needs.mod.result }}
-      REQUIRE_MOD: ${{ inputs.require_mod || startsWith(github.ref, 'refs/tags/v') }}
+      REQUIRE_MOD: ${{ inputs.require_mod == true }}
     steps:
       - name: Report Mod build coverage
         shell: bash
@@ -234,7 +234,7 @@ jobs:
               echo "Mod compiled against game assemblies and passed release preflight." >> "$GITHUB_STEP_SUMMARY"
               ;;
             skipped)
-              echo "Mod build skipped. It requires a protected master push, a release tag, or a dispatch and an enabled Silksong runner." >> "$GITHUB_STEP_SUMMARY"
+              echo "Mod build skipped. It requires an explicitly requested Mod build and an enabled Silksong runner." >> "$GITHUB_STEP_SUMMARY"
               if [ "$REQUIRE_MOD" = true ]; then
                 echo "::error::A Mod build was requested but the protected runner gate is closed."
                 exit 1
