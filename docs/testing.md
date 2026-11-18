@@ -12,7 +12,13 @@ The test project references `SilksongCoop.Core` only — it must not reference
 
 ## Production adapter checks
 
-`dotnet run --project tests/SilksongCoop.RuntimeChecks -c Release` compiles the production `UnityGroundProber.cs` against small Unity API shims. It checks body bounds, trigger filtering, blocked clearance and bounded query buffers. CI and release preflight run it separately from the Core suite. With `-NoRestore`, restore this project beforehand because it is outside the solution.
+Production adapter checks compile production code against small shims:
+
+- `tests/SilksongCoop.RuntimeChecks` compiles `UnityGroundProber.cs` and checks body bounds, trigger filtering, blocked clearance and bounded query buffers.
+- `tests/SilksongCoop.ModSourceChecks` compiles production `InventoryHooks.cs` and `RemoteApplyScope.cs` and checks the save-bool whitelist, hook guards and category forwarding.
+- `tests/SilksongCoop.WalletPumpChecks` compiles production `SilksongCoopPlugin.WalletSeedRetry.cs` and checks multi-peer delivery, throttling, deadlines and bootstrap completion.
+
+CI and release preflight run all three separately from the Core suite. With `-NoRestore`, restore these projects beforehand because they are outside the solution.
 
 The `E2ERemediationTests` simulation helpers are model tests, not actual Unity end-to-end tests. Production Core regressions cover wallet snapshot capture/serialization/assembly/application, counter replay, lifecycle handshakes and deferred damage. Real Unity physics, pickup FSM interleaving and two-instance gameplay still require in-game verification.
 

@@ -11,7 +11,7 @@ still needs a visual in-game check; see the [release checklist](release-checklis
 - Steam and UDP require matching game versions and protocol revisions.
   Steam also checks the full mod version on lobby entry.
 - Startup writes a compatibility banner to `BepInEx/LogOutput.log`:
-  `[Coop] Compatibility: game <version>, Unity <version>, mod <version>, protocol v11,
+  `[Coop] Compatibility: game <version>, Unity <version>, mod <version>, protocol v12,
   runtime <version>`. Attach that line to any bug report; it identifies the exact
   game build the mod ran against.
 - Missing Steamworks → the Steam transport reports itself unavailable and logs why;
