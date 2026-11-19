@@ -994,6 +994,11 @@ namespace SilksongCoop.Mod
 
                     if (!endSession)
                     {
+                        // Keep per-peer state consistent when a peer leaves but the session
+                        // continues: otherwise a reconnecting peer can have stale scene
+                        // sequences/counter state that reject fresh updates.
+                        InventorySync?.ResetPeerState(peer);
+                        PacketRouter?.ClearPeer(peer);
                         MenuUI?.SetStatusMessage(Loc.T("Player left: {0}", peer.DisplayName));
                         return;
                     }

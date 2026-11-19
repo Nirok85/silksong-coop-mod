@@ -314,8 +314,16 @@ namespace SilksongCoop.Mod.Coordinators
         public void HandleWalletSeed(NetworkPeerId peer, WalletSeedPacket seed)
         {
             var session = _sessionService.SessionState;
-            if (_awaitingWalletSeed && session != null && !session.IsHost && session.RemotePeerId == peer)
+            if (session != null && !session.IsHost && session.RemotePeerId == peer)
             {
+                // A resumed local connection may not have armed seed collection; arm it
+                // lazily so an incoming seed is never silently dropped.
+                if (!_awaitingWalletSeed)
+                {
+                    _vitalsSync.BeginWalletSeed();
+                    _awaitingWalletSeed = true;
+                    _awaitingWalletSeedSince = Time.unscaledTime;
+                }
                 if (!_walletSeedAssembler.TryAdd(seed, out var completedSeed)) return;
                 ApplyWalletSeed(peer, completedSeed);
                 _walletPeerBootstrapCompleted[peer] = true;

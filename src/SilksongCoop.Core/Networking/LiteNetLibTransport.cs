@@ -770,9 +770,9 @@ namespace SilksongCoop.Core.Networking
             return SendInternal(target, data, offset, length, method, channel, allowQueue: true);
         }
 
-        private void SendImmediate(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
+        private bool SendImmediate(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
-            SendInternal(target, data, offset, length, method, channel, allowQueue: false);
+            return SendInternal(target, data, offset, length, method, channel, allowQueue: false);
         }
 
         private bool SendInternal(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel, bool allowQueue)
@@ -864,8 +864,8 @@ namespace SilksongCoop.Core.Networking
                     return false;
                 }
 
-                _sendSequences[sequenceKey] = seq + 1;
-
+                // Consume the sequence only after the packet has left the socket. A failed
+                // SendTo must not leave a permanent hole in the reliable ordered stream.
                 bool sent = false;
                 try
                 {
@@ -877,11 +877,13 @@ namespace SilksongCoop.Core.Networking
 
                 if (!sent)
                 {
-                    // Failed to leave the socket; do not arm retransmission for a packet
-                    // that never entered the network.
+                    // Failed to leave the socket; do not consume the sequence or arm
+                    // retransmission for a packet that never entered the network.
                     ReturnPooledBuffer(envelope);
                     return false;
                 }
+
+                _sendSequences[sequenceKey] = seq + 1;
 
                 if (isReliable)
                 {
@@ -1095,7 +1097,12 @@ namespace SilksongCoop.Core.Networking
                     while (_reliableQueue.Count > 0 && _unacknowledged.Count < MaxUnacknowledgedPackets)
                     {
                         var item = _reliableQueue.Dequeue();
-                        SendImmediate(item.Peer, item.Data, 0, item.Data.Length, item.Method, item.Channel);
+                        if (!SendImmediate(item.Peer, item.Data, 0, item.Data.Length, item.Method, item.Channel))
+                        {
+                            // Send failed; keep the item for a later retry instead of dropping it.
+                            _reliableQueue.Enqueue(item);
+                            break;
+                        }
                     }
 
                     // 3. Heartbeat ping

@@ -60,6 +60,7 @@ namespace SilksongCoop.Mod.Services
         // the baseline would let one coroutine clear another's marker and either re-send an
         // already replicated change or lose a legitimate diff.
         private readonly List<QuestFlagSnapshot> _pendingFlushes = new List<QuestFlagSnapshot>();
+        private readonly HashSet<NetworkPeerId> _pendingCatchUpPeers = new HashSet<NetworkPeerId>();
         private QuestFlagSnapshot? _lastSnapshot;
         private float _nextPollAt;
         private int _generation;
@@ -183,6 +184,7 @@ namespace SilksongCoop.Mod.Services
             _lastSnapshot = null;
             _nextPollAt = 0f;
             _authoredChanges.Clear();
+            _pendingCatchUpPeers.Clear();
         }
 
         /// <summary>
@@ -200,6 +202,16 @@ namespace SilksongCoop.Mod.Services
             }
 
             TrackReliableDrops();
+
+            // Retry quest batches that were refused during an earlier peer catch-up.
+            if (_pendingCatchUpPeers.Count > 0)
+            {
+                var peers = new List<NetworkPeerId>(_pendingCatchUpPeers);
+                _pendingCatchUpPeers.Clear();
+                foreach (var peer in peers)
+                    ReplayAuthoredChanges(peer);
+            }
+
             if (_resyncPending && _plugin.ActiveTransport!.ReliableBacklogCount <= NetworkLimits.ResyncBacklogThreshold)
             {
                 _resyncPending = false;
@@ -484,7 +496,10 @@ namespace SilksongCoop.Mod.Services
                 // delays the flags — surface it instead of dropping silently.
                 if (!PacketSender.SendTo(transport, target.Value, packet, DeliveryMethod.ReliableOrdered,
                         NetworkChannels.World, QuestStatePacket.MaxEncodedBytes))
+                {
                     SilksongCoopPlugin.LogWarn("[QuestSync] Transport refused a quest batch to a single peer.");
+                    _pendingCatchUpPeers.Add(target.Value);
+                }
             }
             else if (!PacketSender.SendToAll(transport, packet, DeliveryMethod.ReliableOrdered,
                          NetworkChannels.World, QuestStatePacket.MaxEncodedBytes, diagnostics: null, logContext: "[QuestSync]"))
