@@ -64,10 +64,12 @@ namespace SilksongCoop.Mod.Coordinators
         {
             public readonly float Deadline;
             public readonly float NextAttempt;
-            public WalletSeedRetryState(float deadline, float nextAttempt)
+            public readonly WalletSeedPacket Seed;
+            public WalletSeedRetryState(float deadline, float nextAttempt, WalletSeedPacket seed)
             {
                 Deadline = deadline;
                 NextAttempt = nextAttempt;
+                Seed = seed;
             }
         }
 
@@ -237,8 +239,9 @@ namespace SilksongCoop.Mod.Coordinators
                             _vitalsSyncManagerProvider()?.ForgetCurrencyPeer(peer);
                         if (session.IsHost)
                         {
-                            if (_vitalsSyncManagerProvider()?.SendWalletSeed(peer, _vitalsSync.CaptureWalletSeed(transport.LocalPeerId, session.RemotePeerIds)) != true)
-                                _walletSeedOutstanding[peer] = new WalletSeedRetryState(Time.unscaledTime + WalletSeedRetrySeconds, Time.unscaledTime);
+                            var seed = _vitalsSync.CaptureWalletSeed(transport.LocalPeerId, session.RemotePeerIds);
+                            if (_vitalsSyncManagerProvider()?.SendWalletSeed(peer, seed) != true)
+                                _walletSeedOutstanding[peer] = new WalletSeedRetryState(Time.unscaledTime + WalletSeedRetrySeconds, Time.unscaledTime, seed);
                             else
                                 _walletPeerBootstrapCompleted[peer] = true;
                         }
@@ -401,8 +404,7 @@ namespace SilksongCoop.Mod.Coordinators
                     continue;
                 }
 
-                if (_vitalsSyncManagerProvider()?.SendWalletSeed(pair.Key,
-                    _vitalsSync.CaptureWalletSeed(transport.LocalPeerId, session.RemotePeerIds)) == true)
+                if (_vitalsSyncManagerProvider()?.SendWalletSeed(pair.Key, pair.Value.Seed) == true)
                 {
                     _walletPeerBootstrapCompleted[pair.Key] = true;
                     delivered ??= new List<NetworkPeerId>();
@@ -414,7 +416,7 @@ namespace SilksongCoop.Mod.Coordinators
                 {
                     retries ??= new List<KeyValuePair<NetworkPeerId, WalletSeedRetryState>>();
                     retries.Add(new KeyValuePair<NetworkPeerId, WalletSeedRetryState>(
-                        pair.Key, new WalletSeedRetryState(pair.Value.Deadline, now + WalletSeedRetryIntervalSeconds)));
+                        pair.Key, new WalletSeedRetryState(pair.Value.Deadline, now + WalletSeedRetryIntervalSeconds, pair.Value.Seed)));
                     continue;
                 }
 

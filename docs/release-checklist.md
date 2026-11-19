@@ -9,7 +9,7 @@
 - [ ] After the release commit, `pwsh ./scripts/preflight-release.ps1` passes on a clean tree (versions, changelog, both READMEs, ROADMAP, build, tests).
 - [ ] All tests pass and none are unexpectedly skipped (do not gate on a hard-coded count).
 - [ ] Core and Mod build with 0 compiler warnings (TreatWarningsAsErrors=true; NU1900 is a NuGet network warning).
-- [ ] Protocol version is unchanged or bumped and documented in the current contract (`docs/protocol-v11.md`) and `docs/state-authority.md`.
+- [ ] Protocol version is unchanged or bumped and documented in the current contract (`docs/protocol-v12.md`) and `docs/state-authority.md`.
 - [ ] Plugin version and assembly versions bumped to `<version>` in both csproj files and `PluginVersion`.
 - [ ] Release commit SHA recorded together with the version.
 - [ ] Upgrade and rollback guidance updated in the current protocol specification and release notes; add a dedicated migration guide if needed.

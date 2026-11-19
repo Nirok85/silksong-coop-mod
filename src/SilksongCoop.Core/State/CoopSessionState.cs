@@ -170,8 +170,8 @@ namespace SilksongCoop.Core.State
                     changed = true;
                 }
                 if (changed) RebuildRemotePeerIdsSnapshot();
+                Peers.Remove(peer);
             }
-            Peers.Remove(peer);
         }
 
         public string? CurrentRoomCode

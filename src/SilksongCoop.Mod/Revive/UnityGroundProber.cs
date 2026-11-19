@@ -222,7 +222,10 @@ namespace SilksongCoop.Mod.Revive
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                SilksongCoopPlugin.LogWarn($"[UnityGroundProber] Hazard respawn location lookup failed: {ex.GetType().Name}: {ex.Message}");
+            }
 
             return false;
         }

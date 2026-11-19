@@ -182,6 +182,7 @@ namespace SilksongCoop.Mod.Services
             _pendingFlushes.Clear();
             _lastSnapshot = null;
             _nextPollAt = 0f;
+            _authoredChanges.Clear();
         }
 
         /// <summary>

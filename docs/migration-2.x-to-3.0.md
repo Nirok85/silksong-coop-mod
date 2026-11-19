@@ -2,12 +2,12 @@
 
 > **Historical migration guide.** It targets the 2.x → 3.0.0 upgrade only. For
 > current releases see [RELEASING.md](RELEASING.md) and
-> [protocol-v11.md](protocol-v11.md).
+> [protocol-v12.md](protocol-v12.md).
 
 > This file documents only the 2.x → 3.0.0 migration. It does not describe
 > intermediate releases or the current beta. Current players should follow the
 > root README and install the same release on every peer; current wire-format
-> compatibility is documented in [protocol-v11.md](protocol-v11.md).
+> compatibility is documented in [protocol-v12.md](protocol-v12.md).
 
 ## Breaking changes
 

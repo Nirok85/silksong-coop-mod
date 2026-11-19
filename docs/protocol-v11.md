@@ -3,7 +3,7 @@
 Upgrade all peers together. Steam and UDP reject v10 during setup.
 To roll back, install the same v10 build on every peer. Game saves retain their format.
 
-v11 keeps the [v10 application header, handshake and state rules](protocol-v10.md).
+v11 keeps the [v10 application header, handshake and state rules](protocol-v10.md). Current development uses [v12](protocol-v12.md)..
 The HMAC session label is `SilksongCoop-Session-v11`.
 
 `CurrencySync` encodes `DeltaAmount` as a signed little-endian 32-bit integer,

@@ -2,7 +2,7 @@
 
 ## Implemented today
 
-Current public build is stable `v3.3.9`, protocol v12. The redesigned menu
+Current public build is beta `3.3.9-beta.4`, protocol v11. Unpublished fixes in this working copy use protocol v12. The redesigned menu
 still needs a visual in-game check; see the [release checklist](release-checklist.md).
 
 - The mod targets the installed game via `ManagedDir` at build time: the Mod

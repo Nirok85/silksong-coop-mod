@@ -53,16 +53,16 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Restore
-        run: dotnet restore tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj
+        run: dotnet restore tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj --locked-mode
 
       - name: Restore production source runtime checks
-        run: dotnet restore tests/SilksongCoop.RuntimeChecks/SilksongCoop.RuntimeChecks.csproj
+        run: dotnet restore tests/SilksongCoop.RuntimeChecks/SilksongCoop.RuntimeChecks.csproj --locked-mode
 
       - name: Restore production Mod source checks
-        run: dotnet restore tests/SilksongCoop.ModSourceChecks/SilksongCoop.ModSourceChecks.csproj
+        run: dotnet restore tests/SilksongCoop.ModSourceChecks/SilksongCoop.ModSourceChecks.csproj --locked-mode
 
       - name: Restore production wallet retry checks
-        run: dotnet restore tests/SilksongCoop.WalletPumpChecks/SilksongCoop.WalletPumpChecks.csproj
+        run: dotnet restore tests/SilksongCoop.WalletPumpChecks/SilksongCoop.WalletPumpChecks.csproj --locked-mode
 
       - name: Build Core (warnings as errors)
         run: dotnet build src/SilksongCoop.Core/SilksongCoop.Core.csproj -c Release -p:TreatWarningsAsErrors=true
@@ -146,7 +146,7 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Restore benchmark project
-        run: dotnet restore tools/SilksongCoop.Benchmarks/SilksongCoop.Benchmarks.csproj
+        run: dotnet restore tools/SilksongCoop.Benchmarks/SilksongCoop.Benchmarks.csproj --locked-mode
 
       - name: Run BenchmarkDotNet dry job
         run: >-

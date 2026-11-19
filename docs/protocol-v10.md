@@ -1,6 +1,6 @@
 # Co-op wire protocol v10
 
-Historical specification for published v10 builds. See [protocol v11](protocol-v11.md) for the current development build.
+Historical specification for published v10 builds. See [protocol v12](protocol-v12.md) for the current development build.
 
 Upgrade both peers together. Steam and UDP reject protocol v9 during setup.
 To roll back, install the same v9 release on both peers. Game save formats

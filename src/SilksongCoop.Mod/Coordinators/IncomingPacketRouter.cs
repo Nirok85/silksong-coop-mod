@@ -248,8 +248,7 @@ namespace SilksongCoop.Mod.Coordinators
                     case PacketType.CurrencySync:
                         var currency = CurrencySyncPacket.Deserialize(ref reader);
                         if (reader.Remaining != 0 || !PacketValidator.ValidateCurrencySync(currency)) { _diagnosticsProvider()?.RecordRejected(); return; }
-                        if (currency.DeltaAmount != 0 || currency.PickupKey != 0)
-                            _vitalsSync.HandleCurrencyPacket(peer, currency);
+                        _vitalsSync.HandleCurrencyPacket(peer, currency);
                         var transport = _activeTransportProvider();
                         if (transport != null)
                         {

@@ -875,6 +875,14 @@ namespace SilksongCoop.Core.Networking
                 catch (ObjectDisposedException ex) { CoopLog.Warn($"Socket disposed: {ex.Message}"); }
                 catch (Exception ex) { CoopLog.Warn($"Send error: {ex.Message}"); }
 
+                if (!sent)
+                {
+                    // Failed to leave the socket; do not arm retransmission for a packet
+                    // that never entered the network.
+                    ReturnPooledBuffer(envelope);
+                    return false;
+                }
+
                 if (isReliable)
                 {
                     var node = _unacknowledged.AddLast(new SentReliablePacket
@@ -894,7 +902,7 @@ namespace SilksongCoop.Core.Networking
                     // Unreliable/sequenced: buffer is no longer needed after SendTo.
                     ReturnPooledBuffer(envelope);
                 }
-                return isReliable || sent;
+                return true;
             }
         }
 
