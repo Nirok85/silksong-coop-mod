@@ -2,7 +2,7 @@
 
 This checkpoint follows tasks 01–13 in the Beam Max plan. The starting revision
 for the plan was `a90f51a`. Implementation continued on
-`codex/beam-max-completion` from `a0cb69d`. Mod 3.3.9 and protocol v12 are unchanged.
+Historical execution checkpoint: work began on `codex/beam-max-completion` from `a0cb69d`, before release v4.0.0. It records the tested candidate at mod v3.3.9 and protocol v12. Release v4.0.1 carries documentation corrections only.
 
 ## What Beam Max contributed
 

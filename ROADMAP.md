@@ -1,10 +1,10 @@
 # Silksong Co-op Mod — Глобальный план улучшений (15 пунктов)
 
-Текущий релиз: [v4.0.0](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v4.0.0), протокол v12.
+Текущий релиз: [v4.0.1](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v4.0.1), протокол v12. v4.0.1 содержит только исправления документации.
 
 > Остальная часть файла — исторический backlog из 15 пунктов и снимки прошлых
 > релизов. [`docs/improvement-plan-2026-11.md`](docs/improvement-plan-2026-11.md)
-> тоже архивный. Текущие ограничения beta и критерии выпуска указаны в
+> тоже архивный. Текущие ограничения игрового тестирования и критерии выпуска указаны в
 > [README](README.md), [совместимости](docs/game-compatibility.md) и
 > [чек-листе выпуска](docs/release-checklist.md). Активный приоритизированный
 > backlog сейчас не ведётся.

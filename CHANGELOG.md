@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [4.0.1] - 2026-11-22
+
+- Correct release, protocol and gameplay verification status across current documentation. No code or protocol changes.
+
 ## [4.0.0] - 2026-11-22
 
 - Retry the initial currency marker after the wallet snapshot and isolate Steam guest timeouts.

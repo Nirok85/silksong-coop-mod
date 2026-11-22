@@ -1,6 +1,6 @@
 # Co-op wire protocol v12
 
-Current release contract for `v3.3.9`. Every participant must use the same protocol revision. UDP handshake and Steam datagram framing reject other revisions. No save-format migration is required. To roll back, install the same older build on every peer.
+Current wire protocol for mod v4.0.1. Protocol v12 is shared by the v4.0.0 and v4.0.1 releases. Every participant must use the same protocol revision. UDP handshake and Steam datagram framing reject other revisions. No save-format migration is required. To roll back, install the same older build on every peer.
 
 The application header remains the v11 header. The session-key domain is `SilksongCoop-Session-v12`.
 

@@ -2,7 +2,7 @@
 
 ## Implemented today
 
-Current public build is stable `v3.3.9`, protocol v12. The redesigned menu
+Current public build is stable `v4.0.1`, protocol v12. Steam sessions with 3–4 players, scene transitions, revive and visual menu layout remain unverified in live gameplay. The redesigned menu
 still needs a visual in-game check; see the [release checklist](release-checklist.md).
 
 - The mod targets the installed game via `ManagedDir` at build time: the Mod

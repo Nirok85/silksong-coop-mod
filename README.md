@@ -1,9 +1,9 @@
 # Hollow Knight: Silksong Co-op
 
-![Version](https://img.shields.io/badge/Version-4.0.0-success)
+![Version](https://img.shields.io/badge/Version-4.0.1-success)
 [![CI](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml)
 
-[Русская версия](README.ru.md) · [Download v4.0.0](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v4.0.0)
+[Русская версия](README.ru.md) · [Download v4.0.1](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v4.0.1)
 
 Explore Pharloom together in a two-player co-op mod for the Steam PC version of Silksong. Fight enemies together and share currency, upgrades and unlocks. Each player manages their own health, silk and equipped gear.
 
@@ -11,8 +11,8 @@ Explore Pharloom together in a two-player co-op mod for the Steam PC version of 
 
 **Release:** all players need matching game and mod versions. This release uses [protocol v12](docs/protocol-v12.md); build and update every peer together.
 
-- **Windows x64.** Close the game and extract `SilksongCoop_v4.0.0.zip` into the game folder. The archive includes BepInEx 5.4.21. Keep `winhttp.dll` next to the game executable.
-- **Existing BepInEx 5.4.x install.** Download `SilksongCoop_v4.0.0_plugin-only.zip` and place both mod DLLs in `BepInEx/plugins/SilksongCoop/`. On Linux or macOS, use the BepInEx loader for your platform.
+- **Windows x64.** Close the game and extract `SilksongCoop_v4.0.1.zip` into the game folder. The archive includes BepInEx 5.4.21. Keep `winhttp.dll` next to the game executable.
+- **Existing BepInEx 5.4.x install.** Download `SilksongCoop_v4.0.1_plugin-only.zip` and place both mod DLLs in `BepInEx/plugins/SilksongCoop/`. On Linux or macOS, use the BepInEx loader for your platform.
 
 Launch Silksong through Steam, load a save and press **F10**.
 
@@ -26,7 +26,7 @@ Launch Silksong through Steam, load a save and press **F10**.
 ## Gameplay and limits
 
 - A fallen player spectates and revives beside their partner in the same room after 20 seconds by default. If both players fall, they respawn at the last bench.
-- Steam sessions with three or more players are experimental. UDP supports two players. Some scripted doors and boss phases can differ between players.
+- Steam sessions with three or more players are experimental and not verified in this release. UDP is designed for two players. Some scripted doors and boss phases can differ between players.
 
 ## Troubleshooting
 

@@ -1,4 +1,4 @@
-# Teamwork spec — BEAM_MAX campaign
+# Historical teamwork spec — BEAM_MAX campaign
 
 ## Goal
 Execute the full BEAM_MAX plan (tasks 01–13) for the Silksong co-op mod: baseline, production test coverage, reproducible session harness, entry/recovery stages, currency/inventory/permanent upgrades, scene/combat/death boundaries, queue metrics/fairness, Steam 3–4, UI/diagnostics, performance, CI/docs/packaging, 45-minute soak, final verification. Deliver predictable join, transitions, and reconnect with visible sync stage and failure reason; single-counting of identifiable shared progress; diagnostics without secrets.
