@@ -26,6 +26,20 @@
   boss room is unloaded caches it until the scene loads. Ordinary-enemy deaths are
   still dropped on a scene change because those enemies respawn.
 
+## Initial synchronization status
+
+`CatchUpCompletePacket` is a marker on the ordered currency channel. The sender
+queues it after the wallet snapshot. It cannot confirm arrival or application
+on the other channels. The status UI calls this boundary "Initial state queued".
+
+The sender retains the original wallet snapshot during retries. The seed has a
+20-second deadline. The marker has a 40-second total deadline from the initial
+catch-up attempt. Refused markers are retried without restarting inventory or
+wallet synchronization. A deadline for an expired reliable send closes the
+affected Steam peer or fails the UDP connection. Readiness reset cancels
+incomplete assemblies and pending sends. Repeated complete wallet snapshots on
+the same connection are ignored.
+
 ## What does not exist
 
 - There is no `SessionId` / `ConnectionEpoch` handshake and no delta resync:

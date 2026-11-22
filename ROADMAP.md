@@ -1,6 +1,6 @@
-﻿# Silksong Co-op Mod — Глобальный план улучшений (15 пунктов)
+# Silksong Co-op Mod — Глобальный план улучшений (15 пунктов)
 
-Текущая beta: [v3.3.9-beta.4](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.9-beta.4), протокол v11.
+Текущий релиз: [v4.0.0](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v4.0.0), протокол v12.
 
 > Остальная часть файла — исторический backlog из 15 пунктов и снимки прошлых
 > релизов. [`docs/improvement-plan-2026-11.md`](docs/improvement-plan-2026-11.md)
@@ -13,6 +13,10 @@
 **Цель:** превратить мод из «рабочей беты» в эталонный кооперативный мод для Unity-игр.
 
 ---
+
+## Синхронизация и испытания
+
+Подключение и начальный обмен выполняет `PeerHandshakeCoordinator`. Входящие сообщения обрабатывает `IncomingPacketRouter`, применение инвентаря и улучшений выполняет `InventoryApplicationCoordinator`. Ход работы и ограничения описаны в [журнале Beam Max](docs/beam-max-execution.md). Старые оценки ниже описывают предыдущее состояние проекта.
 
 ## Что вошло в v3.3.3
 

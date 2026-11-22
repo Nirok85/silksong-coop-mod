@@ -90,6 +90,22 @@ jobs:
           dotnet run --project tests/SilksongCoop.WalletPumpChecks/SilksongCoop.WalletPumpChecks.csproj
           -c Release --no-restore -p:TreatWarningsAsErrors=true
 
+      - name: Restore reliability soak runner
+        run: dotnet restore tools/SilksongCoop.Soak/SilksongCoop.Soak.csproj --locked-mode
+
+      - name: Run reliability soak smoke
+        run: >-
+          dotnet run --project tools/SilksongCoop.Soak -c Release --no-restore --
+          1337 15 "${{ runner.temp }}/soak-smoke.json" "${{ github.sha }}"
+
+      - name: Upload reliability soak smoke report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: soak-smoke-${{ matrix.os }}
+          path: '${{ runner.temp }}/soak-smoke.json'
+          if-no-files-found: warn
+
       - name: Verify test results
         if: always()
         shell: bash

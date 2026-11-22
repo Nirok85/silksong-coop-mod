@@ -719,7 +719,19 @@ namespace SilksongCoop.Mod.UI
 
             if (_sessionState.IsConnected)
             {
-                GUILayout.Label(Loc.T("Partner online"), _styleSubtitle ?? Skin.label);
+                var stage = _sessionState.RemotePeerId is NetworkPeerId peer
+                    ? SilksongCoopPlugin.Instance?.HandshakeCoordinator?.GetLocalStage(peer)
+                    : null;
+                string label = stage switch
+                {
+                    Coordinators.PeerHandshakeCoordinator.LocalSyncStage.WaitingForSave => "Load a save to start co-op",
+                    Coordinators.PeerHandshakeCoordinator.LocalSyncStage.WaitingForPeer => "Waiting for partner's save",
+                    Coordinators.PeerHandshakeCoordinator.LocalSyncStage.SynchronizingWallet => "Synchronizing shared wallet",
+                    Coordinators.PeerHandshakeCoordinator.LocalSyncStage.QueueingInitialState => "Sending initial state",
+                    Coordinators.PeerHandshakeCoordinator.LocalSyncStage.InitialStateQueued => "Initial state queued",
+                    _ => "Partner online"
+                };
+                GUILayout.Label(Loc.T(label), _styleSubtitle ?? Skin.label);
             }
             else if (_sessionState.Status == SessionStatus.Hosting)
             {

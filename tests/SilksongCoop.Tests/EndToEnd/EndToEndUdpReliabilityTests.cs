@@ -110,7 +110,10 @@ namespace SilksongCoop.Tests.EndToEnd
         }
 
         [Fact]
-        public void AuthenticatedBackpressure_RetriesDroppedFramesAndDrainsInOrder()
+        public void AuthenticatedBackpressure_RetriesDroppedFramesAndDrainsInOrder() =>
+            ExerciseBackpressure();
+
+        public static (int PeakUnacknowledged, int DroppedDatagrams) ExerciseBackpressure()
         {
             using var host = new LiteNetLibTransport(1, "Host");
             using var client = new LiteNetLibTransport(2, "Client") { QueueReliableWhenBusy = true };
@@ -129,7 +132,8 @@ namespace SilksongCoop.Tests.EndToEnd
                 if (length == sizeof(int)) delivered.Add(BitConverter.ToInt32(data, offset));
             };
 
-            relay.DropNextClientDataFrames(16);
+            const int dropBudget = 16;
+            relay.DropNextClientDataFrames(dropBudget);
             int total = NetworkLimits.ReliableBacklogCap + 32;
             for (int i = 0; i < total; i++)
             {
@@ -138,11 +142,15 @@ namespace SilksongCoop.Tests.EndToEnd
                     DeliveryMethod.ReliableOrdered, NetworkChannels.World);
             }
 
-            Assert.Equal(NetworkLimits.ReliableBacklogCap, client.ReliableBacklogCount);
+            int peakUnacknowledged = client.ReliableBacklogCount;
+            Assert.Equal(NetworkLimits.ReliableBacklogCap, peakUnacknowledged);
             PumpUntil(() => delivered.Count == total && client.ReliableBacklogCount == 0,
                 host, client, maxMs: 8000);
             Assert.Equal(System.Linq.Enumerable.Range(0, total), delivered);
             Assert.Equal(0, client.DroppedReliablePackets);
+            int droppedDatagrams = relay.DroppedDataFrames;
+            Assert.Equal(dropBudget, droppedDatagrams);
+            return (peakUnacknowledged, droppedDatagrams);
         }
 
         [Fact]

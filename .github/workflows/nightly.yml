@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
+    inputs:
+      run_soak:
+        description: Run the three-phase 45-minute headless reliability check
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -19,33 +24,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: '8.0.x'
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-nightly-${{ hashFiles('**/*.csproj', 'nuget.config') }}
+          key: ${{ runner.os }}-nuget-nightly-${{ hashFiles('**/packages.lock.json', '**/*.csproj', 'nuget.config') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
 
       - name: Restore
-        run: dotnet restore tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj
+        run: dotnet restore tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj --locked-mode
 
       - name: Build Core (warnings as errors)
-        run: dotnet build src/SilksongCoop.Core/SilksongCoop.Core.csproj -c Release -p:TreatWarningsAsErrors=true
+        run: dotnet build src/SilksongCoop.Core/SilksongCoop.Core.csproj -c Release --no-restore -p:TreatWarningsAsErrors=true
 
       - name: Run tests with extended fuzz campaign
         env:
           SILKSONG_FUZZ_ITERATIONS: '200000'
         run: >-
           dotnet test tests/SilksongCoop.Tests/SilksongCoop.Tests.csproj
-          -c Release
+          -c Release --no-restore
           --logger "trx;LogFileName=nightly.trx"
           --results-directory "${{ runner.temp }}/nightly-test-results"
           --blame-hang --blame-hang-timeout 10m
@@ -67,7 +72,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: nightly-test-results
           path: '${{ runner.temp }}/nightly-test-results/nightly.trx'
@@ -78,25 +83,60 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: '8.0.x'
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-bench-${{ hashFiles('**/*.csproj', 'nuget.config') }}
+          key: ${{ runner.os }}-nuget-bench-${{ hashFiles('**/packages.lock.json', '**/*.csproj', 'nuget.config') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
 
       - name: Restore benchmark project
-        run: dotnet restore tools/SilksongCoop.Benchmarks/SilksongCoop.Benchmarks.csproj
+        run: dotnet restore tools/SilksongCoop.Benchmarks/SilksongCoop.Benchmarks.csproj --locked-mode
 
       - name: Run dry benchmarks
         run: >-
           dotnet run --project tools/SilksongCoop.Benchmarks -c Release --no-restore --
           --filter "*" --job dry
+
+  long-soak:
+    name: Headless reliability soak (45 minutes)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_soak
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore reliability soak runner
+        run: dotnet restore tools/SilksongCoop.Soak/SilksongCoop.Soak.csproj --locked-mode
+
+      - name: Run headless reliability soak
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project tools/SilksongCoop.Soak -c Release --no-restore -- \
+            1337 2700 "$RUNNER_TEMP/soak-long.json" "$GITHUB_SHA" | tee "$RUNNER_TEMP/soak-long.log"
+
+      - name: Upload reliability soak reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: soak-long
+          path: |
+            ${{ runner.temp }}/soak-long.json
+            ${{ runner.temp }}/soak-long.log
+          if-no-files-found: warn

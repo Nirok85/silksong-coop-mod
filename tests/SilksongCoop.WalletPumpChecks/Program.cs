@@ -2,39 +2,39 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using SilksongCoop.Core.Networking;
+using SilksongCoop.Core.Protocol;
 using SilksongCoop.Core.Protocol.Packets;
 using SilksongCoop.Core.State;
 using SilksongCoop.Mod;
+using SilksongCoop.Mod.Coordinators;
+using SilksongCoop.Mod.Networking;
+using SilksongCoop.Mod.Services;
+using UnityEngine;
 
 internal static class Program
 {
     private static readonly NetworkPeerId A = new(2);
     private static readonly NetworkPeerId B = new(3);
-    private static readonly NetworkPeerId C = new(4);
-    private static readonly NetworkPeerId D = new(5);
 
     private static int Main()
     {
-        var checks = new List<(string Name, Action Run)>
+        (string Name, Action Run)[] checks =
         {
-            ("Mixed delivery preserves multi-peer enumeration and retry state", MixedDelivery),
-            ("Same-frame and subinterval calls are throttled", Throttle),
-            ("Deadline at 30 Hz", () => Deadline(30)),
-            ("Deadline at 60 Hz", () => Deadline(60)),
-            ("Deadline at 240 Hz", () => Deadline(240)),
-            ("Null session clears outstanding seeds", () => Inactive(p => p.RemoveSession())),
-            ("Disconnected host clears outstanding seeds", () => Inactive(p => p.SessionState.SetDisconnected())),
-            ("Client clears outstanding seeds", () => Inactive(p => p.SessionState.SetConnected(A, SessionRole.Client))),
-            ("Missing transport clears outstanding seeds", () => Inactive(p => p.RemoveTransport())),
-            ("Successful peer is removed once and bootstrap completes", SuccessfulPeer),
-            ("Missing delivery manager follows retry and timeout path", MissingManager),
-            ("Successful delivery at deadline does not disconnect", SuccessAtDeadline),
-            ("Empty pump has no side effects", Empty)
+            ("Ordinary join queues a marker with the peer's save token", OrdinaryJoin),
+            ("Readiness waits for initialized PlayerData", ReadinessWaitsForPlayerData),
+            ("Refused seed delays marker; retry retains wallet and is throttled", SeedRetry),
+            ("Marker-only retry does not restart seed or inventory", MarkerRetry),
+            ("A slow guest does not stall a second guest", IndependentGuests),
+            ("Refused seed expires once", SeedTimeout),
+            ("Steam seed timeout isolates the expired guest", SteamGuestSeedTimeout),
+            ("Peer reset cancels pending output", ResetCancelsOutput),
+            ("Repeated received seed cannot replace committed wallet", DuplicateSeed),
+            ("Interrupted assembly cannot mutate wallet", InterruptedAssembly)
         };
+
         int passed = 0;
         foreach (var check in checks)
         {
-            SilksongCoopPlugin.Warnings.Clear();
             try
             {
                 check.Run();
@@ -46,137 +46,245 @@ internal static class Program
                 Console.Error.WriteLine($"FAIL {check.Name}: {ex}");
             }
         }
-        Console.WriteLine($"WalletPumpChecks: {passed}/{checks.Count} passed, {checks.Count - passed} failed.");
-        return passed == checks.Count ? 0 : 1;
+        Console.WriteLine($"WalletPumpChecks: {passed}/{checks.Length} passed, {checks.Length - passed} failed.");
+        return passed == checks.Length ? 0 : 1;
     }
 
-    private static SilksongCoopPlugin Host()
+    private static void OrdinaryJoin()
     {
-        var plugin = new SilksongCoopPlugin();
-        plugin.SessionState.SetConnected(A, SessionRole.Host);
-        plugin.SessionState.AddRemotePeer(B);
-        plugin.SessionState.AddRemotePeer(C);
-        plugin.SessionState.AddRemotePeer(D);
-        return plugin;
+        using var fixture = new Fixture();
+        Guid save = fixture.Ready(A);
+        var marker = fixture.Markers(A).Single();
+        var reader = new PacketReader(marker.Data);
+        Require(reader.ReadHeader().ChannelId == NetworkChannels.Currency && reader.ReadGuid() == save,
+            "Marker must acknowledge the recipient's save instance on the currency channel.");
+        Require(marker.Accepted && fixture.Sender.Calls.Count == 1, "Join must queue one seed and one marker.");
+        fixture.Step(3f);
+        Require(fixture.Markers(A).Length == 1 && fixture.Inventory.InitialBroadcasts.Count == 1,
+            "Subsequent steps must not restart successful catch-up.");
     }
+
+    private static void ReadinessWaitsForPlayerData()
+    {
+        using var fixture = new Fixture();
+        var save = PlayerData.instance;
+        try
+        {
+            PlayerData.instance = null;
+            fixture.Ready(A);
+            fixture.Step(1f);
+            Require(fixture.Transport.Attempts.All(a => a.Type != PacketType.PeerReady),
+                "No readiness message should be sent before PlayerData exists.");
+            Require(fixture.Coordinator.GetLocalStage(A) == PeerHandshakeCoordinator.LocalSyncStage.WaitingForSave,
+                "A connected client still needs a local save.");
+
+            PlayerData.instance = save;
+            fixture.Step(2f);
+            var sent = fixture.Transport.Attempts.Single(a => a.Type == PacketType.PeerReady);
+            var reader = new PacketReader(sent.Data);
+            reader.ReadHeader();
+            Guid token = reader.ReadGuid();
+            Require(sent.Accepted && token != Guid.Empty && token == fixture.Coordinator.WalletSaveInstance,
+                "The queued readiness must identify the loaded save.");
+        }
+        finally
+        {
+            PlayerData.instance = save;
+        }
+    }
+
+    private static void SeedRetry()
+    {
+        using var fixture = new Fixture();
+        fixture.Sender.Delivery = (_, _) => false;
+        fixture.Ready(A);
+        fixture.Vitals.OnLocalCurrencyChanged(CurrencyType.Rosaries, 10, 50, Guid.NewGuid());
+        Require(fixture.Vitals.SharedRosaries == 50, "Fixture must change the live wallet after capture.");
+
+        fixture.Step(0f);
+        fixture.Step(0.249f);
+        Require(fixture.Sender.Calls.Count == 1 && fixture.Markers(A).Length == 0,
+            "Refused seed must block the marker and same-frame retries.");
+        Require(fixture.Coordinator.GetLocalStage(A) == PeerHandshakeCoordinator.LocalSyncStage.SynchronizingWallet,
+            "Local stage must report the outstanding wallet handoff.");
+
+        fixture.Sender.Delivery = (_, _) => true;
+        fixture.Step(0.25f);
+        Require(fixture.Sender.Calls.Count == 2 && fixture.Sender.Calls.All(c => c.Seed.Rosaries == 40),
+            "Retry must use the captured balance even when the live wallet changes.");
+        Require(fixture.Markers(A).Single().Accepted && fixture.Inventory.InitialBroadcasts.Count == 1,
+            "Successful retry must release the marker without repeating inventory.");
+        Require(fixture.Coordinator.GetLocalStage(A) == PeerHandshakeCoordinator.LocalSyncStage.InitialStateQueued,
+            "Local stage must report initial state queued after seed and marker handoff.");
+    }
+
+    private static void MarkerRetry()
+    {
+        using var fixture = new Fixture();
+        fixture.Transport.Accept = (_, kind) => kind != PacketType.CatchUpComplete;
+        fixture.Ready(A);
+        fixture.Step(0.249f);
+        Require(!fixture.Markers(A).Single().Accepted, "Refused marker must wait for its retry interval.");
+        fixture.Transport.Accept = (_, _) => true;
+        fixture.Step(0.25f);
+        Require(fixture.Markers(A).Select(m => m.Accepted).SequenceEqual(new[] { false, true }),
+            "Refused marker must be retried once, then clear.");
+        Require(fixture.Sender.Calls.Count == 1 && fixture.Inventory.InitialBroadcasts.Count == 1,
+            "Marker backpressure must not replay the initial seed or inventory.");
+    }
+
+    private static void IndependentGuests()
+    {
+        using var fixture = new Fixture();
+        fixture.Session.SessionState.AddRemotePeer(B);
+        fixture.Sender.Delivery = (peer, _) => peer == B;
+        fixture.Ready(A);
+        fixture.Ready(B);
+        Require(fixture.Markers(A).Length == 0 && fixture.Markers(B).Single().Accepted,
+            "One refusal must not delay another guest's progress.");
+        fixture.Step(0.25f);
+        Require(fixture.Sender.Calls.Count(c => c.Peer == A) == 2 &&
+                fixture.Sender.Calls.Count(c => c.Peer == B) == 1,
+            "Only the refused guest is retried.");
+    }
+
+    private static void SeedTimeout()
+    {
+        using var fixture = new Fixture();
+        fixture.Sender.Delivery = (_, _) => false;
+        fixture.Ready(A);
+        fixture.Step(19.75f);
+        Require(fixture.Disconnects.Count == 0, "Seed must not time out before the deadline.");
+        fixture.Step(20f);
+        fixture.Step(21f);
+        Require(fixture.Disconnects.SequenceEqual(new[] { DisconnectReason.ConnectionFailed }) &&
+                fixture.Markers(A).Length == 0, "Timeout must disconnect once without sending a marker.");
+    }
+
+    private static void SteamGuestSeedTimeout()
+    {
+        var steam = new SteamP2PTransport { IsHost = true };
+        using var fixture = new Fixture(transport: steam);
+        fixture.Session.SessionState.AddRemotePeer(B);
+        fixture.Sender.Delivery = (peer, _) => peer == A;
+        fixture.Ready(A);
+        fixture.Ready(B);
+        fixture.Step(19.75f);
+        Require(steam.FailedPeers.Count == 0, "No guest must time out before the deadline.");
+        fixture.Step(20f);
+        fixture.Step(21f);
+        Require(steam.FailedPeers.SequenceEqual(new[] { B }),
+            "Steam timeout must fail only the secondary guest and only once.");
+        Require(fixture.Disconnects.Count == 0 && fixture.Session.SessionState.IsConnected &&
+                fixture.Markers(A).Single().Accepted && fixture.Markers(B).Length == 0,
+            "An expired guest must not disconnect the session or disturb a healthy guest's catch-up.");
+    }
+
+    private static void ResetCancelsOutput()
+    {
+        using var fixture = new Fixture();
+        fixture.Sender.Delivery = (_, _) => false;
+        fixture.Ready(A);
+        fixture.Coordinator.ResetPeerState(A);
+        fixture.Session.SessionState.RemoveRemotePeer(A);
+        fixture.Step(21f);
+        Require(fixture.Sender.Calls.Count == 1 && fixture.Markers(A).Length == 0 && fixture.Disconnects.Count == 0,
+            "Reset must cancel retries, marker and timeout.");
+    }
+
+    private static void DuplicateSeed()
+    {
+        using var fixture = new Fixture(host: false);
+        fixture.Ready(A);
+        fixture.Coordinator.HandleWalletSeed(A, Seed(70).CreateChunks().Single());
+        fixture.Coordinator.HandleWalletSeed(A, Seed(99).CreateChunks().Single());
+        Require(fixture.Vitals.SharedRosaries == 70 && !fixture.Coordinator.AwaitingWalletSeed,
+            "A repeated complete seed must not overwrite an already-applied wallet.");
+        Require(fixture.Sender.Enabled.SequenceEqual(new[] { A }), "Currency must be enabled once.");
+    }
+
+    private static void InterruptedAssembly()
+    {
+        using var fixture = new Fixture(host: false);
+        fixture.Ready(A);
+        var seed = Seed(70);
+        seed.CreditedPickups = Enumerable.Range(1, WalletSeedPacket.MaxPickupsPerChunk + 1)
+            .Select(i => new WalletSeedPickup { Currency = CurrencyType.Rosaries, Key = (ulong)i }).ToArray();
+        var chunks = seed.CreateChunks();
+        fixture.Coordinator.HandleWalletSeed(A, chunks[0]);
+        Require(fixture.Vitals.SharedRosaries == 40 && fixture.Coordinator.AwaitingWalletSeed,
+            "The first chunk alone must not mutate the wallet.");
+
+        fixture.Coordinator.ResetPeerReadiness();
+        fixture.Step(0.5f);
+        fixture.Ready(A);
+        fixture.Coordinator.HandleWalletSeed(A, Seed(90).CreateChunks().Single());
+        Require(fixture.Vitals.SharedRosaries == 90 && !fixture.Coordinator.AwaitingWalletSeed,
+            "Reconnect must start with an empty assembler.");
+    }
+
+    private static WalletSeedPacket Seed(int rosaries) => new()
+    {
+        Header = new PacketHeader(PacketType.WalletSeed, NetworkChannels.Currency, 0, 0),
+        Rosaries = rosaries,
+        Shards = 9
+    };
 
     private static void Require(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
     }
 
-    private static void MixedDelivery()
+    private sealed class Fixture : IDisposable
     {
-        var p = Host();
-        p.Queue(A);
-        p.Queue(B);
-        p.Queue(C, nextAttempt: 1f);
-        p.Queue(D);
-        p.Sender.Delivery = (peer, _) => peer == B;
-        p.Pump(0f);
-        Require(p.Sender.Calls.Select(c => c.Peer).SequenceEqual(new[] { A, B, D }), "All due peers must be visited despite mixed outcomes.");
-        Require(p.OutstandingCount == 3, "Only delivered peer must be removed.");
-        Require(p.Retry(A) == (20f, 0.25f) && p.Retry(D) == (20f, 0.25f), "Failures must retain deadlines and advance next attempt.");
-        Require(p.Retry(C) == (20f, 1f), "Not-yet-due peer must retain its state.");
-        Require(p.BootstrapCompleted.Count == 1 && p.BootstrapCompleted[B], "Only delivered peer completes bootstrap.");
-        foreach (var call in p.Sender.Calls)
+        public TestSession Session { get; } = new();
+        public VitalsSyncService Vitals { get; } = new();
+        public VitalsSyncManager Sender { get; } = new();
+        public InventoryApplicationCoordinator Inventory { get; } = new();
+        public TestTransport Transport { get; }
+        public PeerHandshakeCoordinator Coordinator { get; }
+        public List<DisconnectReason> Disconnects { get; } = new();
+
+        public Fixture(bool host = true, TestTransport? transport = null)
         {
-            Require((call.Seed.Watermarks ?? Array.Empty<WalletSeedWatermark>()).Select(m => m.Peer).SequenceEqual(new ulong[] { 1, 2, 3, 4, 5 }), "Actual Core capture must include local and all remote origins.");
+            Time.unscaledTime = 0;
+            PlayerData.instance = new();
+            SilksongCoopPlugin.Warnings.Clear();
+            Transport = transport ?? new TestTransport { IsHost = host };
+            if (host)
+                Session.SessionState.SetHosting(Transport.LocalPeerId, "room");
+            else
+                Session.SessionState.SetConnecting(Transport.LocalPeerId, "room");
+            Session.SessionState.SetConnected(A);
+            Coordinator = new PeerHandshakeCoordinator(Session, Vitals, new DeathLifecycleCoordinator(),
+                new InventorySyncService(), null, null, new ReviveLifecycleCoordinator(), Inventory,
+                () => Sender, () => Transport, () => null, () => true, reason =>
+                {
+                    Disconnects.Add(reason);
+                    Session.Disconnect(reason);
+                });
         }
-        p.Sender.Delivery = (_, _) => true;
-        p.Pump(0.25f);
-        Require(p.OutstandingCount == 1 && p.Retry(C) == (20f, 1f), "Second mixed pass must remove delivered peers without losing deferred peer.");
-        p.Pump(1f);
-        Require(p.OutstandingCount == 0 && p.BootstrapCompleted.Count == 4, "All peers eventually complete independently.");
-        Require(p.DisconnectCount == 0, "Mixed delivery must not disconnect.");
-    }
 
-    private static void Throttle()
-    {
-        var p = Host();
-        p.Queue(A);
-        p.Pump(0f);
-        for (int i = 0; i < 100; i++) p.Pump(0f);
-        p.Pump(0.249f);
-        Require(p.Sender.Calls.Count == 1 && p.Retry(A) == (20f, 0.25f), "Repeated frame calls must not consume attempts or deadline.");
-        p.Pump(0.25f);
-        p.Pump(0.25f);
-        Require(p.Sender.Calls.Count == 2 && p.Retry(A) == (20f, 0.5f), "Exactly one retry is due at interval boundary.");
-    }
-
-    private static void Deadline(int hz)
-    {
-        var p = Host();
-        p.Queue(A);
-        float disconnectedAt = -1f;
-        for (int frame = 0; frame <= 21 * hz; frame++)
+        public Guid Ready(NetworkPeerId peer)
         {
-            float now = frame / (float)hz;
-            p.Pump(now);
-            if (now < 20f) Require(p.DisconnectCount == 0, "Frame count must not trigger an early timeout.");
-            if (p.DisconnectCount != 0) { disconnectedAt = now; break; }
+            Guid saveInstance = Guid.NewGuid();
+            Coordinator.HandlePeerReady(peer, saveInstance);
+            return saveInstance;
         }
-        Require(disconnectedAt >= 20f && disconnectedAt <= 20.25f + 1f / hz, "Timeout must be wall-clock based within one retry interval plus one frame.");
-        Require(p.LastDisconnect == DisconnectReason.ConnectionFailed && p.DisconnectCount == 1, "Timeout must disconnect once with ConnectionFailed.");
-        Require(p.OutstandingCount == 0 && p.BootstrapCompleted.Count == 0, "Timeout clears outstanding seeds without claiming bootstrap.");
-        Require(SilksongCoopPlugin.Warnings.Count == 1, "Timeout must warn once.");
-        Require(p.Sender.Calls.Count >= 70 && p.Sender.Calls.Count <= 82, "Retry frequency must be bounded independently of frame rate.");
-        for (int i = 1; i < p.Sender.Calls.Count; i++)
-            Require(p.Sender.Calls[i].Time - p.Sender.Calls[i - 1].Time >= 0.24999f, "Retry attempts must be separated by the throttle interval.");
-        p.Pump(30f);
-        Require(p.DisconnectCount == 1 && SilksongCoopPlugin.Warnings.Count == 1, "Empty post-timeout pump must not disconnect or warn again.");
-    }
 
-    private static void Inactive(Action<SilksongCoopPlugin> deactivate)
-    {
-        var p = Host();
-        p.Queue(A);
-        p.Queue(B);
-        deactivate(p);
-        p.Pump(100f);
-        Require(p.OutstandingCount == 0, "Inactive host must clear all seeds.");
-        Require(p.Sender.Calls.Count == 0 && p.BootstrapCompleted.Count == 0, "Inactive pump must not send or complete bootstrap.");
-        Require(p.DisconnectCount == 0 && SilksongCoopPlugin.Warnings.Count == 0, "Inactive cleanup must not trigger timeout side effects.");
-    }
+        public void Step(float now)
+        {
+            Time.unscaledTime = now;
+            Coordinator.Update();
+        }
 
-    private static void SuccessfulPeer()
-    {
-        var p = Host();
-        p.Queue(A);
-        p.Sender.Delivery = (_, _) => true;
-        p.Pump(0f);
-        Require(p.OutstandingCount == 0 && p.BootstrapCompleted.Count == 1 && p.BootstrapCompleted[A], "Successful peer must be removed and recorded complete.");
-        p.Pump(0f);
-        p.Pump(0.25f);
-        p.Pump(21f);
-        Require(p.Sender.Calls.Count == 1 && p.BootstrapCompleted.Count == 1 && p.DisconnectCount == 0, "Delivered peer must never be retried or timed out.");
-    }
+        public TestTransport.Attempt[] Markers(NetworkPeerId target) =>
+            Transport.Attempts.Where(a => a.Target == target && a.Type == PacketType.CatchUpComplete).ToArray();
 
-    private static void MissingManager()
-    {
-        var p = Host();
-        p.Queue(A);
-        p.RemoveManager();
-        p.Pump(0f);
-        Require(p.Retry(A) == (20f, 0.25f), "Missing manager must schedule retry rather than claim success.");
-        p.Pump(20f);
-        Require(p.DisconnectCount == 1 && p.LastDisconnect == DisconnectReason.ConnectionFailed && p.OutstandingCount == 0, "Missing manager must eventually fail closed.");
-    }
-
-    private static void SuccessAtDeadline()
-    {
-        var p = Host();
-        p.Queue(A);
-        p.Sender.Delivery = (_, _) => true;
-        p.Pump(20f);
-        Require(p.OutstandingCount == 0 && p.BootstrapCompleted[A] && p.DisconnectCount == 0, "Delivery at deadline must win over timeout.");
-    }
-
-    private static void Empty()
-    {
-        var p = Host();
-        p.RemoveSession();
-        p.Pump(100f);
-        Require(p.Sender.Calls.Count == 0 && p.DisconnectCount == 0 && SilksongCoopPlugin.Warnings.Count == 0, "Empty pump must return without touching external APIs.");
+        public void Dispose()
+        {
+            Coordinator.Dispose();
+            PlayerData.instance = null;
+        }
     }
 }

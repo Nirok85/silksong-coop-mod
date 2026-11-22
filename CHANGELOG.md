@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-11-22
+
+- Retry the initial currency marker after the wallet snapshot and isolate Steam guest timeouts.
+- Display local synchronization stages and omit peer names, identifiers, and absolute paths from structured diagnostics.
+- Test the active handshake coordinator and add a seeded reliability soak with real UDP loopback and virtual groups.
+
 - Protocol v12 adds causal, bounded multipart wallet snapshots with physical pickup deduplication.
 - Preserve reliable unordered gaps, reject counter replays after GUID eviction, retry failed inventory application, and keep currency journals ordered under backpressure.
 - Exchange actual per-peer life state during readiness and reject stale resurrection notifications.
@@ -10,7 +16,7 @@
 - Apply runtime tick-rate changes and synchronize permanent silk spool parts using raw silk capacity.
 - Fragment progression accounts for independent local and remote upgrades and defers while native conversion is in flight.
 
-These changes are not published. Two-instance gameplay and historical overlapping fragment pickups still require validation.
+Two-instance gameplay, Steam groups, Unity scene transitions and revive, and historical overlapping fragment pickups still require validation.
 
 Все значимые изменения проекта документируются в этом файле.
 

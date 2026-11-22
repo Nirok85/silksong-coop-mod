@@ -1,66 +1,74 @@
-# BEAM_MAX execution log
+# Beam Max execution log
 
-## M0 — Baseline
+This checkpoint follows tasks 01–13 in the Beam Max plan. The starting revision
+for the plan was `a90f51a`. Implementation continued on
+`codex/beam-max-completion` from `a0cb69d`. Mod 3.3.9 and protocol v12 are unchanged.
 
-### Environment
-- Date: 2026-11-22
-- HEAD: a90f51a322e274a1d1bc0c8a0ff5506a6fc4236a
-- Working tree: clean
-- .NET SDK: 10.0.401
-- Game: Hollow Knight: Silksong, build 22479045
-- ManagedDir: D:\SteamLibrary\steamapps\common\Hollow Knight Silksong\Hollow Knight Silksong_Data\Managed
-- ManagedDir available: yes (Assembly-CSharp.dll present)
+## What Beam Max contributed
 
-### Commands & results
-- Core tests: PASS (1836/1836) — TRX: tests/SilksongCoop.Tests/TestResults/beam-max-core.trx
-- RuntimeChecks: PASS (17/17)
-- ModSourceChecks: PASS (54/54)
-- WalletPumpChecks: PASS (13/13)
-- Mod build (ManagedDir): PASS (0 warnings)
-- Preflight (AllowDirty): PASS for 3.3.9
-- Benchmark dry/short: PASS (14 benchmarks, ~72s)
-- git diff --check: PASS
-- M0 status: PASS
+OpenCode ran `opencode/beam-free#max`. Beam reviewed the coordinator, soak,
+diagnostic export and CI, and drafted the testing and reconnect documentation.
+It supplied the save-readiness guard and its regression. The regression was
+adapted to assert the typed packet kind and the serialized nonempty save token.
+It failed before the guard and passed afterward. Beam also reviewed the existing
+concurrent UDP stress test and drafted an isolated export fixture. Review notes
+were checked against source and measured results before use.
 
-## M1 — Production test coverage & harness
+## Acceptance checklist
 
-### Status: PARTIAL
-- WalletPumpChecks still compile `SilksongCoopPlugin.WalletSeedRetry.cs` (legacy path). Migration to PeerHandshakeCoordinator requires a dependency shim for DeathLifecycleCoordinator, IInventorySyncService, InventoryApplicationCoordinator, QuestStateSyncManager, EnemySyncController, ReviveLifecycleCoordinator, ISessionService, INetworkTransport, NetworkDiagnostics, and Unity types. Deferred to avoid destabilizing runtime.
-- Mutation proof (from prior audit): flipping SendWalletSeed success condition causes the expected pump test to fail; restored.
-- Harness: existing MockNetworkTransport/FakeSteamTransport/ChaosSimulationTests present; deterministic seed replay not yet added.
+| Task | Status | Evidence and remaining checks |
+|---|---|---|
+| 01 Baseline | PASS | Baseline log confirmed 1836 Core tests at `a90f51a`, with TRX and raw benchmarks. The continuation baseline at `a0cb69d` passed 1839 Core tests and built with local game assemblies. |
+| 02 Running code | PASS | WalletPumpChecks links `PeerHandshakeCoordinator` and `PacketSender`. Ten checks pass, including guest isolation and waiting for a real save. Inverting the seed success condition in an isolated copy made two checks fail. |
+| 03 Reproducible sessions | PASS | Fixed seed produces identical simulated delivery traces, with counted loss, retry and refusal. Standalone smoke covers real UDP loopback and two- to four-node simulation. |
+| 04 Entry and recovery | PARTIAL | Stages, a retryable currency marker and bounded seed sends are implemented. The v12 marker cannot prove complete state across channels. A refused bench snapshot still lacks a separate retry. |
+| 05 Currency and inventory | PARTIAL | Wallet snapshots survive refusal, assembly interruption and repeated receipt. The group simulation verifies physical pickup deduplication and exact balance. Independent saves and native fragment conversion during a live join remain unverified. |
+| 06 Scene, combat and death | PARTIAL | Tests exercise `A → B → A` and consecutive departure across wrap using `RemoteSceneSequence`. Existing Core death and damage tests pass. Real Unity boss, persistent-object and revive cases remain unverified. |
+| 07 Queues and fairness | PARTIAL | Real UDP confirms ordered drain after relay loss and a peak of 512 unacknowledged packets. Sender refusal, reordering and multi-peer independence are tested in the model and source adapter. The report does not measure all Unity/Steam queues. |
+| 08 Three to four nodes | PARTIAL | Model covers shared rewards, guest return and host end through real Core state. Live Steam lobbies remain experimental. |
+| 09 Status and privacy | PARTIAL | F10 labels the local stage in EN and RU. Structured export removes peer names, identifiers and absolute paths. The log tail masks known data and should be reviewed before sharing. An isolated executable linked the actual `DiagnosticsBundle.Save` and verified the complete file with synthetic paths, peer and lobby IDs, display name, room code, IPv4 and credential while retaining counters. F11 and the UI do not have live-game verification. |
+| 10 Performance | PARTIAL | The runner records phase percentiles and driving-thread allocated bytes. Core microbenchmarks compare packet and interpolation code. No Unity FPS claim. |
+| 11 CI, docs and package | PARTIAL | Hosted smoke and manual 45-minute workflow are wired with locked restore. YAML is checked locally. Both ZIPs and their SHA-256 manifest passed local verification on the current candidate. Hosted workflows have not run. |
+| 12 Long soak | PASS | Seed 1337 ran for 2700.14 seconds across all three phases on the final candidate. The source hashes matched after execution. No invariant failures. |
+| 13 Final verification | PARTIAL | Release build passed with no warnings. Core: 1844 passed. Adapter checks: 17 ground, 54 inventory hooks, and 10 handshake. BindingCheck and full preflight passed. One prior concurrent run lost a connection in the existing UDP stress test; three isolated tests and the full rerun passed. Live two-instance validation remains pending. |
 
-### Checks
-- WalletPumpChecks: PASS (13/13)
-- M1 status: PARTIAL (active-path migration deferred)
+## Core benchmark comparison
 
-## M2 — Entry/recovery stages + currency/inventory
+BenchmarkDotNet 0.14.0, .NET 8, Release, same Windows machine and ShortRun job.
+Baseline `a0cb69d` and candidate results use three measured iterations.
 
-### Status: PARTIAL
-- Explicit stage enum/UI not added; existing PeerHandshakeCoordinator stages remain implicit. Currency/inventory fixes from prior audit commits remain in place.
-- M2 status: PARTIAL
+| Benchmark | Baseline mean ± error | Candidate mean ± error | Allocated |
+|---|---:|---:|---:|
+| AddAndInterpolate | 595.8 ± 218.4 ns | 591.9 ± 224.5 ns | 0 B |
+| SerializeDeserialize | 97.646 ± 31.853 ns | 103.189 ± 84.561 ns | 0 B |
+| EnemySnapshotBatchSerialize | 9.332 ± 3.942 ns | 8.992 ± 12.046 ns | 0 B |
 
-## M3 — Scene/combat/death boundaries + queues
+These differences are within the reported error. The measurements do not
+justify changes to those Core hot paths. They do not cover Unity frame
+time. The first baseline attempt found several checkouts with the same project
+name. Including the original solution file in the archived baseline isolated
+project discovery. The baseline retry and candidate logs each confirm three
+executed benchmarks. A process exit code alone did not detect the first failure.
 
-### Status: PARTIAL
-- RemoteSceneSequence and DeferredEnemyDamageLedger present; no new A→B→A harness tests added in this campaign.
-- M3 status: PARTIAL
+## Completed reliability soak
 
-## M4 — Steam 3-4 + UI/diagnostics
+Monotonic duration: 2700.14 seconds. Seed: 1337. Candidate: a0cb69d355f85b4c76df4f77864fec984b1cc413-746b3928fed8f1e1707318d6a1b3a43fa760842311ae28e0dcd5ef7e9524a300.
 
-### Status: PARTIAL
-- LogRedactor extended: Steam ID (17-digit), IPv4, Windows profile path redaction. Tests added (1839/1839).
-- UI stage strings and F10/F11 export not modified (requires Unity build).
-- M4 status: PARTIAL
+| Profile | Seconds | Scenarios | Peak queue | Datagrams dropped | Send refusals | Model retries |
+|---|---:|---:|---:|---:|---:|---:|
+System.Object[]
 
-## M5 — Performance + CI/docs
+The UDP queue is the unacknowledged backlog. Two- and group profiles measure
+the per-link receive and reorder queues. UDP retransmissions were verified
+by ordered delivery after loss; the report does not count individual UDP retries.
 
-### Status: PARTIAL
-- Benchmark dry/short baseline recorded in M0.
-- CI/docs alignment: README/game-compatibility aligned to v3.3.9/v12.
-- M5 status: PARTIAL
+## Reproduce
 
-## M6 — 45-min soak + final verification
+Commands and profile differences are in [testing.md](testing.md). Use the
+JSON report for the exact runtime and outcome of a long run. Use
+`scripts/preflight-release.ps1 -AllowDirty -NoRestore` with `ManagedDir` set
+and every check project already restored to verify the game build and local
+checks. Package and verify both formats separately.
 
-### Status: BLOCKED
-- 45-minute continuous soak not executed in this session (time limit). Command for rerun: see task 12 in BEAM_MAX_PLAN.txt.
-- M6 status: BLOCKED
+The full-history baseline appears in the Git revision `a0cb69d` of this file.
+No live Unity or Steam session has been counted as a pass.

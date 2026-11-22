@@ -68,6 +68,35 @@ namespace SilksongCoop.Core.Networking
         public int JitterMs { get; set; }
         public float PacketLossRate { get; set; }
 
+        /// <summary>Delay one retry by 100 ms when the first reliable datagram is dropped.</summary>
+        public bool SimulateReliableLoss { get; set; }
+
+        /// <summary>Rate of local send refusals before the send obtains a sequence number.</summary>
+        public float SendRefusalRate { get; set; }
+
+        public int DroppedDatagrams { get; private set; }
+        public int RefusedSends { get; private set; }
+
+        /// <summary>Number of retries scheduled after losing their initial reliable datagram.</summary>
+        public int ReliableRetries { get; private set; }
+
+        /// <summary>Incoming datagrams and frames waiting for an earlier reliable sequence.</summary>
+        public int PendingPacketCount
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    int count = _incomingQueue.Count;
+                    foreach (var pending in _reliablePending.Values)
+                        count += pending.Count;
+                    return count;
+                }
+            }
+        }
+
+        private bool SimulatesFailures => SimulateReliableLoss || SendRefusalRate > 0;
+
         /// <summary>
         /// The mock delivers packets immediately, so there is never a reliable backlog.
         /// </summary>
@@ -179,6 +208,11 @@ namespace SilksongCoop.Core.Networking
 
             IsConnected = false;
             var peer = _peer;
+            if (SimulatesFailures || peer?.SimulatesFailures == true)
+            {
+                ClearDeliveryState();
+                peer?.ClearDeliveryState();
+            }
             if (peer != null && peer.IsConnected)
             {
                 peer.IsConnected = false;
@@ -198,13 +232,26 @@ namespace SilksongCoop.Core.Networking
         /// <param name="channel">Channel index for ordering.</param>
         public bool Send(NetworkPeerId target, byte[] data, int offset, int length, DeliveryMethod method, byte channel)
         {
-            if (!IsConnected || _peer == null) return false;
+            var peer = _peer;
+            if (!IsConnected || peer == null) return false;
+            if ((SimulatesFailures || peer.SimulatesFailures) && target != peer.LocalPeerId) return false;
 
-            // Packet loss simulation (only for unreliable or sequenced)
-            if ((method == DeliveryMethod.Unreliable || method == DeliveryMethod.Sequenced) && PacketLossRate > 0)
+            if (SendRefusalRate > 0 && _random.NextDouble() < SendRefusalRate)
             {
-                if (_random.NextDouble() < PacketLossRate)
-                    return false; // Dropped
+                RefusedSends++;
+                return false;
+            }
+
+            bool reliable = method == DeliveryMethod.ReliableOrdered || method == DeliveryMethod.ReliableUnordered;
+            bool retry = false;
+            // Existing profiles only simulate loss on unreliable or sequenced traffic.
+            if ((!reliable || SimulateReliableLoss) && PacketLossRate > 0 &&
+                _random.NextDouble() < PacketLossRate)
+            {
+                DroppedDatagrams++;
+                if (!reliable) return false;
+                retry = true;
+                ReliableRetries++;
             }
 
             uint seq;
@@ -225,6 +272,8 @@ namespace SilksongCoop.Core.Networking
             }
 
             int delay = Math.Max(0, LatencyMs + jitter);
+            if (retry)
+                delay += 100;
             long now = GetCurrentTimeMs();
             long deliveryTime = now + delay;
 
@@ -238,7 +287,7 @@ namespace SilksongCoop.Core.Networking
                 Sender = LocalPeerId
             };
 
-            _peer.EnqueueIncoming(packet);
+            peer.EnqueueIncoming(packet);
             return true;
         }
 
@@ -286,6 +335,19 @@ namespace SilksongCoop.Core.Networking
         #endregion
 
         #region Private Methods
+
+        private void ClearDeliveryState()
+        {
+            lock (_sendSequences)
+                _sendSequences.Clear();
+
+            lock (_lock)
+            {
+                _incomingQueue.Clear();
+                _receivedSequences.Clear();
+                _reliablePending.Clear();
+            }
+        }
 
         private void ProcessPacket(QueuedPacket packet)
         {

@@ -16,7 +16,7 @@ Production adapter checks compile production code against small shims:
 
 - `tests/SilksongCoop.RuntimeChecks` compiles `UnityGroundProber.cs` and checks body bounds, trigger filtering, blocked clearance and bounded query buffers.
 - `tests/SilksongCoop.ModSourceChecks` compiles production `InventoryHooks.cs` and `RemoteApplyScope.cs` and checks the save-bool whitelist, hook guards and category forwarding.
-- `tests/SilksongCoop.WalletPumpChecks` compiles production `SilksongCoopPlugin.WalletSeedRetry.cs` and checks multi-peer delivery, throttling, deadlines and bootstrap completion.
+- `tests/SilksongCoop.WalletPumpChecks` compiles the production `PeerHandshakeCoordinator` and `PacketSender`. Its boundary shims exercise marker retry, interrupted and duplicate snapshots, local stages, and per-peer isolation on timeout.
 
 CI and release preflight run all three separately from the Core suite. With `-NoRestore`, restore these projects beforehand because they are outside the solution.
 
@@ -33,6 +33,20 @@ The `E2ERemediationTests` simulation helpers are model tests, not actual Unity e
   verified manually in game.
 - `DualClientTestHarness`, `HeadlessPlayerCloneManager` — engine-agnostic helpers
   for multi-side scenarios.
+
+## Reliability soak
+
+From the repository root, use the same runner for the 15-second smoke and the 45-minute run. Record the full commit and a source manifest for a dirty candidate.
+
+~~~powershell
+dotnet restore tools/SilksongCoop.Soak/SilksongCoop.Soak.csproj --locked-mode
+dotnet run --project tools/SilksongCoop.Soak -c Release --no-restore -- 1337 15 "$env:TEMP/soak-smoke.json" '<candidate-id>'
+dotnet run --project tools/SilksongCoop.Soak -c Release --no-restore -- 1337 2700 "$env:TEMP/soak-long.json" '<candidate-id>'
+~~~
+
+The long run uses three 15-minute phases. The first runs real UDP on loopback with reconnect and backpressure. The other two use virtual time and seeded loss, delay, and send refusals on two and then three to four nodes. Use `Replay` from a failed report to repeat the failing scenario. The optional fifth argument selects a single scenario in `udp`, `two` or `group`.
+
+UDP reports the unacknowledged backlog. The virtual profiles report per-link receive and reorder queues. Timing percentiles and allocation totals describe the runner and its driving thread. They do not measure frame time in Unity. Hosted CI runs the smoke. Invoke **Nightly reliability** with `run_soak=true` for the long profile.
 
 ## Categories
 

@@ -7,6 +7,11 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/SilksongCoop.Core/SilksongCoop.Core.csproj" />
-    <Compile Include="../../src/SilksongCoop.Mod/SilksongCoopPlugin.WalletSeedRetry.cs" Link="Production/SilksongCoopPlugin.WalletSeedRetry.cs" />
+    <Compile Include="../../src/SilksongCoop.Mod/Coordinators/PeerHandshakeCoordinator.cs" Link="Production/Coordinators/PeerHandshakeCoordinator.cs" />
+    <Compile Include="../../src/SilksongCoop.Mod/Services/ISessionService.cs" Link="Production/Services/ISessionService.cs" />
+    <Compile Include="../../src/SilksongCoop.Mod/Services/ISyncOrchestrator.cs" Link="Production/Services/ISyncOrchestrator.cs" />
+    <Compile Include="../../src/SilksongCoop.Mod/Services/INetworkDiagnostics.cs" Link="Production/Services/INetworkDiagnostics.cs" />
+    <Compile Include="../../src/SilksongCoop.Mod/Services/PacketSender.cs" Link="Production/Services/PacketSender.cs" />
+    <Compile Include="../../src/SilksongCoop.Mod/State/RemoteApplyScope.cs" Link="Production/State/RemoteApplyScope.cs" />
   </ItemGroup>
 </Project>

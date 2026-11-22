@@ -98,5 +98,49 @@ namespace SilksongCoop.Tests
             Assert.False(scene.AcceptTransform(6, 21));
 
         }
+
+        [Fact]
+        public void CloneScene_ReturningToSameRoomRejectsTransformsFromPriorVisits()
+        {
+            var scene = new SilksongCoop.Core.State.RemoteSceneSequence();
+            const uint initialRoomA = 5;
+            const uint roomB = 6;
+            const uint returnToRoomA = 7;
+
+            Assert.True(scene.AcceptTransform(initialRoomA, 20));
+            Assert.True(scene.AcceptDeparture(roomB));
+            Assert.True(scene.AcceptTransform(roomB, 21));
+            Assert.True(scene.AcceptDeparture(returnToRoomA));
+
+            Assert.False(scene.AcceptTransform(initialRoomA, 30));
+            Assert.False(scene.AcceptTransform(roomB, 31));
+            Assert.False(scene.HasTransform);
+            Assert.True(scene.AcceptTransform(returnToRoomA, 22));
+
+            Assert.False(scene.AcceptTransform(roomB, 32));
+            Assert.False(scene.AcceptDeparture(roomB));
+            Assert.Equal(returnToRoomA, scene.Generation);
+            Assert.True(scene.HasTransform);
+        }
+
+        [Fact]
+        public void CloneScene_ConsecutiveDeparturesAcrossWrapKeepOnlyLatestGeneration()
+        {
+            var scene = new SilksongCoop.Core.State.RemoteSceneSequence();
+            Assert.True(scene.AcceptTransform(uint.MaxValue - 1, uint.MaxValue - 1));
+            Assert.True(scene.AcceptDeparture(uint.MaxValue));
+            Assert.True(scene.AcceptDeparture(0));
+
+            Assert.False(scene.AcceptTransform(uint.MaxValue, uint.MaxValue));
+            Assert.False(scene.AcceptDeparture(uint.MaxValue));
+            Assert.False(scene.HasTransform);
+            Assert.Equal(0u, scene.Generation);
+
+            Assert.True(scene.AcceptTransform(0, uint.MaxValue));
+            Assert.True(scene.AcceptTransform(0, 0));
+            Assert.False(scene.AcceptTransform(0, uint.MaxValue));
+            Assert.False(scene.AcceptDeparture(0));
+            Assert.True(scene.HasTransform);
+        }
     }
 }

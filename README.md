@@ -1,9 +1,9 @@
 # Hollow Knight: Silksong Co-op
 
-![Version](https://img.shields.io/badge/Version-3.3.9-success)
+![Version](https://img.shields.io/badge/Version-4.0.0-success)
 [![CI](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/Nirok85/silksong-coop-mod/actions/workflows/ci.yml)
 
-[Русская версия](README.ru.md) · [Download v3.3.9](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v3.3.9)
+[Русская версия](README.ru.md) · [Download v4.0.0](https://github.com/Nirok85/silksong-coop-mod/releases/tag/v4.0.0)
 
 Explore Pharloom together in a two-player co-op mod for the Steam PC version of Silksong. Fight enemies together and share currency, upgrades and unlocks. Each player manages their own health, silk and equipped gear.
 
@@ -11,8 +11,8 @@ Explore Pharloom together in a two-player co-op mod for the Steam PC version of 
 
 **Release:** all players need matching game and mod versions. This release uses [protocol v12](docs/protocol-v12.md); build and update every peer together.
 
-- **Windows x64.** Close the game and extract `SilksongCoop_v3.3.9.zip` into the game folder. The archive includes BepInEx 5.4.21. Keep `winhttp.dll` next to the game executable.
-- **Existing BepInEx 5.4.x install.** Download `SilksongCoop_v3.3.9_plugin-only.zip` and place both mod DLLs in `BepInEx/plugins/SilksongCoop/`. On Linux or macOS, use the BepInEx loader for your platform.
+- **Windows x64.** Close the game and extract `SilksongCoop_v4.0.0.zip` into the game folder. The archive includes BepInEx 5.4.21. Keep `winhttp.dll` next to the game executable.
+- **Existing BepInEx 5.4.x install.** Download `SilksongCoop_v4.0.0_plugin-only.zip` and place both mod DLLs in `BepInEx/plugins/SilksongCoop/`. On Linux or macOS, use the BepInEx loader for your platform.
 
 Launch Silksong through Steam, load a save and press **F10**.
 
@@ -40,3 +40,5 @@ Launch Silksong through Steam, load a save and press **F10**.
 [Documentation map](docs/README.md) · [Changelog](CHANGELOG.md) · [Architecture](docs/architecture.md) · [Testing](docs/testing.md) · [Build and release](docs/RELEASING.md)
 
 Unofficial fan mod. [MIT license](https://github.com/Nirok85/silksong-coop-mod/blob/master/LICENSE) · [Third-party notices](https://github.com/Nirok85/silksong-coop-mod/blob/master/THIRD-PARTY-NOTICES.md)
+
+The [testing guide](docs/testing.md) describes the development soak and the separate requirements for verification in game.

@@ -45,5 +45,6 @@
 ## Execution order
 M0 → M1 → M2 → M3 → M4 → M5 → M6. Parallelize only independent research. Milestone closes only after checks pass. Auditor reviews each milestone.
 
-## Approval
-Awaiting user approval to proceed.
+## Status
+
+Implementation and verification evidence is recorded in [the execution log](beam-max-execution.md).

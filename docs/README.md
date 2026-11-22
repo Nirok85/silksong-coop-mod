@@ -23,6 +23,8 @@ current references above when making changes or preparing a release.
 
 ## Current verification and planned work
 
+- [Beam Max implementation and verification](beam-max-execution.md)
+
 - [Verification status, 2026-11-14](verification-2026-11-14.md)
 - [Verification status, 2026-11-16](verification-2026-11-16.md)
 - [Full repository audit campaign report, 2026-11-18](audit-campaign-report.md)

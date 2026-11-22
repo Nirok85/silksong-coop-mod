@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using BepInEx;
 using SilksongCoop.Core.Diagnostics;
 using SilksongCoop.Core.Networking;
@@ -13,7 +14,7 @@ namespace SilksongCoop.Mod.Diagnostics
     /// <summary>
     /// Builds a single text file that a player can attach to a bug report: environment,
     /// mod/session state, network metrics, sanitized config and the tail of BepInEx's log.
-    /// Room codes and credential-shaped strings are redacted before anything is written.
+    /// Structured fields omit identities and local paths. The log tail is redacted before export.
     /// </summary>
     public static class DiagnosticsBundle
     {
@@ -43,18 +44,18 @@ namespace SilksongCoop.Mod.Diagnostics
             text.AppendLine($"generated_utc: {DateTime.UtcNow:O}");
             text.AppendLine();
 
-            AppendEnvironment(text, plugin);
+            AppendEnvironment(text);
             AppendSession(text, plugin);
             AppendConfig(text, plugin);
-            AppendLogTail(text, root);
+            AppendLogTail(text, root, plugin);
             AppendNote(text);
 
             File.WriteAllText(path, text.ToString(), new UTF8Encoding(false));
-            SilksongCoopPlugin.LogInfo($"[Diagnostics] Wrote diagnostics bundle: {path}");
+            SilksongCoopPlugin.LogInfo("[Diagnostics] Wrote diagnostics bundle.");
             return path;
         }
 
-        private static void AppendEnvironment(StringBuilder text, SilksongCoopPlugin plugin)
+        private static void AppendEnvironment(StringBuilder text)
         {
             text.AppendLine("[environment]");
             text.AppendLine($"mod_version: {SilksongCoopPlugin.PluginVersion}");
@@ -64,8 +65,7 @@ namespace SilksongCoop.Mod.Diagnostics
             text.AppendLine($"platform: {Application.platform}");
             text.AppendLine($"os: {Environment.OSVersion}");
             text.AppendLine($"runtime: {Environment.Version}");
-            text.AppendLine($"bepinex_root: {Paths.BepInExRootPath}");
-            text.AppendLine($"plugin_path: {Paths.PluginPath}");
+
             text.AppendLine($"scene: {UnityEngine.SceneManagement.SceneManager.GetActiveScene().name}");
             text.AppendLine();
         }
@@ -84,8 +84,8 @@ namespace SilksongCoop.Mod.Diagnostics
             text.AppendLine($"status: {session.Status}");
             text.AppendLine($"role: {session.Role}");
             text.AppendLine($"room_code: {(string.IsNullOrEmpty(session.CurrentRoomCode) ? "unset" : "set (redacted)")}");
-            text.AppendLine($"steam_lobby: {(session.SteamLobbyId.HasValue ? session.SteamLobbyId.Value.ToString() : "none")}");
-            text.AppendLine($"remote_peer: {(session.RemotePeerId.HasValue ? session.RemotePeerId.Value.DisplayName : "none")}");
+            text.AppendLine($"steam_lobby: {(session.SteamLobbyId.HasValue ? "present" : "none")}");
+            text.AppendLine($"remote_peer: {(session.RemotePeerId.HasValue ? "present" : "none")}");
             text.AppendLine($"rtt_ms: {session.RoundTripTimeMs}");
             text.AppendLine($"sent_packets: {session.SentPackets}");
             text.AppendLine($"received_packets: {session.ReceivedPackets}");
@@ -101,7 +101,8 @@ namespace SilksongCoop.Mod.Diagnostics
             {
                 var peer = peers[i];
                 text.AppendLine(
-                    $"peer[{i}]: id={peer.Peer.Value} state={peer.State} role={peer.Role} " +
+                    $"peer[{i}]: state={peer.State} role={peer.Role} " +
+                    $"local_sync={plugin.HandshakeCoordinator?.GetLocalStage(peer.Peer)} " +
                     $"connected_utc={peer.ConnectedAtUtc:O} last_seen_utc={peer.LastSeenUtc:O}");
             }
 
@@ -117,6 +118,9 @@ namespace SilksongCoop.Mod.Diagnostics
             {
                 text.AppendLine($"transport: {transport.GetType().Name}");
                 text.AppendLine($"transport_connected: {transport.IsConnected}");
+                text.AppendLine($"transport_reliable_backlog: {transport.ReliableBacklogCount}");
+                if (transport is IReliableDropDiagnostics drops)
+                    text.AppendLine($"transport_reliable_refused: {drops.DroppedReliablePackets}");
                 text.AppendLine($"transport_rtt_ms: {transport.RoundTripTimeMs:F2}");
                 text.AppendLine($"transport_loss_percent: {transport.PacketLossPercent:F2}");
                 if (transport is IMultiPeerTransport multiPeer)
@@ -154,7 +158,7 @@ namespace SilksongCoop.Mod.Diagnostics
             text.AppendLine();
         }
 
-        private static void AppendLogTail(StringBuilder text, string root)
+        private static void AppendLogTail(StringBuilder text, string root, SilksongCoopPlugin plugin)
         {
             text.AppendLine("[log_tail]");
             string? logPath = FindLogPath(root);
@@ -165,7 +169,7 @@ namespace SilksongCoop.Mod.Diagnostics
                 return;
             }
 
-            text.AppendLine($"source: {logPath}");
+            text.AppendLine("source: LogOutput.log");
             try
             {
                 var tail = new Queue<string>(LogTailLines);
@@ -175,17 +179,72 @@ namespace SilksongCoop.Mod.Diagnostics
                     tail.Enqueue(line);
                 }
 
+                var privateValues = GetPrivateLogValues(root, logPath, plugin);
+                var privatePattern = privateValues.Count > 0
+                    ? new Regex(string.Join("|", privateValues.ConvertAll(Regex.Escape)),
+                        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100))
+                    : null;
                 foreach (string line in tail)
                 {
-                    text.AppendLine(LogRedactor.Redact(line));
+                    string sanitized = privatePattern?.Replace(line, "<redacted>") ?? line;
+                    text.AppendLine(LogRedactor.Redact(sanitized));
                 }
             }
             catch (Exception ex)
             {
-                text.AppendLine($"failed to read log: {ex.GetType().Name}: {ex.Message}");
+                text.AppendLine($"failed to read log: {ex.GetType().Name}");
             }
 
             text.AppendLine();
+        }
+
+        private static List<string> GetPrivateLogValues(string root, string logPath, SilksongCoopPlugin plugin)
+        {
+            var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            AddPath(root);
+            AddPath(Paths.PluginPath);
+            AddPath(logPath);
+            AddPath(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+            var session = plugin.SessionState;
+            if (session != null)
+            {
+                Add(session.CurrentRoomCode);
+                Add(session.SteamLobbyId?.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                if (session.RemotePeerId.HasValue)
+                    AddPeer(session.RemotePeerId.Value);
+                foreach (var peer in session.Peers.Peers)
+                    AddPeer(peer.Peer);
+            }
+            if (plugin.ActiveTransport != null)
+                AddPeer(plugin.ActiveTransport.LocalPeerId);
+
+            var ordered = new List<string>(values);
+            ordered.Sort((left, right) => right.Length.CompareTo(left.Length));
+            return ordered;
+
+            void Add(string? value)
+            {
+                if (!string.IsNullOrWhiteSpace(value)) values.Add(value);
+            }
+
+            void AddPath(string? path)
+            {
+                // Skip a drive or filesystem root to avoid removing separators throughout the log.
+                if (string.IsNullOrEmpty(path) || path.Length <= 3) return;
+                Add(path);
+                Add(path.Replace(Path.DirectorySeparatorChar, '/'));
+            }
+
+            void AddPeer(NetworkPeerId peer)
+            {
+                // Host and Client are built-in UDP labels, not personal names.
+                if (!(plugin.ActiveTransport is LiteNetLibTransport) ||
+                    (peer.DisplayName != "Host" && peer.DisplayName != "Client"))
+                    Add(peer.DisplayName);
+                if (peer.Value != 0)
+                    Add(peer.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
         }
 
         private static string? FindLogPath(string bepinexRoot)
@@ -207,8 +266,7 @@ namespace SilksongCoop.Mod.Diagnostics
         private static void AppendNote(StringBuilder text)
         {
             text.AppendLine("[note]");
-            text.AppendLine("Attach this file to the bug report. Room codes and credential-shaped");
-            text.AppendLine("strings are redacted, but review the log tail before publishing.");
+            text.AppendLine("Review the redacted log tail before sharing this file with a bug report.");
         }
     }
 }

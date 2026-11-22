@@ -40,6 +40,8 @@ namespace SilksongCoop.Mod.Coordinators
         private readonly Dictionary<NetworkPeerId, BenchCheckpointSyncPacket> _pendingCheckpoints = new();
         private readonly Dictionary<NetworkPeerId, WalletSeedRetryState> _walletSeedOutstanding = new();
         private readonly WalletSeedAssembler _walletSeedAssembler = new();
+        private readonly HashSet<NetworkPeerId> _appliedWalletSeeds = new();
+        private readonly Dictionary<NetworkPeerId, (float Deadline, float NextAttempt)> _catchUpMarkers = new();
 
         private string? _walletRoom;
         private PlayerData? _walletSave;
@@ -53,6 +55,31 @@ namespace SilksongCoop.Mod.Coordinators
         private const float WalletSeedTimeoutSeconds = 20f;
         private const float WalletSeedRetrySeconds = 20f;
         private const float WalletSeedRetryIntervalSeconds = 0.25f;
+        private const float CatchUpMarkerTimeoutSeconds = 20f;
+
+        public enum LocalSyncStage
+        {
+            WaitingForSave,
+            WaitingForPeer,
+            SynchronizingWallet,
+            QueueingInitialState,
+            InitialStateQueued
+        }
+
+        public LocalSyncStage GetLocalStage(NetworkPeerId peer)
+        {
+            if (!_initializedVitalsForConnection) return LocalSyncStage.WaitingForSave;
+            if (!_readySent.Contains(peer) || !_readyForCatchUp.ContainsKey(peer))
+                return LocalSyncStage.WaitingForPeer;
+
+            if (_walletSeedOutstanding.ContainsKey(peer) ||
+                (_awaitingWalletSeed && _sessionService.SessionState?.RemotePeerId == peer))
+                return LocalSyncStage.SynchronizingWallet;
+
+            return !_initialStateSent.Contains(peer) || _catchUpMarkers.ContainsKey(peer)
+                ? LocalSyncStage.QueueingInitialState
+                : LocalSyncStage.InitialStateQueued;
+        }
 
         public Guid WalletSaveInstance => _walletSaveInstance;
         public bool AwaitingWalletSeed => _awaitingWalletSeed;
@@ -128,12 +155,13 @@ namespace SilksongCoop.Mod.Coordinators
         public void Update()
         {
             PumpPeerReadiness();
-            PumpWalletSeed();
         }
 
         public void ResetPeerReadiness()
         {
             _walletSeedAssembler.Reset();
+            _appliedWalletSeeds.Clear();
+            _catchUpMarkers.Clear();
             _readySent.Clear();
             _readyForCatchUp.Clear();
             _initialStateSent.Clear();
@@ -152,6 +180,13 @@ namespace SilksongCoop.Mod.Coordinators
             _initialStateSent.Remove(peer);
             _pendingCheckpoints.Remove(peer);
             _walletSeedOutstanding.Remove(peer);
+            _catchUpMarkers.Remove(peer);
+            _appliedWalletSeeds.Remove(peer);
+            if (_sessionService.SessionState?.RemotePeerId == peer)
+            {
+                _walletSeedAssembler.Reset();
+                _awaitingWalletSeed = false;
+            }
             _inventorySync.ResetPeerState(peer);
         }
 
@@ -190,8 +225,8 @@ namespace SilksongCoop.Mod.Coordinators
                 }
             }
 
-            PumpWalletSeed();
-            PumpWalletSeedTimeout();
+            if (!_initializedVitalsForConnection) return;
+            if (!PumpWalletSeed() || !PumpWalletSeedTimeout()) return;
             if (_vitalsSync.WalletSeedOverflow)
             {
                 _disconnectCallback(DisconnectReason.ConnectionFailed);
@@ -241,7 +276,8 @@ namespace SilksongCoop.Mod.Coordinators
                         {
                             var seed = _vitalsSync.CaptureWalletSeed(transport.LocalPeerId, session.RemotePeerIds);
                             if (_vitalsSyncManagerProvider()?.SendWalletSeed(peer, seed) != true)
-                                _walletSeedOutstanding[peer] = new WalletSeedRetryState(Time.unscaledTime + WalletSeedRetrySeconds, Time.unscaledTime, seed);
+                                _walletSeedOutstanding[peer] = new WalletSeedRetryState(Time.unscaledTime + WalletSeedRetrySeconds,
+                                    Time.unscaledTime + WalletSeedRetryIntervalSeconds, seed);
                             else
                                 _walletPeerBootstrapCompleted[peer] = true;
                         }
@@ -275,13 +311,10 @@ namespace SilksongCoop.Mod.Coordinators
                             SilksongCoopPlugin.LogWarn("[HandshakeCoordinator] Transport refused bench checkpoint catch-up.");
                     }
 
-                    if (!PacketSender.SendTo(transport, peer, new CatchUpCompletePacket
-                    {
-                        Header = new PacketHeader(PacketType.CatchUpComplete, NetworkChannels.Currency, 0, NetworkClock.NowMs),
-                        SaveInstance = saveInstance
-                    }, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, PacketHeader.HeaderSize + 16, _diagnosticsProvider()))
-                        SilksongCoopPlugin.LogWarn("[HandshakeCoordinator] Transport refused catch-up-complete marker.");
+                    _catchUpMarkers[peer] = (Time.unscaledTime + WalletSeedRetrySeconds + CatchUpMarkerTimeoutSeconds, Time.unscaledTime);
                 }
+
+                if (!PumpCatchUpMarker(transport, peer)) return;
 
                 if (_pendingCheckpoints.TryGetValue(peer, out var bench) &&
                     TryApplyRemoteBenchCheckpoint(bench.SceneName, bench.RespawnMarker, bench.SpawnType, bench.FacingRight))
@@ -291,8 +324,49 @@ namespace SilksongCoop.Mod.Coordinators
             }
         }
 
+        private bool PumpCatchUpMarker(INetworkTransport transport, NetworkPeerId peer)
+        {
+            if (_walletSeedOutstanding.ContainsKey(peer) ||
+                !_catchUpMarkers.TryGetValue(peer, out var pending) ||
+                !_readyForCatchUp.TryGetValue(peer, out var saveInstance))
+                return true;
+
+            float now = Time.unscaledTime;
+            if (now < pending.NextAttempt) return true;
+            if (PacketSender.SendTo(transport, peer, new CatchUpCompletePacket
+            {
+                Header = new PacketHeader(PacketType.CatchUpComplete, NetworkChannels.Currency, 0, NetworkClock.NowMs),
+                SaveInstance = saveInstance
+            }, DeliveryMethod.ReliableOrdered, NetworkChannels.Currency, PacketHeader.HeaderSize + 16, _diagnosticsProvider()))
+            {
+                _catchUpMarkers.Remove(peer);
+                return true;
+            }
+
+            if (now < pending.Deadline)
+            {
+                _catchUpMarkers[peer] = (pending.Deadline, now + WalletSeedRetryIntervalSeconds);
+                return true;
+            }
+
+            _catchUpMarkers.Remove(peer);
+            SilksongCoopPlugin.LogWarn("[HandshakeCoordinator] Catch-up marker could not be queued.");
+            if (transport is SteamP2PTransport steam)
+            {
+                steam.FailReliablePeer(peer);
+                return true;
+            }
+
+            _disconnectCallback(DisconnectReason.ConnectionFailed);
+            return false;
+        }
+
         public void HandlePeerReady(NetworkPeerId peer, Guid saveInstance)
         {
+            var session = _sessionService.SessionState;
+            if (saveInstance == Guid.Empty || session?.IsConnected != true || !session.Peers.TryGet(peer, out _))
+                return;
+
             if (_readyForCatchUp.TryAdd(peer, saveInstance))
             {
                 PumpPeerReadiness();
@@ -303,7 +377,7 @@ namespace SilksongCoop.Mod.Coordinators
         {
             if (completedInstance == _walletSaveInstance)
             {
-                SilksongCoopPlugin.LogInfo($"[HandshakeCoordinator] Initial catch-up complete for {peer.DisplayName}.");
+                SilksongCoopPlugin.LogInfo($"[HandshakeCoordinator] Initial currency-channel marker received from {peer.DisplayName}.");
             }
             else
             {
@@ -314,7 +388,8 @@ namespace SilksongCoop.Mod.Coordinators
         public void HandleWalletSeed(NetworkPeerId peer, WalletSeedPacket seed)
         {
             var session = _sessionService.SessionState;
-            if (session != null && !session.IsHost && session.RemotePeerId == peer)
+            if (session?.IsConnected == true && !session.IsHost && session.RemotePeerId == peer &&
+                _transportProvider() != null && !_appliedWalletSeeds.Contains(peer))
             {
                 // A resumed local connection may not have armed seed collection; arm it
                 // lazily so an incoming seed is never silently dropped.
@@ -326,6 +401,7 @@ namespace SilksongCoop.Mod.Coordinators
                 }
                 if (!_walletSeedAssembler.TryAdd(seed, out var completedSeed)) return;
                 ApplyWalletSeed(peer, completedSeed);
+                _appliedWalletSeeds.Add(peer);
                 _walletPeerBootstrapCompleted[peer] = true;
                 _awaitingWalletSeed = false;
                 _vitalsSyncManagerProvider()?.EnableCurrencyPeer(peer);
@@ -389,15 +465,15 @@ namespace SilksongCoop.Mod.Coordinators
             return false;
         }
 
-        public void PumpWalletSeed()
+        private bool PumpWalletSeed()
         {
-            if (_walletSeedOutstanding.Count == 0) return;
+            if (_walletSeedOutstanding.Count == 0) return true;
             var session = _sessionService.SessionState;
             var transport = _transportProvider();
             if (session?.IsConnected != true || session.IsHost != true || transport == null)
             {
                 _walletSeedOutstanding.Clear();
-                return;
+                return true;
             }
 
             var now = Time.unscaledTime;
@@ -407,8 +483,6 @@ namespace SilksongCoop.Mod.Coordinators
             {
                 if (now < pair.Value.NextAttempt)
                 {
-                    retries ??= new List<KeyValuePair<NetworkPeerId, WalletSeedRetryState>>();
-                    retries.Add(pair);
                     continue;
                 }
 
@@ -428,10 +502,19 @@ namespace SilksongCoop.Mod.Coordinators
                     continue;
                 }
 
+                SilksongCoopPlugin.LogWarn("[HandshakeCoordinator] Wallet seed could not be queued.");
+                if (transport is SteamP2PTransport steam)
+                {
+                    steam.FailReliablePeer(pair.Key);
+                    _catchUpMarkers.Remove(pair.Key);
+                    delivered ??= new List<NetworkPeerId>();
+                    delivered.Add(pair.Key);
+                    continue;
+                }
+
                 _walletSeedOutstanding.Clear();
-                SilksongCoopPlugin.LogWarn("[HandshakeCoordinator] Wallet seed could not be delivered; disconnecting.");
                 _disconnectCallback(DisconnectReason.ConnectionFailed);
-                return;
+                return false;
             }
 
             if (delivered != null)
@@ -442,15 +525,18 @@ namespace SilksongCoop.Mod.Coordinators
             {
                 foreach (var retry in retries) _walletSeedOutstanding[retry.Key] = retry.Value;
             }
+            return true;
         }
 
-        private void PumpWalletSeedTimeout()
+        private bool PumpWalletSeedTimeout()
         {
-            if (!_awaitingWalletSeed) return;
-            if (Time.unscaledTime - _awaitingWalletSeedSince < WalletSeedTimeoutSeconds) return;
+            if (!_awaitingWalletSeed || Time.unscaledTime - _awaitingWalletSeedSince < WalletSeedTimeoutSeconds)
+                return true;
 
+            _awaitingWalletSeed = false;
             SilksongCoopPlugin.LogWarn("[HandshakeCoordinator] Wallet seed was not received in time; disconnecting.");
             _disconnectCallback(DisconnectReason.ConnectionFailed);
+            return false;
         }
     }
 }
