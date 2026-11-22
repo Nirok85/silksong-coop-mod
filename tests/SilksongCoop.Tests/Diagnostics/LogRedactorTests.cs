@@ -62,5 +62,32 @@ namespace SilksongCoop.Tests.Diagnostics
             Assert.Equal(string.Empty, LogRedactor.Redact(null));
             Assert.Equal(string.Empty, LogRedactor.Redact(string.Empty));
         }
+
+        [Fact]
+        public void Redact_SteamId_IsReplaced()
+        {
+            string line = "peer steam id 76561198012345678 connected";
+            string result = LogRedactor.Redact(line);
+            Assert.DoesNotContain("76561198012345678", result);
+            Assert.Contains("<steamid>", result);
+        }
+
+        [Fact]
+        public void Redact_IpAddress_IsReplaced()
+        {
+            string line = "connecting to 192.168.1.42:7777";
+            string result = LogRedactor.Redact(line);
+            Assert.DoesNotContain("192.168.1.42", result);
+            Assert.Contains("<ip>", result);
+        }
+
+        [Fact]
+        public void Redact_ProfilePath_IsReplaced()
+        {
+            string line = @"save path C:\Users\Alice\AppData\Local\SilksongCoop\save.dat";
+            string result = LogRedactor.Redact(line);
+            Assert.DoesNotContain("Alice", result);
+            Assert.Contains(@"<drive>:\Users\<user>", result);
+        }
     }
 }
